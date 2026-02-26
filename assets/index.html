@@ -166,7 +166,10 @@
       <section id="files">
         <div id="file-head">
           <strong>Files</strong>
-          <button id="open-shell-here" class="ghost" type="button">Open Shell Here</button>
+          <div class="row">
+            <button id="refresh-tree" class="ghost" type="button">Refresh</button>
+            <button id="open-shell-here" class="ghost" type="button">Open Shell Here</button>
+          </div>
         </div>
         <div id="tree"></div>
         <div id="preview-tabs"></div>
@@ -199,6 +202,7 @@
     const previewTabsEl = document.getElementById('preview-tabs');
     const previewEl = document.getElementById('preview');
     const openShellHereBtn = document.getElementById('open-shell-here');
+    const refreshTreeBtn = document.getElementById('refresh-tree');
 
     let ws;
     let retries = 0;
@@ -210,6 +214,8 @@
     let terminals = [];
     let activeTerminalId = null;
     let selectedDir = '.';
+    let treeRefreshTimer = null;
+    const expandedDirs = new Set(['.']);
 
     const openFiles = [];
     let activeFilePath = null;
@@ -287,6 +293,7 @@
       const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?terminal_id=${encodeURIComponent(terminalId)}`;
       let hasOpened = false;
       ws = new WebSocket(wsUrl);
+      const localWs = ws;
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
@@ -310,6 +317,12 @@
       };
 
       ws.onclose = async () => {
+        if (ws !== localWs) {
+          return;
+        }
+        if (terminalId !== activeTerminalId) {
+          return;
+        }
         if (loggingOut) {
           const notice = logoutNotice || 'Logged out.';
           loggingOut = false;
@@ -380,6 +393,7 @@
       terminals.push(item);
       renderTerminalTabs();
       connectTerminal(item.id);
+      selectedDir = cwd || '.';
       return item;
     }
 
@@ -484,22 +498,31 @@
         for (const entry of tree.entries) {
           const row = document.createElement('div');
           row.className = 'tree-item';
+          if (entry.path === selectedDir) {
+            row.classList.add('active');
+          }
           row.style.marginLeft = `${depth * 12}px`;
-          row.textContent = `${entry.is_dir ? '📁' : '📄'} ${entry.name}`;
+          const expanded = expandedDirs.has(entry.path);
+          const icon = entry.is_dir ? (expanded ? '📂' : '📁') : '📄';
+          row.textContent = `${icon} ${entry.name}`;
           container.appendChild(row);
 
           if (entry.is_dir) {
             row.onclick = async () => {
               selectedDir = entry.path;
+              if (expandedDirs.has(entry.path)) {
+                expandedDirs.delete(entry.path);
+              } else {
+                expandedDirs.add(entry.path);
+              }
+              await renderTree();
+            };
+            if (expanded) {
               const next = document.createElement('div');
               next.className = 'indent';
-              if (row.nextSibling && row.nextSibling.classList.contains('indent')) {
-                row.nextSibling.remove();
-                return;
-              }
               row.after(next);
               await renderNodes(next, entry.path, depth + 1);
-            };
+            }
           } else {
             row.onclick = () => openFile(entry.path);
           }
@@ -514,6 +537,12 @@
       login.style.display = 'none';
       app.style.display = 'flex';
       await Promise.all([loadTerminals(), renderTree()]);
+      if (treeRefreshTimer) {
+        clearInterval(treeRefreshTimer);
+      }
+      treeRefreshTimer = setInterval(() => {
+        renderTree();
+      }, 3000);
       if (fitAddon) fitAddon.fit();
     }
 
@@ -550,6 +579,7 @@
     newTabBtn.addEventListener('click', () => createTerminal(selectedDir || '.'));
 
     openShellHereBtn.addEventListener('click', () => createTerminal(selectedDir || '.'));
+    refreshTreeBtn.addEventListener('click', () => renderTree());
 
     logoutBtn.addEventListener('click', async () => {
       const confirmLogout = window.confirm('Log out now?');
@@ -568,6 +598,10 @@
       showLogin(logoutNotice);
       loggingOut = false;
       logoutNotice = '';
+      if (treeRefreshTimer) {
+        clearInterval(treeRefreshTimer);
+        treeRefreshTimer = null;
+      }
     });
   </script>
 </body>
