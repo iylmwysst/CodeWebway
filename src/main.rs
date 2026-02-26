@@ -6,6 +6,7 @@ mod session;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
+use std::{io, io::IsTerminal};
 
 use anyhow::Context;
 use clap::Parser;
@@ -23,12 +24,23 @@ fn generate_token(len: usize) -> String {
         .collect()
 }
 
-fn generate_session_cookie() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(48)
-        .map(char::from)
-        .collect()
+fn resolve_pin(config_pin: Option<String>) -> anyhow::Result<String> {
+    if let Some(pin) = config_pin {
+        return Ok(pin);
+    }
+    if !io::stdin().is_terminal() {
+        anyhow::bail!("PIN is required. Run in an interactive terminal or pass --pin.");
+    }
+
+    let pin = rpassword::prompt_password("Set PIN (required): ")?;
+    if pin.trim().is_empty() {
+        anyhow::bail!("PIN cannot be empty.");
+    }
+    let confirm = rpassword::prompt_password("Confirm PIN: ")?;
+    if pin != confirm {
+        anyhow::bail!("PIN confirmation does not match.");
+    }
+    Ok(pin)
 }
 
 fn normalized_args() -> Vec<String> {
@@ -58,25 +70,29 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::parse_from(normalized_args());
 
     let token = cfg.password.clone().unwrap_or_else(|| generate_token(16));
+    let pin = resolve_pin(cfg.pin.clone())?;
 
     let session = session::spawn_session(&cfg.shell_path(), cfg.scrollback)?;
 
     let state = AppState {
         session,
         password: token.clone(),
-        session_cookie: generate_session_cookie(),
+        pin: Some(pin),
         failed_logins: Mutex::new(FailedLoginTracker::new(3, Duration::from_secs(300))),
+        sessions: Mutex::new(server::SessionStore::new(Duration::from_secs(1800))),
     };
 
     let app = server::router(state);
-    let addr = format!("0.0.0.0:{}", cfg.port);
+    let addr = format!("{}:{}", cfg.host, cfg.port);
     let url = format!("http://localhost:{}", cfg.port);
 
     println!();
     println!("  rust-webtty  ");
     println!("  ─────────────────────────────────");
     println!("  Token  : {}", token);
+    println!("  PIN    : configured (hidden)");
     println!("  Open   : {}", url);
+    println!("  Bind   : {}", addr);
     println!("  ─────────────────────────────────");
     println!();
 

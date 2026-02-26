@@ -28,6 +28,7 @@
     .card h1 { font-size: 20px; margin-bottom: 8px; }
     .card p { color: #aaa; margin-bottom: 16px; font-size: 14px; }
     .row { display: flex; gap: 10px; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
     input {
       width: 100%;
       background: #111;
@@ -51,25 +52,49 @@
     button:disabled { opacity: 0.7; cursor: wait; }
     #error { color: #ff8a80; margin-top: 10px; min-height: 20px; font-size: 13px; }
     #app { display: none; height: 100vh; flex-direction: column; }
+    #topbar {
+      background: #333;
+      color: #aaa;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 4px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    #logout {
+      background: #555;
+      border: 1px solid #666;
+      color: #eee;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 6px;
+    }
     #terminal { flex: 1; padding: 4px; }
-    #status { background: #333; color: #aaa; font-family: monospace; font-size: 12px; padding: 2px 8px; }
   </style>
 </head>
 <body>
   <div id="login">
     <form class="card" id="login-form">
       <h1>rust-webtty</h1>
-      <p>Enter password to open terminal</p>
-      <div class="row">
+      <p>Enter password and PIN to open terminal</p>
+      <div class="stack">
         <input id="password" type="password" autocomplete="current-password" placeholder="Password" required />
-        <button id="submit" type="submit">Connect</button>
+        <div class="row">
+          <input id="pin" type="password" autocomplete="one-time-code" placeholder="PIN (if configured)" />
+          <button id="submit" type="submit">Connect</button>
+        </div>
       </div>
       <div id="error"></div>
     </form>
   </div>
 
   <div id="app">
-    <div id="status">Connecting...</div>
+    <div id="topbar">
+      <div id="status">Connecting...</div>
+      <button id="logout" type="button">Logout</button>
+    </div>
     <div id="terminal"></div>
   </div>
 
@@ -80,21 +105,47 @@
     const login = document.getElementById('login');
     const form = document.getElementById('login-form');
     const passwordInput = document.getElementById('password');
+    const pinInput = document.getElementById('pin');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
     const status = document.getElementById('status');
+    const logoutBtn = document.getElementById('logout');
 
     let ws;
     let retries = 0;
     let term;
     let fitAddon;
+    let loggingOut = false;
+    let logoutNotice = '';
+
+    async function hasActiveSession() {
+      try {
+        const res = await fetch('/auth/session', { method: 'GET' });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }
+
+    function showLogin(message) {
+      app.style.display = 'none';
+      login.style.display = 'flex';
+      submitBtn.disabled = false;
+      passwordInput.value = '';
+      pinInput.value = '';
+      if (message) {
+        errorEl.textContent = message;
+      }
+    }
 
     function connect() {
       const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+      let hasOpened = false;
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
+        hasOpened = true;
         status.textContent = 'Connected';
         status.style.color = '#4caf50';
         retries = 0;
@@ -106,20 +157,39 @@
           if (msg.type === 'shell_exit') {
             status.textContent = 'Shell exited — refresh to reconnect';
             status.style.color = '#f44336';
+          } else if (msg.type === 'session_expired') {
+            showLogin('Session expired. Please login again.');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.close();
+            }
           }
         } else {
           term.write(new Uint8Array(e.data));
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = async () => {
+        if (loggingOut) {
+          const notice = logoutNotice || 'Logged out.';
+          loggingOut = false;
+          logoutNotice = '';
+          showLogin(notice);
+          return;
+        }
+
+        const activeSession = await hasActiveSession();
+        if (!activeSession) {
+          showLogin('Session expired. Please login again.');
+          return;
+        }
+
         status.textContent = `Disconnected — retrying (${retries + 1})...`;
         status.style.color = '#ff9800';
-        if (retries < 5) {
+        if (hasOpened && retries < 5) {
           retries++;
           setTimeout(connect, Math.min(1000 * retries, 5000));
         } else {
-          status.textContent = 'Connection failed. Reload to retry.';
+          showLogin('Connection failed. Please login again.');
         }
       };
 
@@ -147,25 +217,34 @@
       });
     }
 
-    async function authorize(candidate) {
+    async function authorize(password, pin) {
       const res = await fetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: candidate })
+        body: JSON.stringify({ password, pin })
       });
       return res.ok;
     }
 
+    async function logout(revokeAll) {
+      await fetch('/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revoke_all: revokeAll })
+      });
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const candidate = passwordInput.value;
+      const password = passwordInput.value;
+      const pin = pinInput.value.trim() || null;
       errorEl.textContent = '';
       submitBtn.disabled = true;
 
       try {
-        const ok = await authorize(candidate);
+        const ok = await authorize(password, pin);
         if (!ok) {
-          errorEl.textContent = 'Invalid password';
+          errorEl.textContent = 'Invalid password or PIN';
           submitBtn.disabled = false;
           return;
         }
@@ -179,6 +258,25 @@
       app.style.display = 'flex';
       initTerminal();
       connect();
+    });
+
+    logoutBtn.addEventListener('click', async () => {
+      const confirmLogout = window.confirm('Log out now?');
+      if (!confirmLogout) {
+        return;
+      }
+      const revokeAll = window.confirm('Also close all active web sessions?\nOK = close all sessions\nCancel = only this browser');
+      loggingOut = true;
+      logoutNotice = revokeAll ? 'Logged out and closed all active sessions.' : 'Logged out.';
+      await logout(revokeAll);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      } else {
+        const notice = logoutNotice;
+        loggingOut = false;
+        logoutNotice = '';
+        showLogin(notice);
+      }
     });
   </script>
 </body>

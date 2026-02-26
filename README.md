@@ -16,6 +16,9 @@ Browser ←── WebSocket ──→ rust-webtty ←──→ $SHELL (PTY)
 - **Auto-generated token** — no need to set a password manually
 - **Login screen** — enter password on first page before terminal opens
 - **Login rate limit** — 3 failed attempts per 5 minutes per client IP
+- **Expiring web sessions** — login session cookie expires after 30 minutes
+- **Logout controls** — choose logout for current browser or all active web sessions
+- **2-step login by default** — password + PIN required for access
 - **Scrollback replay** — reconnecting clients see previous output
 - **PTY resize** — terminal resizes when you resize the browser window
 - **Cross-platform** — macOS, Linux, Windows (ConPTY)
@@ -31,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/iylmwysst/remote-CLI-for-AI-Agent/m
 ### Run
 
 ```bash
-rust-webtty
+rust-webtty -z
 ```
 
 Output:
@@ -51,8 +54,10 @@ Open the URL in your browser — done.
 rust-webtty [OPTIONS]
 
 Options:
+  --host <HOST>          Listen host [default: 127.0.0.1]
   --port <PORT>          Listen port [default: 8080]
   --password <PASSWORD>  Set a fixed token (auto-generated if omitted)
+  --pin <PIN>            Set secondary login PIN (if omitted, interactive hidden prompt)
   --shell <PATH>         Shell to spawn [default: $SHELL]
   --scrollback <BYTES>   Scrollback buffer size [default: 10240]
   -z, --zrok             Create a public zrok URL (requires zrok installed/enabled)
@@ -62,9 +67,9 @@ Options:
 ### Public URL with zrok
 
 ```bash
-rust-webtty --zrok
+rust-webtty -z
 # or
-rust-webtty -zrok
+rust-webtty --zrok
 ```
 
 This starts `zrok share public <port>` automatically and keeps terminal auth in the login page.
