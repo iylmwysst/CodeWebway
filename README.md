@@ -79,6 +79,12 @@ Options:
 codewebway -z
 ```
 
+Requires `zrok` to be installed and enabled on the host:
+
+```bash
+zrok enable <your_enable_token>
+```
+
 - **Tailscale / ngrok** (manual exposure)
 
 ```bash

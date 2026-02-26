@@ -192,6 +192,11 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .tab .icon-btn {
+      padding: 2px 6px;
+      min-width: 24px;
+      text-align: center;
+    }
     .preview-tab {
       display: flex;
       align-items: center;
@@ -790,14 +795,18 @@
       terminals.forEach((item, index) => {
         const tab = document.createElement('div');
         tab.className = `tab ${item.id === activeTerminalId ? 'active' : ''}`;
-        tab.innerHTML = `<span class="title">${item.title}</span>`;
         tab.onclick = () => connectTerminal(item.id);
         tab.ondblclick = (e) => {
           e.stopPropagation();
           promptRenameTerminal(item);
         };
 
+        const title = document.createElement('span');
+        title.className = 'title';
+        title.textContent = item.title;
+
         const leftBtn = document.createElement('button');
+        leftBtn.className = 'icon-btn';
         leftBtn.textContent = '←';
         leftBtn.disabled = index === 0;
         leftBtn.onclick = (e) => {
@@ -807,16 +816,22 @@
         tab.appendChild(leftBtn);
 
         const rightBtn = document.createElement('button');
+        rightBtn.className = 'icon-btn';
         rightBtn.textContent = '→';
         rightBtn.disabled = index === terminals.length - 1;
         rightBtn.onclick = (e) => {
           e.stopPropagation();
           moveTerminalTab(index, 1);
         };
+        
+        tab.appendChild(leftBtn);
+        tab.appendChild(title);
         tab.appendChild(rightBtn);
 
         const renameBtn = document.createElement('button');
-        renameBtn.textContent = 'rename';
+        renameBtn.className = 'icon-btn';
+        renameBtn.title = 'Rename tab';
+        renameBtn.textContent = '✎';
         renameBtn.onclick = (e) => {
           e.stopPropagation();
           promptRenameTerminal(item);
@@ -824,6 +839,7 @@
         tab.appendChild(renameBtn);
 
         const closeBtn = document.createElement('button');
+        closeBtn.className = 'icon-btn';
         closeBtn.textContent = 'x';
         closeBtn.onclick = (e) => {
           e.stopPropagation();
@@ -874,6 +890,16 @@
         const tab = document.createElement('div');
         tab.className = `preview-tab ${file.path === activeFilePath ? 'active' : ''}`;
 
+        const leftBtn = document.createElement('button');
+        leftBtn.className = 'close';
+        leftBtn.textContent = '←';
+        leftBtn.disabled = index === 0;
+        leftBtn.onclick = (e) => {
+          e.stopPropagation();
+          movePreviewTab(index, -1);
+        };
+        tab.appendChild(leftBtn);
+
         const label = document.createElement('button');
         label.className = 'label';
         label.textContent = file.path.split('/').pop();
@@ -889,16 +915,6 @@
           updateEditorActionState();
         };
         tab.appendChild(label);
-
-        const leftBtn = document.createElement('button');
-        leftBtn.className = 'close';
-        leftBtn.textContent = '←';
-        leftBtn.disabled = index === 0;
-        leftBtn.onclick = (e) => {
-          e.stopPropagation();
-          movePreviewTab(index, -1);
-        };
-        tab.appendChild(leftBtn);
 
         const rightBtn = document.createElement('button');
         rightBtn.className = 'close';
