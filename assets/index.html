@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rust-webtty</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1e1e1e; display: flex; flex-direction: column; height: 100vh; }
+    #terminal { flex: 1; padding: 4px; }
+    #status { background: #333; color: #aaa; font-family: monospace; font-size: 12px; padding: 2px 8px; }
+  </style>
+</head>
+<body>
+  <div id="status">Connecting...</div>
+  <div id="terminal"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script>
+    const term = new Terminal({ cursorBlink: true, theme: { background: '#1e1e1e' } });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    const status = document.getElementById('status');
+    const token = new URLSearchParams(window.location.search).get('token') || '';
+    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${encodeURIComponent(token)}`;
+
+    let ws;
+    let retries = 0;
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        status.textContent = 'Connected';
+        status.style.color = '#4caf50';
+        retries = 0;
+      };
+
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'shell_exit') {
+            status.textContent = 'Shell exited — refresh to reconnect';
+            status.style.color = '#f44336';
+          }
+        } else {
+          term.write(new Uint8Array(e.data));
+        }
+      };
+
+      ws.onclose = () => {
+        status.textContent = `Disconnected — retrying (${retries + 1})...`;
+        status.style.color = '#ff9800';
+        if (retries < 5) {
+          retries++;
+          setTimeout(connect, Math.min(1000 * retries, 5000));
+        } else {
+          status.textContent = 'Connection failed. Reload to retry.';
+        }
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    term.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(data));
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    });
+
+    connect();
+  </script>
+</body>
+</html>
