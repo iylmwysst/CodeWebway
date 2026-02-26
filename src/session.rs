@@ -28,6 +28,7 @@ impl Scrollback {
         self.buf.iter().copied().collect()
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.buf.len()
     }
