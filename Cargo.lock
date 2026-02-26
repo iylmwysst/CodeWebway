@@ -741,6 +741,7 @@ dependencies = [
  "bytes",
  "clap",
  "portable-pty",
+ "rand",
  "rust-embed",
  "serde",
  "serde_json",

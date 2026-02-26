@@ -7,9 +7,9 @@ pub struct Config {
     #[arg(long, default_value_t = 8080)]
     pub port: u16,
 
-    /// Shared secret password (required)
+    /// Access token (auto-generated if not provided)
     #[arg(long)]
-    pub password: String,
+    pub password: Option<String>,
 
     /// Shell to spawn (default: $SHELL on Unix, cmd.exe on Windows)
     #[arg(long)]
@@ -42,31 +42,37 @@ mod tests {
 
     #[test]
     fn test_default_port() {
-        let cfg = Config::parse_from(["rust-webtty", "--password", "secret"]);
+        let cfg = Config::parse_from(["rust-webtty"]);
         assert_eq!(cfg.port, 8080);
     }
 
     #[test]
     fn test_custom_port() {
-        let cfg = Config::parse_from(["rust-webtty", "--password", "secret", "--port", "9090"]);
+        let cfg = Config::parse_from(["rust-webtty", "--port", "9090"]);
         assert_eq!(cfg.port, 9090);
     }
 
     #[test]
     fn test_password_stored() {
         let cfg = Config::parse_from(["rust-webtty", "--password", "mysecret"]);
-        assert_eq!(cfg.password, "mysecret");
+        assert_eq!(cfg.password, Some("mysecret".to_string()));
+    }
+
+    #[test]
+    fn test_password_optional() {
+        let cfg = Config::parse_from(["rust-webtty"]);
+        assert!(cfg.password.is_none());
     }
 
     #[test]
     fn test_shell_override() {
-        let cfg = Config::parse_from(["rust-webtty", "--password", "x", "--shell", "/bin/bash"]);
+        let cfg = Config::parse_from(["rust-webtty", "--shell", "/bin/bash"]);
         assert_eq!(cfg.shell_path(), "/bin/bash");
     }
 
     #[test]
     fn test_shell_default_falls_back() {
-        let cfg = Config::parse_from(["rust-webtty", "--password", "x"]);
+        let cfg = Config::parse_from(["rust-webtty"]);
         assert!(!cfg.shell_path().is_empty());
     }
 }
