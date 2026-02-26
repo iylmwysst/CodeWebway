@@ -48,8 +48,15 @@ echo "Installing ${BIN} ${TAG} for ${TARGET}..."
 # Create install dir
 mkdir -p "${INSTALL_DIR}"
 
-# Download binary
-curl -fsSL "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BIN}"
+# Download binary (GitHub redirects to signed CDN URL, use -L without -f)
+curl -sSL --retry 3 --retry-delay 2 "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BIN}"
+
+if [ ! -s "${INSTALL_DIR}/${BIN}" ]; then
+  echo "Error: Download failed or file is empty."
+  echo "Try manually: ${DOWNLOAD_URL}"
+  exit 1
+fi
+
 chmod +x "${INSTALL_DIR}/${BIN}"
 
 echo ""
