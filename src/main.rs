@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         pin: Some(pin),
         failed_logins: Mutex::new(FailedLoginTracker::new(3, Duration::from_secs(300))),
         sessions: Mutex::new(server::SessionStore::new(Duration::from_secs(1800))),
+        access_locked: Mutex::new(false),
     };
 
     let app = server::router(state);

@@ -27,6 +27,7 @@ pub struct AppState {
     pub pin: Option<String>,
     pub failed_logins: Mutex<FailedLoginTracker>,
     pub sessions: Mutex<SessionStore>,
+    pub access_locked: Mutex<bool>,
 }
 
 #[derive(Deserialize)]
@@ -154,6 +155,14 @@ async fn auth_login(
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Response {
+    if *state.access_locked.lock().unwrap() {
+        return (
+            StatusCode::LOCKED,
+            "Access is locked. Restart rust-webtty to enable login again.",
+        )
+            .into_response();
+    }
+
     let now = Instant::now();
     let client = client_key_from_headers(&headers);
     let mut limiter = state.failed_logins.lock().unwrap();
@@ -222,6 +231,7 @@ async fn auth_logout(
                 return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
             }
             sessions.revoke_all();
+            *state.access_locked.lock().unwrap() = true;
         } else {
             sessions.revoke(&current);
         }

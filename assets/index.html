@@ -223,7 +223,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password, pin })
       });
-      return res.ok;
+      return res;
     }
 
     async function logout(revokeAll) {
@@ -242,9 +242,15 @@
       submitBtn.disabled = true;
 
       try {
-        const ok = await authorize(password, pin);
-        if (!ok) {
-          errorEl.textContent = 'Invalid password or PIN';
+        const res = await authorize(password, pin);
+        if (!res.ok) {
+          if (res.status === 423) {
+            errorEl.textContent = 'Access locked. Restart rust-webtty to login again.';
+          } else if (res.status === 429) {
+            errorEl.textContent = 'Too many attempts. Try again later.';
+          } else {
+            errorEl.textContent = 'Invalid password or PIN';
+          }
           submitBtn.disabled = false;
           return;
         }
@@ -267,7 +273,9 @@
       }
       const revokeAll = window.confirm('Also close all active web sessions?\nOK = close all sessions\nCancel = only this browser');
       loggingOut = true;
-      logoutNotice = revokeAll ? 'Logged out and closed all active sessions.' : 'Logged out.';
+      logoutNotice = revokeAll
+        ? 'Logged out and locked access. Restart rust-webtty to login again.'
+        : 'Logged out.';
       await logout(revokeAll);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
