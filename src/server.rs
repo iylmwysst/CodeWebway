@@ -87,7 +87,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             if msg["type"] == "resize" {
                                 let cols = msg["cols"].as_u64().unwrap_or(80) as u16;
                                 let rows = msg["rows"].as_u64().unwrap_or(24) as u16;
-                                let mut s = state.session.lock().unwrap();
+                                let s = state.session.lock().unwrap();
                                 let _ = s.pty_master.resize(PtySize {
                                     rows,
                                     cols,
@@ -105,6 +105,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
+/// Constant-time token comparison (XOR fold).
+/// Note: length check leaks password length via timing — acceptable for a local dev tool.
 pub fn check_token(token: &str, password: &str) -> bool {
     if token.len() != password.len() {
         return false;
