@@ -383,6 +383,16 @@
       };
     }
 
+    function lineStartIndex(text, idx) {
+      const pos = text.lastIndexOf('\n', Math.max(0, idx - 1));
+      return pos === -1 ? 0 : pos + 1;
+    }
+
+    function lineEndIndex(text, idx) {
+      const pos = text.indexOf('\n', idx);
+      return pos === -1 ? text.length : pos;
+    }
+
     async function hasActiveSession() {
       try {
         const res = await api('/auth/session', { method: 'GET' });
@@ -893,6 +903,78 @@
       editingOriginal = '';
       editorEl.style.display = 'none';
       previewEl.style.display = 'block';
+    });
+
+    editorEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const text = editorEl.value;
+        const start = editorEl.selectionStart;
+        const end = editorEl.selectionEnd;
+        const hasSelection = end > start;
+
+        if (!e.shiftKey) {
+          if (!hasSelection) {
+            editorEl.value = `${text.slice(0, start)}  ${text.slice(end)}`;
+            editorEl.selectionStart = editorEl.selectionEnd = start + 2;
+            return;
+          }
+
+          const startLine = lineStartIndex(text, start);
+          const endLine = lineEndIndex(text, end);
+          const block = text.slice(startLine, endLine);
+          const indented = block
+            .split('\n')
+            .map((line) => `  ${line}`)
+            .join('\n');
+          editorEl.value = `${text.slice(0, startLine)}${indented}${text.slice(endLine)}`;
+          editorEl.selectionStart = start + 2;
+          editorEl.selectionEnd = end + (2 * block.split('\n').length);
+          return;
+        }
+
+        const startLine = lineStartIndex(text, start);
+        const endLine = lineEndIndex(text, end);
+        const lines = text.slice(startLine, endLine).split('\n');
+        let removed = 0;
+        const outdented = lines.map((line) => {
+          if (line.startsWith('  ')) {
+            removed += 2;
+            return line.slice(2);
+          }
+          if (line.startsWith('\t')) {
+            removed += 1;
+            return line.slice(1);
+          }
+          return line;
+        }).join('\n');
+        editorEl.value = `${text.slice(0, startLine)}${outdented}${text.slice(endLine)}`;
+
+        if (!hasSelection) {
+          const caretShift = lines[0].startsWith('  ') ? 2 : (lines[0].startsWith('\t') ? 1 : 0);
+          const next = Math.max(start - caretShift, startLine);
+          editorEl.selectionStart = editorEl.selectionEnd = next;
+        } else {
+          const firstShift = lines[0].startsWith('  ') ? 2 : (lines[0].startsWith('\t') ? 1 : 0);
+          editorEl.selectionStart = Math.max(start - firstShift, startLine);
+          editorEl.selectionEnd = Math.max(editorEl.selectionStart, end - removed);
+        }
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const text = editorEl.value;
+        const start = editorEl.selectionStart;
+        const end = editorEl.selectionEnd;
+        const currentLineStart = lineStartIndex(text, start);
+        const beforeCaret = text.slice(currentLineStart, start);
+        const indent = (beforeCaret.match(/^[\t ]*/) || [''])[0];
+        const insert = `\n${indent}`;
+        editorEl.value = `${text.slice(0, start)}${insert}${text.slice(end)}`;
+        const nextPos = start + insert.length;
+        editorEl.selectionStart = editorEl.selectionEnd = nextPos;
+      }
     });
 
     logoutBtn.addEventListener('click', async () => {
