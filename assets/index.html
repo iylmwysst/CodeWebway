@@ -295,7 +295,13 @@
     const openFiles = [];
     let activeFilePath = null;
     let editingPath = null;
+    let editingBaseHash = null;
+    let editingOriginal = '';
     let usageTimer = null;
+    const fileMeta = new Map();
+    const FILE_WARN_BYTES = 128 * 1024;
+    const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
+    const CACHE_PREFIX = 'rwtty:file:';
 
     function setStatus(text, color) {
       statusEl.textContent = text;
@@ -322,6 +328,59 @@
       } catch {
         // ignore transient usage errors
       }
+    }
+
+    function cacheKey(path) {
+      return `${CACHE_PREFIX}${path}`;
+    }
+
+    function readFileCache(path, expectedSize) {
+      try {
+        const raw = localStorage.getItem(cacheKey(path));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.content !== 'string') return null;
+        if (typeof expectedSize === 'number' && parsed.size_bytes !== expectedSize) return null;
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeFileCache(file) {
+      try {
+        localStorage.setItem(cacheKey(file.path), JSON.stringify({
+          path: file.path,
+          content: file.content,
+          truncated: file.truncated,
+          hash: file.hash,
+          size_bytes: file.size_bytes
+        }));
+      } catch {
+        // ignore local cache failures
+      }
+    }
+
+    function computePatch(baseText, nextText) {
+      const a = Array.from(baseText);
+      const b = Array.from(nextText);
+      let start = 0;
+      while (start < a.length && start < b.length && a[start] === b[start]) {
+        start++;
+      }
+
+      let endA = a.length - 1;
+      let endB = b.length - 1;
+      while (endA >= start && endB >= start && a[endA] === b[endB]) {
+        endA--;
+        endB--;
+      }
+
+      return {
+        start,
+        delete_count: endA >= start ? (endA - start + 1) : 0,
+        insert_text: endB >= start ? b.slice(start, endB + 1).join('') : ''
+      };
     }
 
     async function hasActiveSession() {
@@ -567,6 +626,11 @@
         label.textContent = file.path.split('/').pop();
         label.onclick = () => {
           activeFilePath = file.path;
+          editingPath = null;
+          editingBaseHash = null;
+          editingOriginal = '';
+          editorEl.style.display = 'none';
+          previewEl.style.display = 'block';
           previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
           renderPreviewTabs();
         };
@@ -599,6 +663,41 @@
     }
 
     async function openFile(path) {
+      const meta = fileMeta.get(path);
+      if (meta && typeof meta.size_bytes === 'number') {
+        if (meta.size_bytes > FILE_EDIT_LIMIT_BYTES) {
+          alert('File is too large to open in web preview/editor.');
+          return;
+        }
+        if (meta.size_bytes > FILE_WARN_BYTES) {
+          const proceed = window.confirm(`This file is ${formatBytes(meta.size_bytes)} and may use more data. Open anyway?`);
+          if (!proceed) return;
+        }
+      }
+
+      const cached = readFileCache(path, meta ? meta.size_bytes : undefined);
+      if (cached) {
+        const existingCached = openFiles.find((item) => item.path === cached.path);
+        if (!existingCached) {
+          openFiles.push(cached);
+        } else {
+          existingCached.content = cached.content;
+          existingCached.truncated = cached.truncated;
+          existingCached.hash = cached.hash;
+          existingCached.size_bytes = cached.size_bytes;
+        }
+        activeFilePath = cached.path;
+        editingPath = null;
+        editingBaseHash = null;
+        editingOriginal = '';
+        editorEl.style.display = 'none';
+        previewEl.style.display = 'block';
+        previewEl.textContent = cached.content + (cached.truncated ? '\n\n[truncated]' : '');
+        renderPreviewTabs();
+        selectedDir = parentPath(cached.path);
+        return;
+      }
+
       const file = await fetchFile(path);
       if (!file) return;
       const existing = openFiles.find((item) => item.path === file.path);
@@ -607,9 +706,14 @@
       } else {
         existing.content = file.content;
         existing.truncated = file.truncated;
+        existing.hash = file.hash;
+        existing.size_bytes = file.size_bytes;
       }
+      writeFileCache(file);
       activeFilePath = file.path;
       editingPath = null;
+      editingBaseHash = null;
+      editingOriginal = '';
       editorEl.style.display = 'none';
       previewEl.style.display = 'block';
       previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
@@ -620,23 +724,36 @@
     async function saveActiveFile() {
       if (!editingPath) return;
       const content = editorEl.value;
-      const res = await api('/api/fs/file', {
-        method: 'PUT',
+      const patch = computePatch(editingOriginal, content);
+      const res = await api('/api/fs/file/diff', {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: editingPath, content })
+        body: JSON.stringify({
+          path: editingPath,
+          base_hash: editingBaseHash,
+          start: patch.start,
+          delete_count: patch.delete_count,
+          insert_text: patch.insert_text
+        })
       });
       if (!res.ok) {
         const msg = await res.text();
         alert(msg || 'Cannot save file');
         return;
       }
+      const saved = await res.json();
       const existing = openFiles.find((item) => item.path === editingPath);
       if (existing) {
         existing.content = content;
         existing.truncated = false;
+        existing.hash = saved.hash;
+        existing.size_bytes = saved.size_bytes;
+        writeFileCache(existing);
       }
       previewEl.textContent = content;
       editingPath = null;
+      editingBaseHash = null;
+      editingOriginal = '';
       editorEl.style.display = 'none';
       previewEl.style.display = 'block';
       await renderTree();
@@ -645,6 +762,7 @@
 
     async function renderTree() {
       treeEl.innerHTML = '';
+      fileMeta.clear();
       const root = await fetchTree('.');
       if (!root) {
         treeEl.textContent = 'Failed to load file tree';
@@ -656,6 +774,7 @@
         if (!tree) return;
         for (let i = 0; i < tree.entries.length; i++) {
           const entry = tree.entries[i];
+          fileMeta.set(entry.path, entry);
           const isLast = i === tree.entries.length - 1;
           const row = document.createElement('div');
           row.className = 'tree-item';
@@ -704,7 +823,7 @@
       if (usageTimer) {
         clearInterval(usageTimer);
       }
-      usageTimer = setInterval(refreshUsage, 5000);
+      usageTimer = setInterval(refreshUsage, 20000);
       if (fitAddon) fitAddon.fit();
     }
 
@@ -751,7 +870,13 @@
         alert('File is truncated in preview. Open a smaller file to edit.');
         return;
       }
+      if ((current.size_bytes || current.content.length) > FILE_EDIT_LIMIT_BYTES) {
+        alert('File is too large to edit in-browser.');
+        return;
+      }
       editingPath = current.path;
+      editingBaseHash = current.hash;
+      editingOriginal = current.content;
       editorEl.value = current.content;
       previewEl.style.display = 'none';
       editorEl.style.display = 'block';
@@ -764,6 +889,8 @@
 
     cancelEditBtn.addEventListener('click', () => {
       editingPath = null;
+      editingBaseHash = null;
+      editingOriginal = '';
       editorEl.style.display = 'none';
       previewEl.style.display = 'block';
     });

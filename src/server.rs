@@ -11,14 +11,16 @@ use axum::{
     },
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use portable_pty::PtySize;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
+use tower_http::compression::CompressionLayer;
 
 use crate::assets::Assets;
 use crate::session::{self, Session};
@@ -71,6 +73,15 @@ pub struct FsQuery {
 pub struct SaveFileRequest {
     path: String,
     content: String,
+}
+
+#[derive(Deserialize)]
+pub struct SaveFileDiffRequest {
+    path: String,
+    base_hash: String,
+    start: usize,
+    delete_count: usize,
+    insert_text: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -182,6 +193,7 @@ struct FsEntry {
     name: String,
     path: String,
     is_dir: bool,
+    size_bytes: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -189,6 +201,14 @@ struct FsFileResponse {
     path: String,
     content: String,
     truncated: bool,
+    size_bytes: usize,
+    hash: String,
+}
+
+#[derive(Serialize)]
+struct SaveFileResponse {
+    hash: String,
+    size_bytes: usize,
 }
 
 #[derive(Serialize)]
@@ -364,9 +384,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/terminals/:id", delete(delete_terminal))
         .route("/api/fs/tree", get(fs_tree))
         .route("/api/fs/file", get(fs_file).put(save_file))
+        .route("/api/fs/file/diff", patch(save_file_diff))
         .route("/api/usage", get(usage_stats))
         .route("/ws", get(ws_handler))
         .with_state(Arc::new(state))
+        .layer(CompressionLayer::new())
 }
 
 async fn serve_index() -> impl IntoResponse {
@@ -567,6 +589,11 @@ async fn fs_tree(
                     name,
                     path: rel,
                     is_dir: file_type.is_dir(),
+                    size_bytes: if file_type.is_file() {
+                        entry.metadata().ok().map(|meta| meta.len())
+                    } else {
+                        None
+                    },
                 })
             })
             .collect(),
@@ -622,6 +649,7 @@ async fn fs_file(
         &bytes[..]
     };
     let content = String::from_utf8_lossy(slice).to_string();
+    let hash = hash_bytes_hex(&bytes);
 
     let rel_path = path
         .strip_prefix(&state.root_dir)
@@ -634,6 +662,8 @@ async fn fs_file(
         path: rel_path,
         content,
         truncated,
+        size_bytes: bytes.len(),
+        hash,
     };
     count_tx_json(&state, &payload);
     Json(payload).into_response()
@@ -667,8 +697,78 @@ async fn save_file(
 
     match std::fs::write(&path, req.content.as_bytes()) {
         Ok(_) => {
-            count_tx(&state, 2);
-            (StatusCode::OK, "OK").into_response()
+            let payload = SaveFileResponse {
+                hash: hash_bytes_hex(req.content.as_bytes()),
+                size_bytes: req.content.len(),
+            };
+            count_tx_json(&state, &payload);
+            (StatusCode::OK, Json(payload)).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "unable to save file").into_response(),
+    }
+}
+
+async fn save_file_diff(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SaveFileDiffRequest>,
+) -> Response {
+    if has_valid_session_cookie(&headers, &state).is_none() {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    count_rx(&state, req.insert_text.len() as u64);
+
+    let path = match resolve_user_path(&state.root_dir, Some(&req.path)) {
+        Ok(path) => path,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    if path.is_dir() {
+        return (StatusCode::BAD_REQUEST, "path must be a file").into_response();
+    }
+
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::BAD_REQUEST, "unable to read file").into_response(),
+    };
+    if bytes.len() > MAX_FILE_EDIT_BYTES {
+        return (
+            StatusCode::BAD_REQUEST,
+            "file is too large for in-browser editor",
+        )
+            .into_response();
+    }
+
+    let current_hash = hash_bytes_hex(&bytes);
+    if current_hash != req.base_hash {
+        return (
+            StatusCode::CONFLICT,
+            "file changed on disk. reload before saving",
+        )
+            .into_response();
+    }
+
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => return (StatusCode::BAD_REQUEST, "file is not valid UTF-8").into_response(),
+    };
+    let chars: Vec<char> = text.chars().collect();
+    if req.start > chars.len() || req.start.saturating_add(req.delete_count) > chars.len() {
+        return (StatusCode::BAD_REQUEST, "invalid diff range").into_response();
+    }
+
+    let mut out = String::new();
+    out.extend(chars[..req.start].iter().copied());
+    out.push_str(&req.insert_text);
+    out.extend(chars[req.start + req.delete_count..].iter().copied());
+
+    match std::fs::write(&path, out.as_bytes()) {
+        Ok(_) => {
+            let payload = SaveFileResponse {
+                hash: hash_bytes_hex(out.as_bytes()),
+                size_bytes: out.len(),
+            };
+            count_tx_json(&state, &payload);
+            (StatusCode::OK, Json(payload)).into_response()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "unable to save file").into_response(),
     }
@@ -919,6 +1019,12 @@ fn count_tx_json<T: Serialize>(state: &Arc<AppState>, payload: &T) {
     if let Ok(buf) = serde_json::to_vec(payload) {
         count_tx(state, buf.len() as u64);
     }
+}
+
+fn hash_bytes_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 fn resolve_user_path(root_dir: &Path, requested: Option<&str>) -> Result<PathBuf, &'static str> {
