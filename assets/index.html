@@ -208,6 +208,7 @@
 
     let ws;
     let retries = 0;
+    let wsConnectionId = 0;
     let term;
     let fitAddon;
     let loggingOut = false;
@@ -292,13 +293,13 @@
       closeSocket();
 
       const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?terminal_id=${encodeURIComponent(terminalId)}`;
-      let hasOpened = false;
+      const connectionId = ++wsConnectionId;
       ws = new WebSocket(wsUrl);
       const localWs = ws;
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        hasOpened = true;
+        if (connectionId !== wsConnectionId) return;
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
         if (ws.readyState === WebSocket.OPEN) {
@@ -307,6 +308,7 @@
       };
 
       ws.onmessage = (e) => {
+        if (connectionId !== wsConnectionId) return;
         if (typeof e.data === 'string') {
           const msg = JSON.parse(e.data);
           if (msg.type === 'session_expired') {
@@ -318,6 +320,7 @@
       };
 
       ws.onclose = async () => {
+        if (connectionId !== wsConnectionId) return;
         if (ws !== localWs) {
           return;
         }
@@ -338,7 +341,7 @@
           return;
         }
 
-        if (hasOpened && retries < 4) {
+        if (retries < 4) {
           retries++;
           setStatus(`Reconnecting (${retries})...`, '#ff9800');
           setTimeout(() => connectTerminal(terminalId), 600 * retries);
@@ -347,7 +350,10 @@
         }
       };
 
-      ws.onerror = () => ws.close();
+      ws.onerror = () => {
+        if (connectionId !== wsConnectionId) return;
+        ws.close();
+      };
     }
 
     async function authorize(password, pin) {
