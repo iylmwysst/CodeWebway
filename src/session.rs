@@ -1,4 +1,9 @@
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use bytes::Bytes;
+use tokio::sync::broadcast;
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 pub struct Scrollback {
     buf: VecDeque<u8>,
@@ -61,4 +66,59 @@ mod tests {
         sb.push(b"d");
         assert_eq!(sb.snapshot(), b"bcd");
     }
+}
+
+pub struct SharedSession {
+    pub scrollback: Scrollback,
+    pub tx: broadcast::Sender<Bytes>,
+    pub pty_writer: Box<dyn Write + Send>,
+    pub pty_master: Box<dyn portable_pty::MasterPty + Send>,
+}
+
+pub type Session = Arc<Mutex<SharedSession>>;
+
+pub fn spawn_session(shell: &str, scrollback_size: usize) -> anyhow::Result<Session> {
+    let pty_system = native_pty_system();
+    let pair = pty_system.openpty(PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.env("TERM", "xterm-256color");
+    let _child = pair.slave.spawn_command(cmd)?;
+
+    let (tx, _) = broadcast::channel::<Bytes>(256);
+
+    // Take reader and writer BEFORE moving master into SharedSession
+    let pty_writer = pair.master.take_writer()?;
+    let mut reader = pair.master.try_clone_reader()?;
+
+    let session = Arc::new(Mutex::new(SharedSession {
+        scrollback: Scrollback::new(scrollback_size),
+        tx: tx.clone(),
+        pty_writer,
+        pty_master: pair.master,
+    }));
+
+    // Spawn PTY reader thread
+    let session_clone = Arc::clone(&session);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let data = Bytes::copy_from_slice(&buf[..n]);
+                    let mut s = session_clone.lock().unwrap();
+                    s.scrollback.push(&data);
+                    let _ = s.tx.send(data);
+                }
+            }
+        }
+    });
+
+    Ok(session)
 }
