@@ -1,5 +1,7 @@
 use std::io::Write;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use portable_pty::PtySize;
 
@@ -17,16 +19,68 @@ use tokio::sync::broadcast;
 use crate::assets::Assets;
 use crate::session::Session;
 
-#[derive(Clone)]
 pub struct AppState {
     pub session: Session,
     pub password: String,
     pub session_cookie: String,
+    pub failed_logins: Mutex<FailedLoginTracker>,
 }
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
     password: String,
+}
+
+pub struct FailedLoginTracker {
+    by_client: HashMap<String, VecDeque<Instant>>,
+    max_attempts: usize,
+    window: Duration,
+}
+
+impl FailedLoginTracker {
+    pub fn new(max_attempts: usize, window: Duration) -> Self {
+        Self {
+            by_client: HashMap::new(),
+            max_attempts,
+            window,
+        }
+    }
+
+    fn purge_expired(&mut self, client: &str, now: Instant) {
+        let Some(queue) = self.by_client.get_mut(client) else {
+            return;
+        };
+        while let Some(first) = queue.front() {
+            if now.duration_since(*first) >= self.window {
+                queue.pop_front();
+            } else {
+                break;
+            }
+        }
+        if queue.is_empty() {
+            self.by_client.remove(client);
+        }
+    }
+
+    pub fn retry_after(&mut self, client: &str, now: Instant) -> Option<Duration> {
+        self.purge_expired(client, now);
+        let queue = self.by_client.get(client)?;
+        if queue.len() < self.max_attempts {
+            return None;
+        }
+        let earliest = *queue.front()?;
+        Some(self.window.saturating_sub(now.duration_since(earliest)))
+    }
+
+    pub fn record_failure(&mut self, client: &str, now: Instant) {
+        self.purge_expired(client, now);
+        let queue = self.by_client.entry(client.to_string()).or_default();
+        queue.push_back(now);
+    }
+
+    pub fn clear(&mut self, client: &str) {
+        self.by_client.remove(client);
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -44,9 +98,25 @@ async fn serve_index() -> impl IntoResponse {
 
 async fn auth_login(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Response {
+    let now = Instant::now();
+    let client = client_key_from_headers(&headers);
+    let mut limiter = state.failed_logins.lock().unwrap();
+
+    if let Some(wait) = limiter.retry_after(&client, now) {
+        let wait_seconds = wait.as_secs().max(1).to_string();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, wait_seconds)],
+            "Too many failed login attempts. Try again later.",
+        )
+            .into_response();
+    }
+
     if check_token(&req.password, &state.password) {
+        limiter.clear(&client);
         let set_cookie = format!(
             "webtty_session={}; HttpOnly; SameSite=Strict; Path=/",
             state.session_cookie
@@ -55,6 +125,17 @@ async fn auth_login(
             StatusCode::OK,
             [(header::SET_COOKIE, set_cookie)],
             "OK",
+        )
+            .into_response();
+    }
+    limiter.record_failure(&client, now);
+
+    if let Some(wait) = limiter.retry_after(&client, now) {
+        let wait_seconds = wait.as_secs().max(1).to_string();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, wait_seconds)],
+            "Too many failed login attempts. Try again later.",
         )
             .into_response();
     }
@@ -160,6 +241,31 @@ fn cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+fn client_key_from_headers(headers: &HeaderMap) -> String {
+    if let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    {
+        // Use left-most hop as originating client.
+        if let Some(client) = forwarded.split(',').next() {
+            let trimmed = client.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    if let Some(real_ip) = headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+    {
+        let trimmed = real_ip.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +300,27 @@ mod tests {
     fn test_cookie_value_missing() {
         let value = cookie_value("foo=1; bar=2", "webtty_session");
         assert_eq!(value, None);
+    }
+
+    #[test]
+    fn test_failed_login_tracker_blocks_after_limit() {
+        let mut tracker = FailedLoginTracker::new(3, Duration::from_secs(300));
+        let now = Instant::now();
+        tracker.record_failure("1.2.3.4", now);
+        tracker.record_failure("1.2.3.4", now);
+        assert_eq!(tracker.retry_after("1.2.3.4", now), None);
+
+        tracker.record_failure("1.2.3.4", now);
+        assert!(tracker.retry_after("1.2.3.4", now).is_some());
+    }
+
+    #[test]
+    fn test_client_key_from_forwarded_for() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.8, 10.0.0.1".parse().unwrap(),
+        );
+        assert_eq!(client_key_from_headers(&headers), "203.0.113.8");
     }
 }

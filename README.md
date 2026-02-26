@@ -15,6 +15,7 @@ Browser ←── WebSocket ──→ rust-webtty ←──→ $SHELL (PTY)
 - **Shared session** — all browser tabs see the same terminal (like tmux over the web)
 - **Auto-generated token** — no need to set a password manually
 - **Login screen** — enter password on first page before terminal opens
+- **Login rate limit** — 3 failed attempts per 5 minutes per client IP
 - **Scrollback replay** — reconnecting clients see previous output
 - **PTY resize** — terminal resizes when you resize the browser window
 - **Cross-platform** — macOS, Linux, Windows (ConPTY)

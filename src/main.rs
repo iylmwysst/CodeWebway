@@ -4,6 +4,8 @@ mod server;
 mod session;
 
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
@@ -11,6 +13,7 @@ use config::Config;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use server::AppState;
+use server::FailedLoginTracker;
 
 fn generate_token(len: usize) -> String {
     rand::thread_rng()
@@ -62,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         session,
         password: token.clone(),
         session_cookie: generate_session_cookie(),
+        failed_logins: Mutex::new(FailedLoginTracker::new(3, Duration::from_secs(300))),
     };
 
     let app = server::router(state);
