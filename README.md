@@ -5,7 +5,7 @@
     | |__| (_) | (_| |  __/ \ V  V /  __/ |_) \ V  V / (_| | |_| |
      \____\___/ \__,_|\___|  \_/\_/ \___|_.__/ \_/\_/ \__,_|\__, |
                                                             |___/
-          [ Lightweight AI Agent Workspace • Powered by Rust ]
+          [ A seamless, single-binary web terminal and file editor. ]
 ```
 
 A lightweight web terminal written in Rust. Run it on any machine and access your shell from any browser — no remote desktop, no VNC, no heavy software required.
@@ -20,6 +20,13 @@ Browser ←── WebSocket ──→ CodeWebway ←──→ $SHELL (PTY)
                        broadcast channel
                     (shared across all tabs)
 ```
+
+## Why use this?
+
+- **Full Remote CLI Control** — Remotely control the host terminal from any device in a browser. Run scripts, build projects, and inspect logs without installing extra clients.
+- **Headless Server Companion** — Built for machines without a desktop environment. Start the binary and get an interactive PTY plus in-browser file editing for config and quick fixes.
+- **Seamless zrok Integration** — Works smoothly with `zrok` out of the box. If `zrok` is installed, run with `-z` to get a secure public URL through NAT/firewall without setting up a reverse proxy.
+- **Single Binary, No Bloat** — Compiled with Rust as a single executable. No Node.js runtime, no heavy editor stack, fast startup, and low resource usage.
 
 - **Single binary** — no runtime dependencies, embeds the web UI inside
 - **Multi-terminal tabs** — open multiple PTYs and close each one server-side
