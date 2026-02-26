@@ -98,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
         default_shell: cfg.shell_path(),
         root_dir: working_dir.clone(),
         scrollback: cfg.scrollback,
+        usage: Mutex::new(server::UsageTracker::new()),
     };
 
     state.terminals.lock().unwrap().create(

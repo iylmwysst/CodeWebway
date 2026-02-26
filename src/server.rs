@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{
@@ -24,6 +24,7 @@ use crate::assets::Assets;
 use crate::session::{self, Session};
 
 const MAX_FILE_PREVIEW_BYTES: usize = 256 * 1024;
+const MAX_FILE_EDIT_BYTES: usize = 512 * 1024;
 
 pub struct AppState {
     pub password: String,
@@ -35,6 +36,7 @@ pub struct AppState {
     pub default_shell: String,
     pub root_dir: PathBuf,
     pub scrollback: usize,
+    pub usage: Mutex<UsageTracker>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +65,12 @@ pub struct CreateTerminalRequest {
 #[derive(Deserialize)]
 pub struct FsQuery {
     path: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SaveFileRequest {
+    path: String,
+    content: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -183,6 +191,75 @@ struct FsFileResponse {
     truncated: bool,
 }
 
+#[derive(Serialize)]
+struct UsageResponse {
+    today_rx_bytes: u64,
+    today_tx_bytes: u64,
+    today_total_bytes: u64,
+    session_rx_bytes: u64,
+    session_tx_bytes: u64,
+    session_total_bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+struct UsageSnapshot {
+    today_rx_bytes: u64,
+    today_tx_bytes: u64,
+    session_rx_bytes: u64,
+    session_tx_bytes: u64,
+}
+
+pub struct UsageTracker {
+    current_utc_day: u64,
+    today_rx_bytes: u64,
+    today_tx_bytes: u64,
+    session_rx_bytes: u64,
+    session_tx_bytes: u64,
+}
+
+impl UsageTracker {
+    pub fn new() -> Self {
+        Self {
+            current_utc_day: utc_day_index(),
+            today_rx_bytes: 0,
+            today_tx_bytes: 0,
+            session_rx_bytes: 0,
+            session_tx_bytes: 0,
+        }
+    }
+
+    fn rotate_day_if_needed(&mut self) {
+        let now_day = utc_day_index();
+        if now_day != self.current_utc_day {
+            self.current_utc_day = now_day;
+            self.today_rx_bytes = 0;
+            self.today_tx_bytes = 0;
+        }
+    }
+
+    pub fn add_rx(&mut self, bytes: u64) {
+        self.rotate_day_if_needed();
+        self.today_rx_bytes = self.today_rx_bytes.saturating_add(bytes);
+        self.session_rx_bytes = self.session_rx_bytes.saturating_add(bytes);
+    }
+
+    pub fn add_tx(&mut self, bytes: u64) {
+        self.rotate_day_if_needed();
+        self.today_tx_bytes = self.today_tx_bytes.saturating_add(bytes);
+        self.session_tx_bytes = self.session_tx_bytes.saturating_add(bytes);
+    }
+
+    fn snapshot(&mut self) -> UsageSnapshot {
+        self.rotate_day_if_needed();
+        UsageSnapshot {
+            today_rx_bytes: self.today_rx_bytes,
+            today_tx_bytes: self.today_tx_bytes,
+            session_rx_bytes: self.session_rx_bytes,
+            session_tx_bytes: self.session_tx_bytes,
+        }
+    }
+}
+
 pub struct FailedLoginTracker {
     by_client: HashMap<String, VecDeque<Instant>>,
     max_attempts: usize,
@@ -286,7 +363,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/terminals", get(list_terminals).post(create_terminal))
         .route("/api/terminals/:id", delete(delete_terminal))
         .route("/api/fs/tree", get(fs_tree))
-        .route("/api/fs/file", get(fs_file))
+        .route("/api/fs/file", get(fs_file).put(save_file))
+        .route("/api/usage", get(usage_stats))
         .route("/ws", get(ws_handler))
         .with_state(Arc::new(state))
 }
@@ -510,11 +588,12 @@ async fn fs_tree(
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| ".".to_string());
 
-    Json(FsTreeResponse {
+    let payload = FsTreeResponse {
         path: rel_path,
         entries,
-    })
-    .into_response()
+    };
+    count_tx_json(&state, &payload);
+    Json(payload).into_response()
 }
 
 async fn fs_file(
@@ -551,12 +630,68 @@ async fn fs_file(
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| ".".to_string());
 
-    Json(FsFileResponse {
+    let payload = FsFileResponse {
         path: rel_path,
         content,
         truncated,
-    })
-    .into_response()
+    };
+    count_tx_json(&state, &payload);
+    Json(payload).into_response()
+}
+
+async fn save_file(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SaveFileRequest>,
+) -> Response {
+    if has_valid_session_cookie(&headers, &state).is_none() {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    count_rx(&state, req.content.len() as u64);
+
+    if req.content.len() > MAX_FILE_EDIT_BYTES {
+        return (
+            StatusCode::BAD_REQUEST,
+            "file is too large for in-browser editor",
+        )
+            .into_response();
+    }
+
+    let path = match resolve_user_path(&state.root_dir, Some(&req.path)) {
+        Ok(path) => path,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    if path.is_dir() {
+        return (StatusCode::BAD_REQUEST, "path must be a file").into_response();
+    }
+
+    match std::fs::write(&path, req.content.as_bytes()) {
+        Ok(_) => {
+            count_tx(&state, 2);
+            (StatusCode::OK, "OK").into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "unable to save file").into_response(),
+    }
+}
+
+async fn usage_stats(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
+    if has_valid_session_cookie(&headers, &state).is_none() {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    let snapshot = state.usage.lock().unwrap().snapshot();
+    let payload = UsageResponse {
+        today_rx_bytes: snapshot.today_rx_bytes,
+        today_tx_bytes: snapshot.today_tx_bytes,
+        today_total_bytes: snapshot
+            .today_rx_bytes
+            .saturating_add(snapshot.today_tx_bytes),
+        session_rx_bytes: snapshot.session_rx_bytes,
+        session_tx_bytes: snapshot.session_tx_bytes,
+        session_total_bytes: snapshot
+            .session_rx_bytes
+            .saturating_add(snapshot.session_tx_bytes),
+    };
+    Json(payload).into_response()
 }
 
 async fn ws_handler(
@@ -597,6 +732,7 @@ async fn handle_socket(
         (s.scrollback.snapshot(), s.tx.subscribe())
     };
     if !scrollback.is_empty() {
+        count_tx(&state, scrollback.len() as u64);
         let _ = socket.send(Message::Binary(scrollback.into())).await;
     }
 
@@ -606,6 +742,7 @@ async fn handle_socket(
         tokio::select! {
             _ = session_tick.tick() => {
                 if !is_session_token_valid(&state, &session_token) {
+                    count_tx(&state, 26);
                     let _ = socket
                         .send(Message::Text("{\"type\":\"session_expired\"}".into()))
                         .await;
@@ -616,6 +753,7 @@ async fn handle_socket(
             result = rx.recv() => {
                 match result {
                     Ok(data) => {
+                        count_tx(&state, data.len() as u64);
                         if socket.send(Message::Binary(data.to_vec().into())).await.is_err() {
                             break;
                         }
@@ -627,10 +765,12 @@ async fn handle_socket(
             result = socket.recv() => {
                 match result {
                     Some(Ok(Message::Binary(data))) => {
+                        count_rx(&state, data.len() as u64);
                         let mut s = terminal.lock().unwrap();
                         let _ = s.pty_writer.write_all(&data);
                     }
                     Some(Ok(Message::Text(text))) => {
+                        count_rx(&state, text.len() as u64);
                         if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
                             if msg["type"] == "resize" {
                                 let cols = msg["cols"].as_u64().unwrap_or(80) as u16;
@@ -757,6 +897,27 @@ fn verify_pin(input: Option<&str>, expected: Option<&str>) -> bool {
             .map(|candidate| check_token(candidate, expected_pin))
             .unwrap_or(false),
         None => true,
+    }
+}
+
+fn utc_day_index() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(dur) => dur.as_secs() / 86_400,
+        Err(_) => 0,
+    }
+}
+
+fn count_rx(state: &Arc<AppState>, bytes: u64) {
+    state.usage.lock().unwrap().add_rx(bytes);
+}
+
+fn count_tx(state: &Arc<AppState>, bytes: u64) {
+    state.usage.lock().unwrap().add_tx(bytes);
+}
+
+fn count_tx_json<T: Serialize>(state: &Arc<AppState>, payload: &T) {
+    if let Ok(buf) = serde_json::to_vec(payload) {
+        count_tx(state, buf.len() as u64);
     }
 }
 

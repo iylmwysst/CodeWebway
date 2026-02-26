@@ -64,6 +64,15 @@
       justify-content: space-between;
       gap: 12px;
     }
+    #topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #usage {
+      color: #9ad1ff;
+      font-size: 11px;
+    }
     #workspace { flex: 1; display: flex; min-height: 0; }
     #files {
       width: 34%;
@@ -98,6 +107,29 @@
       white-space: pre;
       font-size: 12px;
       color: #ddd;
+    }
+    #editor-actions {
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      border-bottom: 1px solid #2f2f2f;
+      background: #151515;
+    }
+    #editor {
+      display: none;
+      flex: 1;
+      min-height: 140px;
+      width: 100%;
+      resize: vertical;
+      background: #111;
+      color: #e5e5e5;
+      border: 0;
+      border-top: 1px solid #2f2f2f;
+      padding: 10px;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      outline: none;
     }
     .tree-item {
       padding: 4px 6px;
@@ -140,6 +172,33 @@
       border-color: #575757;
       font-size: 11px;
     }
+    .preview-tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 7px;
+      border: 1px solid #383838;
+      background: #232323;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .preview-tab.active { border-color: #2f65ff; }
+    .preview-tab .label {
+      background: transparent;
+      border: 0;
+      color: #ddd;
+      padding: 0;
+      font-size: 12px;
+    }
+    .preview-tab .close {
+      padding: 2px 6px;
+      font-size: 11px;
+      background: #3a3a3a;
+      border: 1px solid #575757;
+      border-radius: 6px;
+      color: #fff;
+    }
     #terminal { flex: 1; min-height: 0; padding: 6px; }
   </style>
 </head>
@@ -162,7 +221,10 @@
   <div id="app">
     <div id="topbar">
       <div id="status">Connected</div>
-      <button id="logout" class="ghost" type="button">Logout</button>
+      <div id="topbar-right">
+        <span id="usage">Today 0 B | Session 0 B</span>
+        <button id="logout" class="ghost" type="button">Logout</button>
+      </div>
     </div>
     <div id="workspace">
       <section id="files">
@@ -175,7 +237,13 @@
         </div>
         <div id="tree"></div>
         <div id="preview-tabs"></div>
+        <div id="editor-actions">
+          <button id="edit-file" class="ghost" type="button">Edit</button>
+          <button id="save-file" type="button">Save</button>
+          <button id="cancel-edit" class="ghost" type="button">Cancel</button>
+        </div>
         <pre id="preview">Select a file to preview</pre>
+        <textarea id="editor" spellcheck="false"></textarea>
       </section>
       <section id="terms">
         <div id="term-tabs">
@@ -197,12 +265,17 @@
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
     const statusEl = document.getElementById('status');
+    const usageEl = document.getElementById('usage');
     const logoutBtn = document.getElementById('logout');
     const newTabBtn = document.getElementById('new-tab');
     const termTabs = document.getElementById('term-tabs');
     const treeEl = document.getElementById('tree');
     const previewTabsEl = document.getElementById('preview-tabs');
     const previewEl = document.getElementById('preview');
+    const editorEl = document.getElementById('editor');
+    const editFileBtn = document.getElementById('edit-file');
+    const saveFileBtn = document.getElementById('save-file');
+    const cancelEditBtn = document.getElementById('cancel-edit');
     const openShellHereBtn = document.getElementById('open-shell-here');
     const refreshTreeBtn = document.getElementById('refresh-tree');
 
@@ -221,6 +294,8 @@
 
     const openFiles = [];
     let activeFilePath = null;
+    let editingPath = null;
+    let usageTimer = null;
 
     function setStatus(text, color) {
       statusEl.textContent = text;
@@ -230,6 +305,23 @@
     async function api(path, options = {}) {
       const res = await fetch(path, options);
       return res;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
+    async function refreshUsage() {
+      try {
+        const res = await api('/api/usage');
+        if (!res.ok) return;
+        const data = await res.json();
+        usageEl.textContent = `Today ${formatBytes(data.today_total_bytes)} | Session ${formatBytes(data.session_total_bytes)}`;
+      } catch {
+        // ignore transient usage errors
+      }
     }
 
     async function hasActiveSession() {
@@ -462,19 +554,47 @@
     function renderPreviewTabs() {
       previewTabsEl.innerHTML = '';
       if (openFiles.length === 0) {
+        activeFilePath = null;
         previewEl.textContent = 'Select a file to preview';
         return;
       }
       openFiles.forEach((file) => {
-        const btn = document.createElement('button');
-        btn.className = file.path === activeFilePath ? '' : 'ghost';
-        btn.textContent = file.path.split('/').pop();
-        btn.onclick = () => {
+        const tab = document.createElement('div');
+        tab.className = `preview-tab ${file.path === activeFilePath ? 'active' : ''}`;
+
+        const label = document.createElement('button');
+        label.className = 'label';
+        label.textContent = file.path.split('/').pop();
+        label.onclick = () => {
           activeFilePath = file.path;
           previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
           renderPreviewTabs();
         };
-        previewTabsEl.appendChild(btn);
+        tab.appendChild(label);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'close';
+        closeBtn.textContent = 'x';
+        closeBtn.onclick = (e) => {
+          e.stopPropagation();
+          const idx = openFiles.findIndex((item) => item.path === file.path);
+          if (idx >= 0) {
+            openFiles.splice(idx, 1);
+          }
+          if (activeFilePath === file.path) {
+            const fallback = openFiles[idx] || openFiles[idx - 1];
+            if (fallback) {
+              activeFilePath = fallback.path;
+              previewEl.textContent = fallback.content + (fallback.truncated ? '\n\n[truncated]' : '');
+            } else {
+              activeFilePath = null;
+              previewEl.textContent = 'Select a file to preview';
+            }
+          }
+          renderPreviewTabs();
+        };
+        tab.appendChild(closeBtn);
+        previewTabsEl.appendChild(tab);
       });
     }
 
@@ -484,11 +604,43 @@
       const existing = openFiles.find((item) => item.path === file.path);
       if (!existing) {
         openFiles.push(file);
+      } else {
+        existing.content = file.content;
+        existing.truncated = file.truncated;
       }
       activeFilePath = file.path;
+      editingPath = null;
+      editorEl.style.display = 'none';
+      previewEl.style.display = 'block';
       previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
       renderPreviewTabs();
       selectedDir = parentPath(file.path);
+    }
+
+    async function saveActiveFile() {
+      if (!editingPath) return;
+      const content = editorEl.value;
+      const res = await api('/api/fs/file', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: editingPath, content })
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        alert(msg || 'Cannot save file');
+        return;
+      }
+      const existing = openFiles.find((item) => item.path === editingPath);
+      if (existing) {
+        existing.content = content;
+        existing.truncated = false;
+      }
+      previewEl.textContent = content;
+      editingPath = null;
+      editorEl.style.display = 'none';
+      previewEl.style.display = 'block';
+      await renderTree();
+      await refreshUsage();
     }
 
     async function renderTree() {
@@ -512,9 +664,10 @@
           }
           const expanded = expandedDirs.has(entry.path);
           const icon = entry.is_dir ? (expanded ? '📂' : '📁') : '📄';
+          const toggle = entry.is_dir ? (expanded ? '▾' : '▸') : ' ';
           const guides = ancestry.map((hasNext) => (hasNext ? '│  ' : '   ')).join('');
           const branch = isLast ? '└─ ' : '├─ ';
-          row.textContent = `${guides}${branch}${icon} ${entry.name}`;
+          row.textContent = `${guides}${branch}${toggle} ${icon} ${entry.name}`;
           container.appendChild(row);
 
           if (entry.is_dir) {
@@ -547,6 +700,11 @@
       login.style.display = 'none';
       app.style.display = 'flex';
       await Promise.all([loadTerminals(), renderTree()]);
+      await refreshUsage();
+      if (usageTimer) {
+        clearInterval(usageTimer);
+      }
+      usageTimer = setInterval(refreshUsage, 5000);
       if (fitAddon) fitAddon.fit();
     }
 
@@ -585,6 +743,31 @@
     openShellHereBtn.addEventListener('click', () => createTerminal(selectedDir || '.'));
     refreshTreeBtn.addEventListener('click', () => renderTree());
 
+    editFileBtn.addEventListener('click', () => {
+      if (!activeFilePath) return;
+      const current = openFiles.find((item) => item.path === activeFilePath);
+      if (!current) return;
+      if (current.truncated) {
+        alert('File is truncated in preview. Open a smaller file to edit.');
+        return;
+      }
+      editingPath = current.path;
+      editorEl.value = current.content;
+      previewEl.style.display = 'none';
+      editorEl.style.display = 'block';
+      editorEl.focus();
+    });
+
+    saveFileBtn.addEventListener('click', () => {
+      saveActiveFile();
+    });
+
+    cancelEditBtn.addEventListener('click', () => {
+      editingPath = null;
+      editorEl.style.display = 'none';
+      previewEl.style.display = 'block';
+    });
+
     logoutBtn.addEventListener('click', async () => {
       const confirmLogout = window.confirm('Log out now?');
       if (!confirmLogout) return;
@@ -602,6 +785,10 @@
       showLogin(logoutNotice);
       loggingOut = false;
       logoutNotice = '';
+      if (usageTimer) {
+        clearInterval(usageTimer);
+        usageTimer = null;
+      }
     });
   </script>
 </body>

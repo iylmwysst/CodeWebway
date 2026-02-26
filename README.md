@@ -22,6 +22,8 @@ Browser ←── WebSocket ──→ rust-webtty ←──→ $SHELL (PTY)
 - **Scrollback replay** — reconnecting clients see previous output
 - **Session resume** — reconnecting tabs/devices continue each terminal session
 - **File explorer + preview** — browse project structure and open shell in selected folder
+- **Built-in editor mode** — switch from preview to edit and save text files in-browser
+- **Traffic meter** — see Today/Session data usage from terminal + file APIs
 - **PTY resize** — terminal resizes when you resize the browser window
 - **Cross-platform** — macOS, Linux, Windows (ConPTY)
 
