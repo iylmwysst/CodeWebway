@@ -378,6 +378,7 @@ impl SessionStore {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(serve_index))
+        .route("/favicon.svg", get(serve_favicon))
         .route("/auth/login", post(auth_login))
         .route("/auth/logout", post(auth_logout))
         .route("/auth/session", get(auth_session))
@@ -395,6 +396,17 @@ pub fn router(state: AppState) -> Router {
 async fn serve_index() -> impl IntoResponse {
     let html = Assets::get("index.html").unwrap();
     Html(std::str::from_utf8(html.data.as_ref()).unwrap().to_string())
+}
+
+async fn serve_favicon() -> Response {
+    let Some(icon) = Assets::get("favicon.svg") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+        icon.data.into_owned(),
+    )
+        .into_response()
 }
 
 async fn auth_login(
@@ -1000,16 +1012,47 @@ fn is_allowed_origin(headers: &HeaderMap) -> bool {
     else {
         return false;
     };
-
-    if let Some(proto) = headers
-        .get("x-forwarded-proto")
+    let forwarded_host = headers
+        .get("x-forwarded-host")
         .and_then(|value| value.to_str().ok())
-    {
-        let expected = format!("{proto}://{host}");
-        return origin == expected;
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let origin_host = parse_origin_host(origin);
+    let Some(origin_host) = origin_host else {
+        return false;
+    };
+
+    if origin_host == host {
+        if let Some(proto) = headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+        {
+            return origin == format!("{proto}://{host}");
+        }
+        return origin == format!("http://{host}") || origin == format!("https://{host}");
     }
 
-    origin == format!("http://{host}") || origin == format!("https://{host}")
+    if let Some(fwd_host) = forwarded_host {
+        if origin_host != fwd_host {
+            return false;
+        }
+        if let Some(proto) = headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+        {
+            return origin == format!("{proto}://{fwd_host}");
+        }
+        return origin == format!("http://{fwd_host}") || origin == format!("https://{fwd_host}");
+    }
+    false
+}
+
+fn parse_origin_host(origin: &str) -> Option<&str> {
+    let without_scheme = origin
+        .strip_prefix("https://")
+        .or_else(|| origin.strip_prefix("http://"))?;
+    without_scheme.split('/').next()
 }
 
 fn verify_pin(input: Option<&str>, expected: Option<&str>) -> bool {
@@ -1138,6 +1181,38 @@ mod tests {
         headers.insert(header::HOST, "example.com".parse().unwrap());
         headers.insert("x-forwarded-proto", "https".parse().unwrap());
         assert!(is_allowed_origin(&headers));
+    }
+
+    #[test]
+    fn test_origin_allowed_with_forwarded_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            "https://public-share.example.com".parse().unwrap(),
+        );
+        headers.insert(header::HOST, "127.0.0.1:8080".parse().unwrap());
+        headers.insert(
+            "x-forwarded-host",
+            "public-share.example.com".parse().unwrap(),
+        );
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(is_allowed_origin(&headers));
+    }
+
+    #[test]
+    fn test_origin_rejected_when_forwarded_host_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            "https://public-share.example.com".parse().unwrap(),
+        );
+        headers.insert(header::HOST, "127.0.0.1:8080".parse().unwrap());
+        headers.insert(
+            "x-forwarded-host",
+            "other-share.example.com".parse().unwrap(),
+        );
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(!is_allowed_origin(&headers));
     }
 
     #[test]
