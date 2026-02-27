@@ -31,29 +31,50 @@ case "${OS}" in
     ;;
 esac
 
-# Get latest release tag
+# Get latest release metadata
 echo "Fetching latest release..."
-TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/')
+RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
+TAG=$(printf "%s\n" "${RELEASE_JSON}" \
+  | grep '"tag_name"' | head -n1 | sed 's/.*"tag_name": "\(.*\)".*/\1/')
 
 if [ -z "$TAG" ]; then
   echo "Could not find a release. Make sure the repo has published releases."
   exit 1
 fi
 
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${BIN}-${TARGET}"
+ASSET_NAME="${BIN}-${TARGET}"
+ASSET_ID=$(printf "%s\n" "${RELEASE_JSON}" | awk -v target="\"name\": \"${ASSET_NAME}\"" '
+  /"id":/ { line=$0; gsub(/[^0-9]/, "", line); if (line != "") id=line }
+  $0 ~ target { print id; exit }
+')
+
+if [ -z "${ASSET_ID}" ]; then
+  echo "Error: release ${TAG} does not contain asset ${ASSET_NAME}"
+  echo "Please check: https://github.com/${REPO}/releases/tag/${TAG}"
+  exit 1
+fi
+
+DOWNLOAD_URL="https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}"
 
 echo "Installing ${BIN} ${TAG} for ${TARGET}..."
 
 # Create install dir
 mkdir -p "${INSTALL_DIR}"
 
-# Download binary (GitHub redirects to signed CDN URL, use -L without -f)
-curl -sSL --retry 3 --retry-delay 2 "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BIN}"
+# Download binary (via API asset endpoint -> redirect to CDN)
+curl -fsSL --retry 3 --retry-delay 2 \
+  -H "Accept: application/octet-stream" \
+  "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/${BIN}"
 
 if [ ! -s "${INSTALL_DIR}/${BIN}" ]; then
   echo "Error: Download failed or file is empty."
-  echo "Try manually: ${DOWNLOAD_URL}"
+  echo "Try manually from: https://github.com/${REPO}/releases/tag/${TAG}"
+  exit 1
+fi
+
+if head -c 9 "${INSTALL_DIR}/${BIN}" 2>/dev/null | grep -q "Not Found"; then
+  echo "Error: downloaded content is not a binary (got Not Found)."
+  echo "Release may be missing asset ${ASSET_NAME}."
   exit 1
 fi
 
