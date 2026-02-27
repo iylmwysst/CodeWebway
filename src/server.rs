@@ -30,6 +30,7 @@ const MAX_FILE_EDIT_BYTES: usize = 512 * 1024;
 const MAX_ACTIVE_TEMP_LINKS: usize = 2;
 const DEFAULT_TEMP_LINK_TTL_MINUTES: u64 = 15;
 const TEMP_LINK_GRACE_SECS: u64 = 120;
+const WS_HEARTBEAT_PAYLOAD: &str = "{\"type\":\"heartbeat\"}";
 
 pub struct AppState {
     pub password: String,
@@ -1591,6 +1592,14 @@ async fn handle_socket(
                         .send(Message::Text("{\"type\":\"session_expired\"}".into()))
                         .await;
                     let _ = socket.close().await;
+                    break;
+                }
+                count_tx(&state, WS_HEARTBEAT_PAYLOAD.len() as u64);
+                if socket
+                    .send(Message::Text(WS_HEARTBEAT_PAYLOAD.into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }

@@ -863,22 +863,11 @@
       const switchingTerminal = terminalId !== activeTerminalId;
       activeTerminalId = terminalId;
       renderTerminalTabs();
-      let usedCachedSnapshot = false;
       if (term && switchingTerminal) {
         term.clear();
       }
-      if (term && switchingTerminal) {
-        const cached = readTerminalCache(terminalId);
-        if (cached) {
-          term.write(cached);
-          usedCachedSnapshot = true;
-        }
-      }
 
-      const hasExplicitSkip = Object.prototype.hasOwnProperty.call(options, 'skipScrollback');
-      const shouldSkipScrollback = hasExplicitSkip
-        ? options.skipScrollback === true
-        : usedCachedSnapshot;
+      const shouldSkipScrollback = options.skipScrollback === true;
       if (term && !shouldSkipScrollback) {
         term.clear();
         writeTerminalCache(terminalId, '');
