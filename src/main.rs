@@ -3,8 +3,10 @@ mod config;
 mod server;
 mod session;
 
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{io, io::IsTerminal};
@@ -74,16 +76,67 @@ fn normalized_args() -> Vec<String> {
 
 fn spawn_zrok(port: u16) -> anyhow::Result<Child> {
     let target = port.to_string();
-    let child = Command::new("zrok")
+    let mut child = Command::new("zrok")
         .args(["share", "public", &target])
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .with_context(|| {
             "failed to start zrok; install zrok and run `zrok enable <token>` first".to_string()
         })?;
+    attach_zrok_logs(&mut child);
     Ok(child)
+}
+
+fn extract_https_token(line: &str) -> Option<String> {
+    for raw in line.split_whitespace() {
+        let trimmed = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')' | '[' | ']'));
+        if let Some(idx) = trimmed.find("https://") {
+            let candidate = trimmed[idx..]
+                .trim_end_matches(|c: char| matches!(c, ',' | ';' | '.' | ')' | ']' | '"' | '\''));
+            if candidate.starts_with("https://") && candidate.len() > "https://".len() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn attach_zrok_logs(child: &mut Child) {
+    let seen_public_url = Arc::new(AtomicBool::new(false));
+
+    if let Some(stdout) = child.stdout.take() {
+        let seen_public_url_ref = Arc::clone(&seen_public_url);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                println!("  zrok   : {line}");
+                if !seen_public_url_ref.load(Ordering::Relaxed) {
+                    if let Some(url) = extract_https_token(&line) {
+                        println!("  Public : {}", url);
+                        seen_public_url_ref.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        let seen_public_url_ref = Arc::clone(&seen_public_url);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                eprintln!("  zrok   : {line}");
+                if !seen_public_url_ref.load(Ordering::Relaxed) {
+                    if let Some(url) = extract_https_token(&line) {
+                        println!("  Public : {}", url);
+                        seen_public_url_ref.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+        });
+    }
 }
 
 fn resolve_working_dir(config_cwd: Option<String>) -> anyhow::Result<PathBuf> {
@@ -101,6 +154,28 @@ fn stop_zrok_child(child: &mut Option<Child>, reason: &str) -> bool {
     let _ = process.wait();
     eprintln!("  zrok   : {reason}");
     true
+}
+
+fn monitor_zrok_child(zrok_child: Arc<Mutex<Option<Child>>>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let mut child = zrok_child.lock().unwrap();
+        let Some(process) = child.as_mut() else {
+            break;
+        };
+        match process.try_wait() {
+            Ok(Some(status)) => {
+                eprintln!("  zrok   : exited ({status})");
+                *child = None;
+                break;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("  zrok   : failed to poll process status ({err})");
+                break;
+            }
+        }
+    });
 }
 
 #[tokio::main]
@@ -206,6 +281,9 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     let zrok_child = Arc::new(Mutex::new(zrok_child));
+    if cfg.zrok {
+        monitor_zrok_child(Arc::clone(&zrok_child));
+    }
 
     if cfg.zrok {
         if let Some(minutes) = cfg.public_timeout_minutes {
@@ -297,4 +375,33 @@ async fn main() -> anyhow::Result<()> {
     let mut child = zrok_child.lock().unwrap();
     let _ = stop_zrok_child(&mut child, "stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_https_token;
+
+    #[test]
+    fn test_extract_https_token_with_plain_url() {
+        let line = "your share is live at https://example.share.zrok.io";
+        assert_eq!(
+            extract_https_token(line),
+            Some("https://example.share.zrok.io".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_https_token_with_equals_prefix() {
+        let line = "endpoint=https://abc123.zrok.io ready";
+        assert_eq!(
+            extract_https_token(line),
+            Some("https://abc123.zrok.io".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_https_token_missing() {
+        let line = "listening on localhost only";
+        assert_eq!(extract_https_token(line), None);
+    }
 }
