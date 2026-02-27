@@ -734,6 +734,10 @@
     async function refreshLoginNote() {
       const status = await fetchPublicStatus();
       if (!status) return;
+      if (status.auto_shutdown_disabled === true) {
+        loginNoteEl.textContent = 'No login activity: auto-shutdown disabled (public no-expiry; lockout + shutdown only).';
+        return;
+      }
       loginNoteEl.textContent = `No login activity: auto-shutdown in ${formatSeconds(status.shutdown_remaining_secs)}.`;
     }
 

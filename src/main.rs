@@ -140,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
     let absolute_timeout = Duration::from_secs(12 * 60 * 60);
     let shutdown_grace = Duration::from_secs(3 * 60 * 60);
     let warning_window = Duration::from_secs(2 * 60);
+    let auto_shutdown_disabled = cfg.zrok && cfg.public_no_expiry;
     let now = std::time::Instant::now();
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
 
@@ -164,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
         temp_links: Mutex::new(server::TempLinkStore::new()),
         temp_grants: Mutex::new(std::collections::HashMap::new()),
         temp_link_signing_key: generate_token(48),
+        auto_shutdown_disabled,
     };
 
     state.terminals.lock().unwrap().create(
@@ -301,7 +303,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    {
+    if !auto_shutdown_disabled {
         let tx = shutdown_tx.clone();
         let state_ref = Arc::clone(&state);
         tokio::spawn(async move {

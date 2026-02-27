@@ -53,6 +53,7 @@ pub struct AppState {
     pub temp_links: Mutex<TempLinkStore>,
     pub temp_grants: Mutex<HashMap<String, TempSessionGrant>>,
     pub temp_link_signing_key: String,
+    pub auto_shutdown_disabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -275,6 +276,7 @@ struct SessionStatusResponse {
 struct PublicStatusResponse {
     shutdown_remaining_secs: u64,
     access_locked: bool,
+    auto_shutdown_disabled: bool,
 }
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
@@ -1074,6 +1076,7 @@ async fn auth_public_status(State(state): State<Arc<AppState>>) -> Response {
     Json(PublicStatusResponse {
         shutdown_remaining_secs: remaining,
         access_locked: *state.access_locked.lock().unwrap(),
+        auto_shutdown_disabled: state.auto_shutdown_disabled,
     })
     .into_response()
 }
@@ -1871,6 +1874,9 @@ fn bump_shutdown_deadline_from_activity(state: &Arc<AppState>, now: Instant) {
 }
 
 pub fn shutdown_remaining_secs(state: &Arc<AppState>, now: Instant) -> u64 {
+    if state.auto_shutdown_disabled {
+        return u64::MAX;
+    }
     let deadline = *state.shutdown_deadline.lock().unwrap();
     deadline.saturating_duration_since(now).as_secs()
 }
