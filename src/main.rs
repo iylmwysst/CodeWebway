@@ -78,6 +78,15 @@ fn resolve_working_dir(config_cwd: Option<String>) -> anyhow::Result<PathBuf> {
     }
 }
 
+fn stop_zrok_child(child: &mut Option<Child>) {
+    let Some(mut process) = child.take() else {
+        return;
+    };
+    let _ = process.kill();
+    let _ = process.wait();
+    eprintln!("  zrok   : stopped");
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -121,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
     println!("  Bind   : {}", addr);
     println!("  Dir    : {}", working_dir.display());
     println!("  Login  : use this Token + your PIN on the web login page");
-    println!("  Stop   : press q + Enter (or Ctrl+C)");
+    println!("  Stop   : press q + Enter, or Ctrl+C twice to confirm shutdown");
     println!("  ─────────────────────────────────");
     println!();
 
@@ -146,6 +155,7 @@ async fn main() -> anyhow::Result<()> {
                         let cmd = line.trim().to_ascii_lowercase();
                         match cmd.as_str() {
                             "q" | "quit" | "exit" | "stop" => {
+                                eprintln!("Shutdown requested from console command.");
                                 let _ = tx.send(());
                                 break;
                             }
@@ -159,18 +169,34 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    {
+        let tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            let mut press_count = 0usize;
+            loop {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    let _ = tx.send(());
+                    break;
+                }
+                press_count += 1;
+                if press_count == 1 {
+                    eprintln!("Press Ctrl+C again to confirm shutdown.");
+                    continue;
+                }
+                eprintln!("Shutdown confirmed by Ctrl+C.");
+                let _ = tx.send(());
+                break;
+            }
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {},
-                _ = shutdown_rx.recv() => {},
-            }
+            let _ = shutdown_rx.recv().await;
         })
         .await?;
 
-    if let Some(mut child) = zrok_child.take() {
-        let _ = child.kill();
-    }
+    stop_zrok_child(&mut zrok_child);
     Ok(())
 }
