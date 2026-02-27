@@ -3,7 +3,6 @@ mod config;
 mod server;
 mod session;
 
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -75,59 +74,16 @@ fn normalized_args() -> Vec<String> {
 
 fn spawn_zrok(port: u16) -> anyhow::Result<Child> {
     let target = port.to_string();
-    let mut child = Command::new("zrok")
+    let child = Command::new("zrok")
         .args(["share", "public", &target])
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .with_context(|| {
             "failed to start zrok; install zrok and run `zrok enable <token>` first".to_string()
         })?;
-    attach_zrok_log_streams(&mut child);
     Ok(child)
-}
-
-fn find_public_url(line: &str) -> Option<String> {
-    for token in line.split_whitespace() {
-        if token.starts_with("https://") || token.starts_with("http://") {
-            return Some(
-                token
-                    .trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ')')
-                    .to_string(),
-            );
-        }
-    }
-    None
-}
-
-fn attach_zrok_log_streams(child: &mut Child) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let printed_public = Arc::new(AtomicBool::new(false));
-    if let Some(stdout) = child.stdout.take() {
-        let printed_public_ref = Arc::clone(&printed_public);
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                if !printed_public_ref.load(Ordering::SeqCst) {
-                    if let Some(url) = find_public_url(&line) {
-                        printed_public_ref.store(true, Ordering::SeqCst);
-                        eprintln!("  Public : {url}");
-                    }
-                }
-                eprintln!("  zrok   : {line}");
-            }
-        });
-    }
-    if let Some(stderr) = child.stderr.take() {
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                eprintln!("  zrok   : {line}");
-            }
-        });
-    }
 }
 
 fn resolve_working_dir(config_cwd: Option<String>) -> anyhow::Result<PathBuf> {
