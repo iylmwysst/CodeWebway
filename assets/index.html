@@ -863,6 +863,7 @@
       const switchingTerminal = terminalId !== activeTerminalId;
       activeTerminalId = terminalId;
       renderTerminalTabs();
+      let usedCachedSnapshot = false;
       if (term && switchingTerminal) {
         term.clear();
       }
@@ -870,11 +871,20 @@
         const cached = readTerminalCache(terminalId);
         if (cached) {
           term.write(cached);
+          usedCachedSnapshot = true;
         }
+      }
+
+      const hasExplicitSkip = Object.prototype.hasOwnProperty.call(options, 'skipScrollback');
+      const shouldSkipScrollback = hasExplicitSkip
+        ? options.skipScrollback === true
+        : usedCachedSnapshot;
+      if (term && !shouldSkipScrollback) {
+        term.clear();
+        writeTerminalCache(terminalId, '');
       }
       closeSocket();
 
-      const shouldSkipScrollback = options.skipScrollback === true;
       const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?terminal_id=${encodeURIComponent(terminalId)}&skip_scrollback=${shouldSkipScrollback ? 'true' : 'false'}`;
       const connectionId = ++wsConnectionId;
       ws = new WebSocket(wsUrl);
