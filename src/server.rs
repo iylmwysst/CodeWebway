@@ -9,9 +9,7 @@ use axum::{
         ws::{Message, WebSocket},
         Json, Path as AxumPath, Query, State, WebSocketUpgrade,
     },
-    http::Request,
     http::{header, HeaderMap, StatusCode},
-    middleware::{from_fn, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, patch, post},
     Router,
@@ -703,17 +701,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/fs/file/diff", patch(save_file_diff))
         .route("/api/usage", get(usage_stats))
         .route("/ws", get(ws_handler))
-        .layer(from_fn(log_requests))
         .with_state(state)
         .layer(CompressionLayer::new())
-}
-
-async fn log_requests(req: Request<axum::body::Body>, next: Next) -> Response {
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-    let response = next.run(req).await;
-    eprintln!("{method} {path} -> {}", response.status());
-    response
 }
 
 async fn serve_index() -> impl IntoResponse {
