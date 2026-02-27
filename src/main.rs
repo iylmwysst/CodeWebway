@@ -78,7 +78,7 @@ fn normalized_args() -> Vec<String> {
 fn spawn_zrok(port: u16) -> anyhow::Result<Child> {
     let target = port.to_string();
     let child = Command::new("zrok")
-        .args(["share", "public", &target])
+        .args(["share", "public", &target, "--headless"])
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -302,6 +302,7 @@ async fn main() -> anyhow::Result<()> {
         println!("  WARNING: Public mode exposes this host to the internet.");
         println!("           Keep Token + PIN secret.");
         println!("           End exposure with lockout + shutdown.");
+        println!("  Access : URL from zrok + Token={} + your PIN", token);
         let child = spawn_zrok(cfg.port)?;
         write_owned_zrok_pid(cfg.port, child.id());
         Some(child)
