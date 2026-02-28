@@ -160,7 +160,11 @@ fn zrok_token_file(port: u16) -> PathBuf {
 fn read_owned_zrok_token(port: u16) -> Option<String> {
     let raw = fs::read_to_string(zrok_token_file(port)).ok()?;
     let s = raw.trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn write_owned_zrok_token(port: u16, token: &str) {
@@ -178,7 +182,9 @@ fn clear_owned_zrok_token(port: u16) {
 /// Release the share token we previously saved, if it still appears in zrok overview.
 /// Only touches the exact token we own — never affects other services' shares.
 fn release_owned_zrok_token(port: u16) {
-    let Some(tok) = read_owned_zrok_token(port) else { return };
+    let Some(tok) = read_owned_zrok_token(port) else {
+        return;
+    };
     // Verify the token still exists in overview before releasing.
     let still_active = Command::new("zrok")
         .args(["overview"])
@@ -190,7 +196,11 @@ fn release_owned_zrok_token(port: u16) {
                 envs.iter().any(|env| {
                     env["shares"]
                         .as_array()
-                        .map(|shares| shares.iter().any(|s| s["shareToken"].as_str() == Some(&tok)))
+                        .map(|shares| {
+                            shares
+                                .iter()
+                                .any(|s| s["shareToken"].as_str() == Some(&tok))
+                        })
                         .unwrap_or(false)
                 })
             })
@@ -238,7 +248,9 @@ fn log_zrok_stderr(
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let Ok(mut file) = fs::File::create(&path) else { return };
+        let Ok(mut file) = fs::File::create(&path) else {
+            return;
+        };
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             let Ok(line) = line else { break };
@@ -258,7 +270,11 @@ fn extract_zrok_token(line: &str) -> Option<String> {
     let idx = line.find(marker)?;
     let before = &line[..idx];
     let tok = before.split("://").last()?.trim().to_string();
-    if tok.is_empty() { None } else { Some(tok) }
+    if tok.is_empty() {
+        None
+    } else {
+        Some(tok)
+    }
 }
 
 fn process_command_line(pid: u32) -> Option<String> {
