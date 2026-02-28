@@ -93,7 +93,6 @@ All comparisons reflect default/typical configuration. Many tools can be configu
 | **Needs VPS** | No | No | Yes | No | No |
 | **Built-in multi-factor login** | ✅ token + PIN | ❌ | ❌ | ❌ | ❌ |
 | **Browser-native (no client install)** | ✅ | ❌ | ❌ | ❌ | ✅ |
-| **Works on mobile / tablet** | ✅ | ❌ | ❌ | ❌ | ⚠ |
 | **File editor included** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Single binary** | ✅ | ❌ | ❌ | ❌ | ✅ |
 
