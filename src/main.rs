@@ -113,6 +113,77 @@ fn clear_owned_zrok_pid(port: u16) {
     let _ = fs::remove_file(zrok_owner_file(port));
 }
 
+fn zrok_token_file(port: u16) -> PathBuf {
+    std::env::temp_dir()
+        .join(ZROK_OWNER_DIR)
+        .join(format!("zrok-public-{port}.token"))
+}
+
+fn read_owned_zrok_token(port: u16) -> Option<String> {
+    let raw = fs::read_to_string(zrok_token_file(port)).ok()?;
+    let s = raw.trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn write_owned_zrok_token(port: u16, token: &str) {
+    let path = zrok_token_file(port);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, format!("{token}\n"));
+}
+
+fn clear_owned_zrok_token(port: u16) {
+    let _ = fs::remove_file(zrok_token_file(port));
+}
+
+/// Query `zrok overview` and release every share pointing at our port.
+/// This cleans up zombie shares left by crashes or SIGKILL.
+fn release_zrok_shares_for_port(port: u16) {
+    let Ok(out) = Command::new("zrok").args(["overview"]).output() else { return };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else { return };
+    let endpoint = format!("http://127.0.0.1:{port}");
+    let Some(envs) = json["environments"].as_array() else { return };
+    for env in envs {
+        let Some(shares) = env["shares"].as_array() else { continue };
+        for share in shares {
+            if share["backendProxyEndpoint"].as_str() != Some(&endpoint) {
+                continue;
+            }
+            if let Some(tok) = share["shareToken"].as_str() {
+                eprintln!("  zrok   : releasing stale share {tok} on port {port}");
+                let _ = Command::new("zrok").args(["release", tok]).status();
+            }
+        }
+    }
+}
+
+/// After zrok spawns, poll overview until our share appears and save its token.
+fn track_zrok_token(port: u16) {
+    std::thread::spawn(move || {
+        let endpoint = format!("http://127.0.0.1:{port}");
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_secs(2));
+            let Ok(out) = Command::new("zrok").args(["overview"]).output() else { continue };
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else { continue };
+            let Some(envs) = json["environments"].as_array() else { continue };
+            for env in envs {
+                let Some(shares) = env["shares"].as_array() else { continue };
+                for share in shares {
+                    if share["backendProxyEndpoint"].as_str() == Some(&endpoint) {
+                        if let Some(tok) = share["shareToken"].as_str() {
+                            write_owned_zrok_token(port, tok);
+                            eprintln!("  zrok   : share token saved ({tok})");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("  zrok   : warning: could not discover share token within 60 s");
+    });
+}
+
 fn process_command_line(pid: u32) -> Option<String> {
     let output = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "command="])
@@ -138,6 +209,10 @@ fn is_owned_public_share_process(pid: u32, port: u16) -> bool {
 }
 
 fn release_stale_owned_zrok_share(port: u16) {
+    // Always attempt to release zombie shares via zrok API first.
+    release_zrok_shares_for_port(port);
+    clear_owned_zrok_token(port);
+
     let Some(pid) = read_owned_zrok_pid(port) else {
         return;
     };
@@ -151,7 +226,8 @@ fn release_stale_owned_zrok_share(port: u16) {
     let _ = Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status();
-    std::thread::sleep(Duration::from_millis(400));
+    // Give zrok time to send a graceful release to the service.
+    std::thread::sleep(Duration::from_secs(3));
     if is_owned_public_share_process(pid, port) {
         let _ = Command::new("kill")
             .args(["-KILL", &pid.to_string()])
@@ -167,12 +243,30 @@ fn resolve_working_dir(config_cwd: Option<String>) -> anyhow::Result<PathBuf> {
     }
 }
 
-fn stop_zrok_child(child: &mut Option<Child>, reason: &str) -> bool {
+fn stop_zrok_child(child: &mut Option<Child>, port: u16, reason: &str) -> bool {
     let Some(mut process) = child.take() else {
         return false;
     };
+    // Release share via API before killing process, so zrok service cleans up.
+    if let Some(tok) = read_owned_zrok_token(port) {
+        let _ = Command::new("zrok").args(["release", &tok]).status();
+    }
+    // SIGTERM first — lets zrok handshake a graceful release with the service.
+    #[cfg(unix)]
+    let _ = Command::new("kill")
+        .args(["-TERM", &process.id().to_string()])
+        .status();
+    // Wait up to 3 s for graceful exit.
+    for _ in 0..30 {
+        if process.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Force-kill if still running.
     let _ = process.kill();
     let _ = process.wait();
+    clear_owned_zrok_token(port);
     eprintln!("  zrok   : {reason}");
     true
 }
@@ -306,6 +400,7 @@ async fn main() -> anyhow::Result<()> {
         println!("  Access : URL from zrok + Token={} + your PIN", token);
         let child = spawn_zrok(cfg.port)?;
         write_owned_zrok_pid(cfg.port, child.id());
+        track_zrok_token(cfg.port);
         Some(child)
     } else {
         None
@@ -325,7 +420,7 @@ async fn main() -> anyhow::Result<()> {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(minutes.saturating_mul(60)));
                 let mut child = zrok_child_ref.lock().unwrap();
-                let _ = stop_zrok_child(&mut child, "public share auto-disabled");
+                let _ = stop_zrok_child(&mut child, cfg.port, "public share auto-disabled");
                 clear_owned_zrok_pid(cfg.port);
             });
         } else {
@@ -438,7 +533,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let mut child = zrok_child.lock().unwrap();
-    let _ = stop_zrok_child(&mut child, "stopped");
+    let _ = stop_zrok_child(&mut child, cfg.port, "stopped");
     clear_owned_zrok_pid(cfg.port);
     Ok(())
 }
