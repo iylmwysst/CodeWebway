@@ -1599,7 +1599,7 @@ async fn handle_socket(
     };
     if !skip_scrollback && !scrollback.is_empty() {
         count_tx(&state, scrollback.len() as u64);
-        let _ = socket.send(Message::Binary(scrollback.into())).await;
+        let _ = socket.send(Message::Binary(scrollback)).await;
     }
 
     let mut session_tick = tokio::time::interval(Duration::from_secs(15));
@@ -1628,7 +1628,7 @@ async fn handle_socket(
                 match result {
                     Ok(data) => {
                         count_tx(&state, data.len() as u64);
-                        if socket.send(Message::Binary(data.to_vec().into())).await.is_err() {
+                        if socket.send(Message::Binary(data.to_vec())).await.is_err() {
                             break;
                         }
                     }
@@ -1719,13 +1719,9 @@ fn has_valid_session_cookie(
 }
 
 fn session_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    let raw_cookie = match headers
+    let raw_cookie = headers
         .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-    {
-        Some(value) => value,
-        None => return None,
-    };
+        .and_then(|value| value.to_str().ok())?;
     cookie_value(raw_cookie, "codewebway_session").map(|value| value.to_string())
 }
 

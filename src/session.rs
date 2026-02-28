@@ -38,41 +38,6 @@ impl Scrollback {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_push_and_snapshot() {
-        let mut sb = Scrollback::new(100);
-        sb.push(b"hello");
-        assert_eq!(sb.snapshot(), b"hello");
-    }
-
-    #[test]
-    fn test_max_capacity_evicts_oldest() {
-        let mut sb = Scrollback::new(5);
-        sb.push(b"123456789"); // 9 bytes into 5-byte buffer
-        assert_eq!(sb.len(), 5);
-        assert_eq!(sb.snapshot(), b"56789");
-    }
-
-    #[test]
-    fn test_empty_snapshot() {
-        let sb = Scrollback::new(100);
-        assert_eq!(sb.snapshot(), b"");
-    }
-
-    #[test]
-    fn test_exact_capacity() {
-        let mut sb = Scrollback::new(3);
-        sb.push(b"abc");
-        assert_eq!(sb.len(), 3);
-        sb.push(b"d");
-        assert_eq!(sb.snapshot(), b"bcd");
-    }
-}
-
 pub struct SharedSession {
     pub scrollback: Scrollback,
     pub tx: broadcast::Sender<Bytes>,
@@ -135,4 +100,39 @@ pub fn close_session(session: &Session) -> anyhow::Result<()> {
     let mut shared = session.lock().unwrap();
     let _ = shared.child.kill();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_push_and_snapshot() {
+        let mut sb = Scrollback::new(100);
+        sb.push(b"hello");
+        assert_eq!(sb.snapshot(), b"hello");
+    }
+
+    #[test]
+    fn test_max_capacity_evicts_oldest() {
+        let mut sb = Scrollback::new(5);
+        sb.push(b"123456789"); // 9 bytes into 5-byte buffer
+        assert_eq!(sb.len(), 5);
+        assert_eq!(sb.snapshot(), b"56789");
+    }
+
+    #[test]
+    fn test_empty_snapshot() {
+        let sb = Scrollback::new(100);
+        assert_eq!(sb.snapshot(), b"");
+    }
+
+    #[test]
+    fn test_exact_capacity() {
+        let mut sb = Scrollback::new(3);
+        sb.push(b"abc");
+        assert_eq!(sb.len(), 3);
+        sb.push(b"d");
+        assert_eq!(sb.snapshot(), b"bcd");
+    }
 }
