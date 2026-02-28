@@ -73,25 +73,37 @@ codewebway -z --terminal-only
 
 ## Comparison
 
-| | CodeWebway + zrok | OpenSSH | SSH + VPS | Tailscale | ttyd |
+The table below compares tools in the context CodeWebway is designed for:
+
+- You do not control the router or firewall (university, corporate, shared office)
+- Only outbound HTTPS is reliably permitted
+- Installing a VPN client or kernel module is not an option
+
+All comparisons reflect default/typical configuration. Many tools can be configured beyond their defaults (e.g. SSH over a reverse tunnel, ttyd behind a reverse proxy) — footnotes call out the most important cases.
+
+| | CodeWebway + zrok | OpenSSH¹ | SSH + VPS | Tailscale | ttyd² |
 |---|---|---|---|---|---|
-| **Requires port forwarding** | No | Yes | No | No | Yes |
-| **Requires network admin** | No | Yes | No | No | Yes |
-| **Works behind strict firewall** | ✅ | ❌ | ⚠ depends | ⚠ sometimes blocked | ❌ |
+| **Requires inbound port/firewall rule** | No | Yes | No | No | Yes |
+| **Requires router or firewall control** | No | Yes | No | No | Yes |
+| **Passes outbound HTTPS-only networks** | ✅ likely | ❌ | ⚠ depends | ⚠ DERP fallback | ❌ |
 | **Connection layer** | Application | Network | Network | Network mesh | Application |
-| **Stable across Wi-Fi changes** | ✅ | ❌ reconnects | ❌ reconnects | ⚠ | ✅ |
+| **Stable across Wi-Fi changes** | ✅ | ❌ reconnects¹ | ❌ reconnects | ⚠ | ✅ |
 | **Direct cost** | Free | Free | ~$5/mo VPS | Free (small scale) | Free |
 | **Needs VPS** | No | No | Yes | No | No |
-| **Built-in 2FA** | ✅ token + PIN | ❌ | ❌ | ❌ | ❌ |
-| **Browser-native** | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **Built-in multi-factor login** | ✅ token + PIN | ❌ | ❌ | ❌ | ❌ |
+| **Browser-native (no client install)** | ✅ | ❌ | ❌ | ❌ | ✅ |
 | **File editor included** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Single binary** | ✅ | ❌ | ❌ | ❌ | ✅ |
 
-**On the "strict firewall" row:** tools like Tailscale use UDP-based mesh protocols that institutional firewalls (Fortinet, Palo Alto, etc.) actively identify and block. CodeWebway uses outbound HTTPS only — the same channel as ordinary web browsing — which is effectively never blocked.
+¹ Vanilla SSH without autossh/mosh. A reverse SSH tunnel eliminates the port forwarding requirement but adds setup complexity and requires a reachable VPS.
 
-**On the "connection layer" row:** SSH and VPN tools operate at the network layer. When the connection drops they must re-establish routing state. CodeWebway is an application-layer tunnel. A brief Wi-Fi interruption or laptop waking from sleep causes a WebSocket reconnect, not a full tunnel teardown. This is why it feels more stable in practice on unreliable institutional networks.
+² ttyd can run behind a reverse proxy without direct port exposure, but requires separate proxy configuration.
 
-**On cost:** "free" tools still have infrastructure cost. OpenSSH requires control over a router or firewall to enable inbound access — in a university or shared office environment, this means asking a network administrator, which is often not possible for individual users. CodeWebway requires none of that.
+**On outbound HTTPS:** CodeWebway + zrok uses standard outbound HTTPS, which is commonly allowed in institutional networks. No protocol is guaranteed to pass every environment — deep packet inspection can block any traffic — but HTTPS tunnels are the most likely to work where UDP-based protocols (Tailscale WireGuard, WireGuard VPN) and non-standard ports are filtered.
+
+**On connection stability:** The comparison is against vanilla SSH sessions, which must fully re-establish the TCP connection after a network change. CodeWebway operates at the application layer — a brief drop causes a WebSocket reconnect without tearing down the server-side PTY session. Tools like `mosh` address this for SSH specifically, but require separate installation on both ends.
+
+**On cost:** "free" tools can still require infrastructure access. Direct SSH from outside a NAT needs either port forwarding (requires router control) or a VPS as a relay. CodeWebway + zrok needs neither.
 
 ## CLI Usage
 
