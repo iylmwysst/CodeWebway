@@ -1459,8 +1459,11 @@
       initTerminal();
       let terminalOnly = false;
       try {
-        const caps = await api('/api/capabilities');
-        terminalOnly = !!(caps && caps.terminal_only);
+        const res = await api('/api/capabilities');
+        if (res.ok) {
+          const caps = await res.json();
+          terminalOnly = !!(caps && caps.terminal_only);
+        }
       } catch {}
       if (terminalOnly) {
         document.getElementById('files').remove();
