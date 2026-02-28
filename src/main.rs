@@ -167,21 +167,22 @@ fn release_owned_zrok_token(port: u16) {
 /// Read zrok's stdout to capture the share URL and extract our token.
 /// This is the only reliable way to identify our share — we read directly from
 /// the process we spawned, so there is no confusion with other services.
-fn watch_zrok_stdout(port: u16, stdout: std::process::ChildStdout) {
-    use std::io::{BufRead, BufReader, Write};
+/// Returns a Receiver that fires once with the full share URL.
+fn watch_zrok_stdout(port: u16, stdout: std::process::ChildStdout) -> std::sync::mpsc::Receiver<String> {
+    use std::io::{BufRead, BufReader};
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             let Ok(line) = line else { break };
-            // Forward every line to our stdout so the operator can see the URL.
-            let _ = writeln!(std::io::stdout(), "{line}");
             // Extract token from URL: https://<token>.share.zrok.io
             if let Some(tok) = extract_zrok_token(&line) {
                 write_owned_zrok_token(port, &tok);
-                eprintln!("  zrok   : share token saved ({tok})");
+                let _ = tx.send(format!("https://{tok}.share.zrok.io"));
             }
         }
     });
+    rx
 }
 
 fn extract_zrok_token(line: &str) -> Option<String> {
@@ -406,11 +407,24 @@ async fn main() -> anyhow::Result<()> {
         println!("  WARNING: Public mode exposes this host to the internet.");
         println!("           Keep Token + PIN secret.");
         println!("           End exposure with lockout + shutdown.");
-        println!("  Access : URL from zrok + Token={} + your PIN", token);
         let mut child = spawn_zrok(cfg.port)?;
         write_owned_zrok_pid(cfg.port, child.id());
-        if let Some(stdout) = child.stdout.take() {
-            watch_zrok_stdout(cfg.port, stdout);
+        let url_rx = child.stdout.take().map(|s| watch_zrok_stdout(cfg.port, s));
+        {
+            use std::io::Write;
+            print!("  zrok   : กำลังเชื่อมต่อ โปรดรอ...");
+            let _ = std::io::stdout().flush();
+        }
+        let zrok_url = url_rx.and_then(|rx| rx.recv_timeout(Duration::from_secs(15)).ok());
+        match &zrok_url {
+            Some(url) => {
+                println!("\r\x1b[K  zrok   : {url}");
+                println!("  Access : {url}  Token={} + PIN", token);
+            }
+            None => {
+                println!("\r\x1b[K  zrok   : URL pending");
+                println!("  Access : URL from zrok + Token={} + your PIN", token);
+            }
         }
         Some(child)
     } else {
