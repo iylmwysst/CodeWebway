@@ -47,6 +47,10 @@ pub struct Config {
     #[arg(long, default_value_t = 8)]
     pub max_connections: usize,
 
+    /// Terminal-only mode: disable file explorer and editor
+    #[arg(long)]
+    pub terminal_only: bool,
+
     /// Generate one temporary link at startup (printed in host console)
     #[arg(long)]
     pub temp_link: bool,
@@ -235,5 +239,17 @@ mod tests {
         assert_eq!(cfg.temp_link_ttl_minutes, 60);
         assert_eq!(cfg.temp_link_scope, "interactive");
         assert_eq!(cfg.temp_link_max_uses, 3);
+    }
+
+    #[test]
+    fn test_terminal_only_default() {
+        let cfg = Config::parse_from(["codewebway"]);
+        assert!(!cfg.terminal_only);
+    }
+
+    #[test]
+    fn test_terminal_only_flag() {
+        let cfg = Config::parse_from(["codewebway", "--terminal-only"]);
+        assert!(cfg.terminal_only);
     }
 }
