@@ -181,6 +181,9 @@
     .indent { margin-left: 8px; }
 
     #terms { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+    body.terminal-only #files { display: none; }
+    body.terminal-only #terms  { flex: 1; }
     #term-tabs {
       display: flex;
       gap: 8px;
@@ -1457,6 +1460,12 @@
       initTerminal();
       login.style.display = 'none';
       app.style.display = 'flex';
+      try {
+        const caps = await api('/api/capabilities');
+        if (caps && caps.terminal_only) {
+          document.body.classList.add('terminal-only');
+        }
+      } catch (_) { /* non-fatal */ }
       setLoginPolling(false);
       await Promise.all([loadTerminals(), renderTree()]);
       await refreshUsage();
