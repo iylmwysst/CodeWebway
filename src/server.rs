@@ -680,9 +680,11 @@ impl SessionStore {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let terminal_only = state.terminal_only;
+    let mut r = Router::new()
         .route("/", get(serve_index))
         .route("/favicon.svg", get(serve_favicon))
+        .route("/api/capabilities", get(capabilities))
         .route("/auth/login", post(auth_login))
         .route("/auth/logout", post(auth_logout))
         .route("/auth/session", get(auth_session))
@@ -700,13 +702,17 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/terminals/:id",
             delete(delete_terminal).patch(rename_terminal),
         )
-        .route("/api/fs/tree", get(fs_tree))
-        .route("/api/fs/file", get(fs_file).put(save_file))
-        .route("/api/fs/file/diff", patch(save_file_diff))
         .route("/api/usage", get(usage_stats))
-        .route("/ws", get(ws_handler))
-        .with_state(state)
-        .layer(CompressionLayer::new())
+        .route("/ws", get(ws_handler));
+
+    if !terminal_only {
+        r = r
+            .route("/api/fs/tree", get(fs_tree))
+            .route("/api/fs/file", get(fs_file).put(save_file))
+            .route("/api/fs/file/diff", patch(save_file_diff));
+    }
+
+    r.with_state(state).layer(CompressionLayer::new())
 }
 
 async fn serve_index() -> impl IntoResponse {
@@ -723,6 +729,17 @@ async fn serve_favicon() -> Response {
         icon.data.into_owned(),
     )
         .into_response()
+}
+
+#[derive(Serialize)]
+struct CapabilitiesResponse {
+    terminal_only: bool,
+}
+
+async fn capabilities(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(CapabilitiesResponse {
+        terminal_only: state.terminal_only,
+    })
 }
 
 async fn auth_login(
@@ -2247,5 +2264,95 @@ mod tests {
         let token = mint_temp_link_token(key, "abc123", 1_700_000_600);
         let tampered = token.replacen("abc123", "xyz999", 1);
         assert!(parse_and_verify_temp_link_token(key, &tampered).is_none());
+    }
+
+    fn make_state(terminal_only: bool) -> Arc<AppState> {
+        use std::time::{Duration, Instant};
+        Arc::new(AppState {
+            password: "token".to_string(),
+            pin: None,
+            failed_logins: Mutex::new(FailedLoginTracker::new(3, Duration::from_secs(300))),
+            sessions: Mutex::new(SessionStore::new(
+                Duration::from_secs(1800),
+                Duration::from_secs(43200),
+            )),
+            access_locked: Mutex::new(false),
+            terminals: Mutex::new(TerminalManager::new(8)),
+            default_shell: "/bin/sh".to_string(),
+            root_dir: std::env::temp_dir(),
+            scrollback: 131072,
+            usage: Mutex::new(UsageTracker::new()),
+            ws_connections: Mutex::new(0),
+            max_ws_connections: 8,
+            idle_timeout: Duration::from_secs(1800),
+            shutdown_grace: Duration::from_secs(10800),
+            warning_window: Duration::from_secs(120),
+            shutdown_deadline: Mutex::new(Instant::now() + Duration::from_secs(10800)),
+            shutdown_tx: tokio::sync::mpsc::unbounded_channel::<()>().0,
+            temp_links: Mutex::new(TempLinkStore::new()),
+            temp_grants: Mutex::new(std::collections::HashMap::new()),
+            temp_link_signing_key: "signingkey123456789012345678901234567890123456".to_string(),
+            auto_shutdown_disabled: false,
+            terminal_only,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_terminal_only_false() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+        let app = router(make_state(false));
+        let req = Request::builder()
+            .uri("/api/capabilities")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["terminal_only"], false);
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_terminal_only_true() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+        let app = router(make_state(true));
+        let req = Request::builder()
+            .uri("/api/capabilities")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["terminal_only"], true);
+    }
+
+    #[tokio::test]
+    async fn test_fs_tree_absent_in_terminal_only() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+        let app = router(make_state(true));
+        let req = Request::builder()
+            .uri("/api/fs/tree")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_fs_tree_present_in_normal_mode() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+        let app = router(make_state(false));
+        let req = Request::builder()
+            .uri("/api/fs/tree")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        // Not 404 — returns 401 Unauthorized (no session cookie)
+        assert_ne!(res.status(), StatusCode::NOT_FOUND);
     }
 }
