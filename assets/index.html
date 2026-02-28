@@ -75,26 +75,22 @@
       font-size: 12px;
       border-radius: 6px;
     }
-    #topbar {
-      border-bottom: 1px solid #2f2f2f;
-      background: #1b1b1b;
-      color: #c8c8c8;
+    #tab-info {
+      margin-left: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
       font-family: monospace;
-      font-size: 12px;
-      padding: 6px 10px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      line-height: 1.3;
+      flex-shrink: 0;
     }
-    #topbar-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
+    #status {
+      font-size: 11px;
+      color: #c8c8c8;
     }
     #usage {
-      color: #9ad1ff;
-      font-size: 11px;
+      font-size: 10px;
+      color: #666;
     }
     #workspace { flex: 1; display: flex; min-height: 0; }
     #files {
@@ -233,6 +229,19 @@
       flex-shrink: 0;
     }
     #new-tab:hover:not(:disabled) { border-color: #555; color: #ccc; }
+    #logout {
+      align-self: stretch;
+      border: 0;
+      border-left: 1px solid #2f2f2f;
+      border-radius: 0;
+      background: transparent;
+      color: #666;
+      padding: 0 12px;
+      font-size: 15px;
+      flex-shrink: 0;
+      margin-left: 8px;
+    }
+    #logout:hover { color: #ccc; background: rgba(255,255,255,0.05); }
     .preview-tab {
       display: flex;
       align-items: center;
@@ -372,13 +381,6 @@
       <span id="session-warning-text"></span>
       <button id="stay-signed-in" type="button">Stay signed in</button>
     </div>
-    <div id="topbar">
-      <div id="status">Connected</div>
-      <div id="topbar-right">
-        <span id="usage">Today 0 B | Session 0 B</span>
-        <button id="logout" class="ghost" type="button">Logout</button>
-      </div>
-    </div>
     <div id="workspace">
       <section id="files">
         <div id="file-head">
@@ -401,6 +403,11 @@
       <section id="terms">
         <div id="term-tabs">
           <button id="new-tab" type="button" title="New terminal tab">+</button>
+          <div id="tab-info">
+            <span id="status">Connected</span>
+            <span id="usage">0 B</span>
+          </div>
+          <button id="logout" type="button" title="Logout">⏻</button>
         </div>
         <div id="terminal"></div>
       </section>
@@ -542,7 +549,7 @@
     }
 
     function setStatus(text, color) {
-      statusEl.textContent = text;
+      statusEl.textContent = '● ' + text;
       statusEl.style.color = color || '#c8c8c8';
     }
 
@@ -618,7 +625,7 @@
         const res = await api('/api/usage');
         if (!res.ok) return;
         const data = await res.json();
-        usageEl.textContent = `Today ${formatBytes(data.today_total_bytes)} | Session ${formatBytes(data.session_total_bytes)}`;
+        usageEl.textContent = formatBytes(data.session_total_bytes);
       } catch {
         // ignore transient usage errors
       }
