@@ -16,6 +16,8 @@
 
 CodeWebway is a single Rust binary that gives you a full terminal and file editor in the browser, on any device. It is built for developers working on machines behind firewalls, NAT, or institutional networks where traditional SSH access is not practical.
 
+![CodeWebway demo](.github/assets/demo.gif)
+
 ## How It Works
 
 ```text
