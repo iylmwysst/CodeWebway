@@ -410,33 +410,37 @@ async fn main() -> anyhow::Result<()> {
         (None, None, None)
     };
 
-    // Print the startup banner (zrok URL above Token if available).
+    // Print the startup banner.
     println!();
     println!("  CodeWebway  ");
     println!("  ─────────────────────────────────");
     if let Some(ref zu) = zrok_url {
         println!("  zrok   : {zu}");
+    } else if cfg.zrok {
+        println!("  zrok   : (URL pending — see Log below)");
     }
     println!("  Token  : {}", token);
     println!("  PIN    : configured (hidden)");
     println!("  Open   : {}", local_url);
     println!("  Bind   : {}", addr);
     println!("  Dir    : {}", working_dir.display());
-    if cfg.zrok {
-        println!("  WARNING: Public mode — keep Token + PIN secret.");
-        if let Some(ref lp) = zrok_log_path {
-            if !lp.as_os_str().is_empty() {
-                println!("  Log    : {}", lp.display());
-            }
-        }
-        if zrok_url.is_none() {
-            println!("  Note   : zrok URL not yet available — check Log above.");
-        }
-    }
     println!("  Login  : Token + PIN on the web login page");
     println!("  Stop   : press q + Enter, or Ctrl+C twice");
     println!("  ─────────────────────────────────");
     println!();
+    if cfg.zrok {
+        println!("  WARNING: This host is now publicly accessible via zrok.");
+        println!("           Anyone with the URL can attempt to log in.");
+        println!("           Keep Token + PIN secret — do not share them.");
+        println!("           To end exposure: lock out all sessions, then shutdown.");
+        println!();
+        if let Some(ref lp) = zrok_log_path {
+            if !lp.as_os_str().is_empty() {
+                println!("  Log    : {} (tail -f to debug)", lp.display());
+                println!();
+            }
+        }
+    }
 
     if cfg.temp_link {
         let scope =
