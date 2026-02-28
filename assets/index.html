@@ -40,14 +40,15 @@
       outline: none;
     }
     button {
-      border: 1px solid #4f4f4f;
+      border: 1px solid #666;
       border-radius: 8px;
-      background: #2f65ff;
-      color: #fff;
+      background: #dedede;
+      color: #111;
       padding: 10px 12px;
       font-size: 13px;
       cursor: pointer;
     }
+    button:hover:not(:disabled) { background: #fff; border-color: #aaa; }
     button:disabled { opacity: 0.6; cursor: wait; }
     .ghost { background: #2d2d2d; }
     #error { color: #ff8a80; margin-top: 10px; min-height: 20px; font-size: 13px; }
@@ -140,9 +141,9 @@
       color: #ddd;
     }
     #editor-actions button.primary {
-      background: #2f65ff;
-      border-color: #2f65ff;
-      color: #fff;
+      background: #dedede;
+      border-color: #aaa;
+      color: #111;
     }
     #editor-actions button:disabled {
       opacity: 0.5;
@@ -216,7 +217,7 @@
       font-size: 12px;
       white-space: nowrap;
     }
-    .tab.active { border-color: #2f65ff; }
+    .tab.active { border-color: #888; }
     .tab button {
       padding: 2px 6px;
       background: #3a3a3a;
@@ -267,7 +268,7 @@
       font-size: 12px;
       white-space: nowrap;
     }
-    .preview-tab.active { border-color: #2f65ff; }
+    .preview-tab.active { border-color: #888; }
     .preview-tab .label {
       background: transparent;
       border: 0;
