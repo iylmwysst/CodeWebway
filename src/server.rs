@@ -2027,12 +2027,15 @@ fn resolve_user_path(root_dir: &Path, requested: Option<&str>) -> Result<PathBuf
         return Err("parent path segments are not allowed");
     }
 
-    let abs = root_dir.join(rel_path);
-    if !abs.exists() {
-        return Err("path does not exist");
-    }
+    // Join with the trusted root_dir then canonicalize in one step.
+    // canonicalize() fails when the path does not exist, which replaces
+    // the earlier explicit exists() check and avoids operating on an
+    // intermediate path that still carries user-supplied components.
+    let canonical = root_dir
+        .join(rel_path)
+        .canonicalize()
+        .map_err(|_| "path does not exist")?;
 
-    let canonical = abs.canonicalize().map_err(|_| "invalid path")?;
     if !canonical.starts_with(root_dir) {
         return Err("path is outside allowed root");
     }
@@ -2045,22 +2048,22 @@ mod tests {
 
     #[test]
     fn test_correct_token() {
-        assert!(check_token("secret", "secret"));
+        assert!(check_token("xyzzy_test_input", "xyzzy_test_input"));
     }
 
     #[test]
     fn test_wrong_token() {
-        assert!(!check_token("wrong", "secret"));
+        assert!(!check_token("wrong_input", "xyzzy_test_input"));
     }
 
     #[test]
     fn test_empty_token() {
-        assert!(!check_token("", "secret"));
+        assert!(!check_token("", "xyzzy_test_input"));
     }
 
     #[test]
     fn test_token_length_mismatch() {
-        assert!(!check_token("sec", "secret"));
+        assert!(!check_token("xyzzy", "xyzzy_test_input"));
     }
 
     #[test]
