@@ -75,6 +75,44 @@ fn normalized_args() -> Vec<String> {
         .collect()
 }
 
+fn check_zrok_ready() -> anyhow::Result<()> {
+    // 1. Is zrok installed?
+    let installed = Command::new("zrok")
+        .arg("version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok();
+    if !installed {
+        return Err(anyhow::anyhow!(
+            "zrok not found in PATH.\n\n\
+             Install zrok first:\n\
+             \x20 macOS  : brew install openziti/ziti/zrok\n\
+             \x20 Linux  : curl -sSf https://get.zrok.io | bash\n\
+             \x20 Others : https://docs.zrok.io/docs/getting-started\n\n\
+             Then enable your account:\n\
+             \x20 zrok enable <token>   (token from https://zrok.io)"
+        ));
+    }
+    // 2. Is zrok enabled (account linked)?
+    let enabled = Command::new("zrok")
+        .arg("status")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !enabled {
+        return Err(anyhow::anyhow!(
+            "zrok is installed but not enabled.\n\n\
+             1. Create a free account at https://zrok.io\n\
+             2. Copy your enable token from the dashboard\n\
+             3. Run: zrok enable <token>"
+        ));
+    }
+    Ok(())
+}
+
 fn spawn_zrok(port: u16) -> anyhow::Result<Child> {
     let target = port.to_string();
     let child = Command::new("zrok")
@@ -277,7 +315,16 @@ fn release_stale_owned_zrok_share(port: u16) {
 
 fn resolve_working_dir(config_cwd: Option<String>) -> anyhow::Result<PathBuf> {
     match config_cwd {
-        Some(cwd) => Ok(PathBuf::from(cwd)),
+        Some(cwd) => {
+            let path = PathBuf::from(&cwd);
+            if !path.exists() {
+                anyhow::bail!("--cwd directory does not exist: {cwd}");
+            }
+            if !path.is_dir() {
+                anyhow::bail!("--cwd path is not a directory: {cwd}");
+            }
+            Ok(path)
+        }
         None => std::env::current_dir().context("failed to resolve current working directory"),
     }
 }
@@ -391,6 +438,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start zrok early (before banner) so we can embed the URL directly.
     let (zrok_child, zrok_url, zrok_log_path) = if cfg.zrok {
+        check_zrok_ready()?;
         release_stale_owned_zrok_share(cfg.port);
         let mut child = spawn_zrok(cfg.port)?;
         write_owned_zrok_pid(cfg.port, child.id());
@@ -453,7 +501,8 @@ async fn main() -> anyhow::Result<()> {
             None,
         ) {
             Ok(link) => {
-                println!("  TempLink : {}{}", local_url, link.url);
+                let base = zrok_url.as_deref().unwrap_or(&local_url);
+                println!("  TempLink : {}{}", base, link.url);
                 println!(
                     "  TempInfo : ttl={}m scope={} uses={}",
                     cfg.temp_link_ttl_minutes, cfg.temp_link_scope, cfg.temp_link_max_uses

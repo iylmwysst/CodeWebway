@@ -20,6 +20,9 @@ impl Scrollback {
     }
 
     pub fn push(&mut self, data: &[u8]) {
+        if self.max == 0 {
+            return;
+        }
         for &b in data {
             if self.buf.len() >= self.max {
                 self.buf.pop_front();
@@ -134,5 +137,13 @@ mod tests {
         assert_eq!(sb.len(), 3);
         sb.push(b"d");
         assert_eq!(sb.snapshot(), b"bcd");
+    }
+
+    #[test]
+    fn test_zero_capacity_stores_nothing() {
+        let mut sb = Scrollback::new(0);
+        sb.push(b"hello");
+        assert_eq!(sb.len(), 0);
+        assert_eq!(sb.snapshot(), b"");
     }
 }
