@@ -221,6 +221,18 @@
       min-width: 24px;
       text-align: center;
     }
+    .tab .icon-btn:disabled { cursor: not-allowed; opacity: 0.3; }
+    #new-tab {
+      background: transparent;
+      border: 1px solid #3a3a3a;
+      border-radius: 7px;
+      color: #777;
+      padding: 3px 10px;
+      font-size: 16px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    #new-tab:hover:not(:disabled) { border-color: #555; color: #ccc; }
     .preview-tab {
       display: flex;
       align-items: center;
@@ -388,7 +400,7 @@
       </section>
       <section id="terms">
         <div id="term-tabs">
-          <button id="new-tab" type="button">+ New Tab</button>
+          <button id="new-tab" type="button" title="New terminal tab">+</button>
         </div>
         <div id="terminal"></div>
       </section>
