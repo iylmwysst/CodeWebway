@@ -48,6 +48,29 @@ It is not a VPN replacement. It is not an enterprise access platform. It fills t
 - You tried VPN but it disconnects on every Wi-Fi handoff or wakes from sleep.
 - You want a browser tab, not a separate SSH client install.
 
+**Common use cases**
+
+```bash
+# Trigger a build on a remote machine from your laptop's browser
+codewebway -z --cwd ~/project
+
+# Let an AI coding agent access a remote shell session
+codewebway -z --temp-link --temp-link-scope interactive
+
+# Share a read-only terminal view for debugging help
+codewebway -z --temp-link --temp-link-scope read-only --temp-link-ttl-minutes 15
+
+# File-access disabled — terminal only
+codewebway -z --terminal-only
+```
+
+**Not suitable for**
+
+- Multi-user environments or shared team access
+- Replacing a zero-trust access platform (Tailscale, Cloudflare Access)
+- Exposing production infrastructure or sensitive services
+- Any scenario requiring more than one concurrent authenticated operator
+
 ## Comparison
 
 | | CodeWebway + zrok | OpenSSH | SSH + VPS | Tailscale | ttyd |
@@ -130,7 +153,35 @@ codewebway --host <tailscale-ip>
 
 CodeWebway is built for personal public exposure. A terminal in a browser carries full shell access, so security was a first-class design constraint.
 
-### Transport
+### Security Best Practices
+
+Before exposing CodeWebway publicly:
+
+- **Always use TLS.** Use `--zrok` or a TLS-terminating reverse proxy (Caddy, Nginx). Never expose plain HTTP to the public internet.
+- **Set a PIN.** The auto-generated token is strong, but adding `--pin` gives you a second independent factor.
+- **Set a public timeout.** Use `--public-timeout-minutes` to cap how long the share stays active. Avoid `--public-no-expiry` unless you have a specific reason.
+- **Restrict the working directory.** Use `--cwd` to point CodeWebway at a specific project folder rather than your home directory.
+- **Run as a non-root user.** CodeWebway requires no elevated privileges. Running it as a dedicated low-privilege user limits blast radius if something goes wrong.
+- **Use `--terminal-only` when file access is not needed.** Disables the file browser and editor API surface entirely.
+
+### Transport Flow
+
+```text
+Browser
+  │
+  │  HTTPS (TLS by zrok)
+  ▼
+zrok edge server  (public internet)
+  │
+  │  outbound tunnel (no inbound port required)
+  ▼
+CodeWebway  127.0.0.1:8080  (your machine)
+  │  ✔ origin check
+  │  ✔ session cookie validated
+  │  ✔ rate limit enforced
+  ▼
+PTY / file system
+```
 
 **Do not expose CodeWebway over plain HTTP to the public internet.** Use `-z` (zrok) or a TLS-terminating reverse proxy. With `-z`, all traffic travels over zrok's HTTPS tunnel before reaching the host. The default bind of `127.0.0.1` means the server is unreachable from any external network unless you explicitly opt in.
 
