@@ -216,8 +216,6 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     let poll_interval = std::time::Duration::from_secs(30);
 
     loop {
-        tokio::time::sleep(poll_interval).await;
-
         let skip = !state.should_write(&state.status.clone(), state.active_url.as_deref());
         let hb = match send_heartbeat(&creds, &state.status, state.active_url.as_deref(), skip).await {
             Ok(h) => {
@@ -286,6 +284,8 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             }
             other => eprintln!("  Fleet: unknown command type: {other}"),
         }
+
+        tokio::time::sleep(poll_interval).await;
     }
 }
 
@@ -296,8 +296,6 @@ async fn wait_for_stop(
     interval: std::time::Duration,
 ) {
     loop {
-        tokio::time::sleep(interval).await;
-
         let skip = !state.should_write(&state.status, state.active_url.as_deref());
         match send_heartbeat(creds, &state.status, state.active_url.as_deref(), skip).await {
             Ok(hb) => {
@@ -325,6 +323,8 @@ async fn wait_for_stop(
                 eprintln!("  Fleet: heartbeat error during run: {e}");
             }
         }
+
+        tokio::time::sleep(interval).await;
     }
 }
 
