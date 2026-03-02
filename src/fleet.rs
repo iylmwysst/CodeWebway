@@ -92,7 +92,6 @@ pub async fn enable_to_path(fleet_endpoint: &str, enable_token: &str, pin: Optio
     save_credentials_to(&creds, path)?;
 
     println!("  ✓ Device enabled: \"{machine_name}\"");
-    println!("  Terminal PIN    : {pin}");
     println!("  Credentials saved to {}", path.display());
     Ok(())
 }
