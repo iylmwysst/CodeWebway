@@ -248,12 +248,13 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             "run_codewebway" => {
                 let exec_id = cmd.execution_id.clone().unwrap_or_default();
 
-                // Fleet mode: use PIN as the single login credential.
-                // password = PIN, second-factor PIN disabled.
+                // Fleet mode: use PIN as the single login credential for both
+                // the token (password) and the second-factor PIN, so the user
+                // only needs one credential to log in.
                 let mut fleet_cfg = cfg.clone();
                 if let Some(ref pin) = creds.pin {
                     fleet_cfg.password = Some(pin.clone());
-                    fleet_cfg.pin = None;
+                    fleet_cfg.pin = Some(pin.clone());
                 }
 
                 match crate::start_server(fleet_cfg).await {
