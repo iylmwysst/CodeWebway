@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -248,12 +249,16 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             "run_codewebway" => {
                 let exec_id = cmd.execution_id.clone().unwrap_or_default();
 
-                // Fleet mode: use PIN as the single login credential for both
-                // the token (password) and the second-factor PIN, so the user
-                // only needs one credential to log in.
+                // Fleet mode: generate a fresh session token each run.
+                // PIN stays as second factor. Dashboard receives both via report.
                 let mut fleet_cfg = cfg.clone();
+                let session_token: String = rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(24)
+                    .map(char::from)
+                    .collect();
+                fleet_cfg.password = Some(session_token);
                 if let Some(ref pin) = creds.pin {
-                    fleet_cfg.password = Some(pin.clone());
                     fleet_cfg.pin = Some(pin.clone());
                 }
 
