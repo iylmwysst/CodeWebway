@@ -27,10 +27,11 @@ pub fn load_credentials() -> Result<FleetCredentials> {
 
 pub fn load_credentials_from(path: &Path) -> Result<FleetCredentials> {
     let data = std::fs::read_to_string(path)
-        .with_context(|| format!("Not enabled. Run: codewebway enable <token>"))?;
+        .with_context(|| "Not enabled. Run: codewebway enable <token>".to_string())?;
     toml::from_str(&data).context("Malformed fleet.toml — run: codewebway enable <token>")
 }
 
+#[allow(dead_code)]
 pub fn save_credentials(creds: &FleetCredentials) -> Result<()> {
     save_credentials_to(creds, &credentials_path())
 }
@@ -125,6 +126,7 @@ pub struct PendingCommand {
     pub execution_id: Option<String>,
     #[serde(rename = "type")]
     pub kind: String,
+    #[allow(dead_code)]
     pub payload: serde_json::Value,
 }
 
@@ -246,9 +248,16 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         match cmd.kind.as_str() {
             "run_codewebway" => {
                 let exec_id = cmd.execution_id.clone().unwrap_or_default();
-                println!("  Fleet: START received — launching terminal");
 
-                match crate::start_server(cfg.clone()).await {
+                // Fleet mode: use PIN as the single login credential.
+                // password = PIN, second-factor PIN disabled.
+                let mut fleet_cfg = cfg.clone();
+                if let Some(ref pin) = creds.pin {
+                    fleet_cfg.password = Some(pin.clone());
+                    fleet_cfg.pin = None;
+                }
+
+                match crate::start_server(fleet_cfg).await {
                     Err(e) => {
                         eprintln!("  Fleet: failed to start server: {e}");
                         if !exec_id.is_empty() {
@@ -257,13 +266,15 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     }
                     Ok(handle) => {
                         let url = handle.zrok_url.as_deref().unwrap_or("no-url");
+                        // Include token in report so dashboard can display it alongside URL.
+                        let output = format!("{url}\ntoken:{}", handle.token);
                         state.status = "running".to_string();
                         state.active_url = handle.zrok_url.clone();
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
 
                         if !exec_id.is_empty() {
-                            if let Err(e) = report_result(&creds, &exec_id, url, true).await {
+                            if let Err(e) = report_result(&creds, &exec_id, &output, true).await {
                                 eprintln!("  Fleet: report failed: {e}");
                             }
                         }
@@ -274,7 +285,6 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         state.active_url = None;
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
-                        println!("  Fleet: terminal stopped — back to idle");
                     }
                 }
             }
@@ -304,7 +314,6 @@ async fn wait_for_stop(
                 }
                 if let Some(cmd) = hb.command {
                     if cmd.kind == "stop_codewebway" {
-                        println!("  Fleet: STOP received");
                         let exec_id = cmd.execution_id.unwrap_or_default();
                         let _ = shutdown_tx.send(());
                         if !exec_id.is_empty() {
@@ -326,6 +335,157 @@ async fn wait_for_stop(
 
         tokio::time::sleep(interval).await;
     }
+}
+
+// ─── System service ────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn launchagent_plist_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Library/LaunchAgents/com.codewebway.fleet.plist")
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_service_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("systemd/user/codewebway-fleet.service")
+}
+
+pub fn install_service() -> Result<()> {
+    let bin = std::env::current_exe()
+        .context("Cannot determine current executable path")?;
+    let bin_str = bin.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = launchagent_plist_path();
+        if let Some(parent) = plist_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let log_dir = std::env::temp_dir().join("codewebway");
+        std::fs::create_dir_all(&log_dir)?;
+        let log_path = log_dir.join("fleet-daemon.log");
+
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+    <key>Label</key>\n\
+    <string>com.codewebway.fleet</string>\n\
+    <key>ProgramArguments</key>\n\
+    <array>\n\
+        <string>{bin}</string>\n\
+        <string>fleet</string>\n\
+    </array>\n\
+    <key>RunAtLoad</key>\n\
+    <true/>\n\
+    <key>KeepAlive</key>\n\
+    <true/>\n\
+    <key>StandardOutPath</key>\n\
+    <string>{log}</string>\n\
+    <key>StandardErrorPath</key>\n\
+    <string>{log}</string>\n\
+</dict>\n\
+</plist>\n",
+            bin = bin_str,
+            log = log_path.display()
+        );
+
+        std::fs::write(&plist_path, plist)?;
+
+        // Unload first in case already loaded (ignore error).
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", &plist_path.to_string_lossy()])
+            .status();
+
+        let status = std::process::Command::new("launchctl")
+            .args(["load", "-w", &plist_path.to_string_lossy()])
+            .status()
+            .context("launchctl load failed")?;
+        if !status.success() {
+            anyhow::bail!("launchctl load returned non-zero exit code");
+        }
+
+        println!("  ✓ Auto-start service installed (macOS LaunchAgent)");
+        println!("  Log: {}", log_path.display());
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let svc_path = systemd_service_path();
+        if let Some(parent) = svc_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let service = format!(
+            "[Unit]\nDescription=CodeWebway Fleet Daemon\nAfter=network-online.target\n\n\
+[Service]\nExecStart={bin} fleet\nRestart=on-failure\nRestartSec=10\n\n\
+[Install]\nWantedBy=default.target\n",
+            bin = bin_str
+        );
+
+        std::fs::write(&svc_path, service)?;
+
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+
+        let status = std::process::Command::new("systemctl")
+            .args(["--user", "enable", "--now", "codewebway-fleet"])
+            .status()
+            .context("systemctl enable failed")?;
+        if !status.success() {
+            anyhow::bail!("systemctl --user enable --now returned non-zero exit code");
+        }
+
+        println!("  ✓ Auto-start service installed (systemd --user)");
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    anyhow::bail!(
+        "Auto-start service is not supported on this platform. Start the daemon manually with: codewebway fleet"
+    )
+}
+
+pub fn uninstall_service() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = launchagent_plist_path();
+        if plist_path.exists() {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", "-w", &plist_path.to_string_lossy()])
+                .status();
+            std::fs::remove_file(&plist_path)?;
+            println!("  ✓ Auto-start service removed.");
+        } else {
+            println!("  Auto-start service not installed.");
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let svc_path = systemd_service_path();
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "disable", "--now", "codewebway-fleet"])
+            .status();
+        if svc_path.exists() {
+            std::fs::remove_file(&svc_path)?;
+        }
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        println!("  ✓ Auto-start service removed.");
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    anyhow::bail!("Auto-start service is not supported on this platform.")
 }
 
 // ─── Utility ───────────────────────────────────────────────────────────────────

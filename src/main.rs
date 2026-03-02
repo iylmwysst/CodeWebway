@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{io, io::IsTerminal};
+use std::io::{self, BufRead as _, IsTerminal};
 
 use anyhow::Context;
 use clap::Parser;
@@ -565,7 +565,9 @@ async fn main() -> anyhow::Result<()> {
             let token = raw_args
                 .get(2)
                 .ok_or_else(|| {
-                    anyhow::anyhow!("Usage: codewebway enable <token> [--pin <pin>] [--endpoint <url>]")
+                    anyhow::anyhow!(
+                        "Usage: codewebway enable <token> [--pin <pin>] [--endpoint <url>] [--service|--no-service]"
+                    )
                 })?
                 .clone();
             let endpoint = raw_args
@@ -586,9 +588,41 @@ async fn main() -> anyhow::Result<()> {
                         None
                     }
                 });
-            return fleet::enable(&endpoint, &token, pin).await;
+
+            fleet::enable(&endpoint, &token, pin).await?;
+
+            // Decide whether to install OS service or start daemon in foreground.
+            let force_service = raw_args.iter().any(|a| a == "--service");
+            let force_no_service = raw_args.iter().any(|a| a == "--no-service");
+
+            let install = if force_service {
+                true
+            } else if force_no_service {
+                false
+            } else if io::stdin().is_terminal() {
+                eprint!("  Install auto-start service? [Y/n]: ");
+                let mut answer = String::new();
+                io::stdin().lock().read_line(&mut answer).unwrap_or(0);
+                !answer.trim().eq_ignore_ascii_case("n")
+            } else {
+                false
+            };
+
+            if install {
+                return fleet::install_service();
+            }
+
+            // No service → start daemon in foreground.
+            let mut cfg = Config::parse_from(vec!["codewebway"]);
+            cfg.zrok = true;
+            cfg.public_no_expiry = true;
+            if let Ok(creds) = fleet::load_credentials() {
+                cfg.pin = creds.pin;
+            }
+            return fleet::run_daemon(cfg).await;
         }
-        Some("disable") => return Ok(fleet::disable()?),
+        Some("disable") => return fleet::disable(),
+        Some("uninstall-service") => return fleet::uninstall_service(),
         Some("fleet") => {
             let mut fleet_args = raw_args.clone();
             fleet_args.remove(1); // strip "fleet" so Config::parse_from works normally
