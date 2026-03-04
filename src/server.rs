@@ -777,10 +777,7 @@ async fn auth_login(
         let mut sessions = state.sessions.lock().unwrap();
         let session_token = sessions.create(now);
         bump_shutdown_deadline_from_activity(&state, now);
-        let set_cookie = format!(
-            "codewebway_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800",
-            session_token
-        );
+        let set_cookie = session_cookie_header(&session_token);
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
     limiter.record_failure(&client, now);
@@ -798,8 +795,13 @@ async fn auth_login(
 }
 
 async fn auth_session(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
-    if has_valid_session_cookie(&headers, &state, false).is_some() {
-        return (StatusCode::OK, "OK").into_response();
+    if let Some(session_token) = has_valid_session_cookie(&headers, &state, false) {
+        return (
+            StatusCode::OK,
+            [(header::SET_COOKIE, session_cookie_header(&session_token))],
+            "OK",
+        )
+            .into_response();
     }
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
@@ -823,15 +825,20 @@ async fn auth_session_status(headers: HeaderMap, State(state): State<Arc<AppStat
         .get(&session_token)
         .cloned();
 
-    Json(SessionStatusResponse {
+    let payload = SessionStatusResponse {
         remaining_idle_secs,
         remaining_absolute_secs,
         warning_window_secs: state.warning_window.as_secs(),
         read_only: grant.as_ref().map(|g| g.read_only).unwrap_or(false),
         bound_terminal_id: grant.as_ref().and_then(|g| g.bound_terminal_id.clone()),
         temp_link_id: grant.as_ref().map(|g| g.source_link_id.clone()),
-    })
-    .into_response()
+    };
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, session_cookie_header(&session_token))],
+        Json(payload),
+    )
+        .into_response()
 }
 
 async fn auth_extend(
@@ -855,7 +862,12 @@ async fn auth_extend(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     bump_shutdown_deadline_from_activity(&state, now);
-    (StatusCode::OK, "OK").into_response()
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, session_cookie_header(&session_token))],
+        "OK",
+    )
+        .into_response()
 }
 
 async fn create_temp_link(
@@ -1078,10 +1090,7 @@ async fn redeem_temp_link(
     );
     bump_shutdown_deadline_from_activity(&state, now);
 
-    let set_cookie = format!(
-        "codewebway_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800",
-        session_token
-    );
+    let set_cookie = session_cookie_header(&session_token);
     let mut response = Redirect::to("/").into_response();
     if let Ok(value) = set_cookie.parse() {
         response.headers_mut().insert(header::SET_COOKIE, value);
@@ -1693,6 +1702,13 @@ pub fn check_token(token: &str, password: &str) -> bool {
         .zip(password.as_bytes())
         .fold(0u8, |acc, (a, b)| acc | (a ^ b))
         == 0
+}
+
+fn session_cookie_header(session_token: &str) -> String {
+    format!(
+        "codewebway_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800",
+        session_token
+    )
 }
 
 fn has_valid_session_cookie(

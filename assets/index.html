@@ -907,7 +907,7 @@
         const res = await api('/auth/session', { method: 'GET' });
         return res.ok;
       } catch {
-        return false;
+        return null;
       }
     }
 
@@ -947,10 +947,13 @@
     async function fetchSessionStatus() {
       try {
         const res = await api('/auth/session/status');
-        if (!res.ok) return null;
-        return res.json();
+        if (res.status === 401) {
+          return { expired: true };
+        }
+        if (!res.ok) return { error: true };
+        return { expired: false, data: await res.json() };
       } catch {
-        return null;
+        return { error: true };
       }
     }
 
@@ -968,11 +971,20 @@
     }
 
     async function refreshSessionWarning() {
-      const status = await fetchSessionStatus();
-      if (!status) {
+      const result = await fetchSessionStatus();
+      if (!result) {
         hideSessionWarning();
         return;
       }
+      if (result.expired) {
+        showLogin('Session expired. Please login again.');
+        return;
+      }
+      if (result.error) {
+        hideSessionWarning();
+        return;
+      }
+      const status = result.data;
       sessionAccess.readOnly = status.read_only === true;
       sessionAccess.boundTerminalId = status.bound_terminal_id || null;
       sessionAccess.tempLinkId = status.temp_link_id || null;
@@ -1115,18 +1127,15 @@
         }
 
         const activeSession = await hasActiveSession();
-        if (!activeSession) {
+        if (activeSession === false) {
           showLogin('Session expired. Please login again.');
           return;
         }
 
-        if (retries < 4) {
-          retries++;
-          setStatus(`Reconnecting (${retries})...`, '#ff9800');
-          setTimeout(() => connectTerminal(terminalId, { skipScrollback: false }), 600 * retries);
-        } else {
-          setStatus('Disconnected', '#ff9800');
-        }
+        retries++;
+        const delay = Math.min(5000, 600 * retries);
+        setStatus(`Reconnecting (${retries})...`, '#ff9800');
+        setTimeout(() => connectTerminal(terminalId, { skipScrollback: false }), delay);
       };
 
       ws.onerror = () => {
