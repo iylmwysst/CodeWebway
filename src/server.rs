@@ -59,12 +59,21 @@ pub struct AppState {
     pub terminal_only: bool,
     pub sso_shared_secret: Option<String>,
     pub used_sso_nonces: Mutex<HashMap<String, u64>>,
+    pub dashboard_auth: Option<DashboardAuthConfig>,
+}
+
+#[derive(Clone)]
+pub struct DashboardAuthConfig {
+    pub api_base: String,
+    pub machine_token: String,
+    pub clerk_publishable_key: String,
 }
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
     password: Option<String>,
     sso_ticket: Option<String>,
+    dashboard_token: Option<String>,
     pin: Option<String>,
 }
 
@@ -284,6 +293,8 @@ struct PublicStatusResponse {
     access_locked: bool,
     auto_shutdown_disabled: bool,
     sso_enabled: bool,
+    dashboard_login_enabled: bool,
+    dashboard_clerk_publishable_key: Option<String>,
 }
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
@@ -763,16 +774,17 @@ async fn auth_login(
 
     let now = Instant::now();
     let client = client_key_from_headers(&headers);
-    let mut limiter = state.failed_logins.lock().unwrap();
-
-    if let Some(wait) = limiter.retry_after(&client, now) {
-        let wait_seconds = wait.as_secs().max(1).to_string();
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, wait_seconds)],
-            "Too many failed login attempts. Try again later.",
-        )
-            .into_response();
+    {
+        let mut limiter = state.failed_logins.lock().unwrap();
+        if let Some(wait) = limiter.retry_after(&client, now) {
+            let wait_seconds = wait.as_secs().max(1).to_string();
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, wait_seconds)],
+                "Too many failed login attempts. Try again later.",
+            )
+                .into_response();
+        }
     }
 
     let password_ok = req
@@ -781,9 +793,12 @@ async fn auth_login(
         .map(|password| check_token(password, &state.password))
         .unwrap_or(false);
     let sso_ok = verify_sso_ticket(&state, req.sso_ticket.as_deref(), unix_now());
+    let dashboard_ok =
+        verify_dashboard_token(&state, req.dashboard_token.as_deref(), req.pin.as_deref()).await;
     let pin_ok = verify_pin(req.pin.as_deref(), state.pin.as_deref());
 
-    if (password_ok || sso_ok) && pin_ok {
+    if (password_ok || sso_ok || dashboard_ok) && pin_ok {
+        let mut limiter = state.failed_logins.lock().unwrap();
         limiter.clear(&client);
         let mut sessions = state.sessions.lock().unwrap();
         let session_token = sessions.create(now);
@@ -791,6 +806,7 @@ async fn auth_login(
         let set_cookie = session_cookie_header(&session_token);
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
+    let mut limiter = state.failed_logins.lock().unwrap();
     limiter.record_failure(&client, now);
 
     if let Some(wait) = limiter.retry_after(&client, now) {
@@ -1116,6 +1132,11 @@ async fn auth_public_status(State(state): State<Arc<AppState>>) -> Response {
         access_locked: *state.access_locked.lock().unwrap(),
         auto_shutdown_disabled: state.auto_shutdown_disabled,
         sso_enabled: state.sso_shared_secret.is_some(),
+        dashboard_login_enabled: state.dashboard_auth.is_some(),
+        dashboard_clerk_publishable_key: state
+            .dashboard_auth
+            .as_ref()
+            .map(|cfg| cfg.clerk_publishable_key.clone()),
     })
     .into_response()
 }
@@ -1965,6 +1986,44 @@ fn verify_sso_ticket(state: &Arc<AppState>, ticket: Option<&str>, now_unix: u64)
     true
 }
 
+async fn verify_dashboard_token(
+    state: &Arc<AppState>,
+    dashboard_token: Option<&str>,
+    pin: Option<&str>,
+) -> bool {
+    // Enforce PIN with dashboard login as second factor.
+    if !verify_pin(pin, state.pin.as_deref()) {
+        return false;
+    }
+    let Some(cfg) = state.dashboard_auth.as_ref() else {
+        return false;
+    };
+    let Some(user_token) = dashboard_token else {
+        return false;
+    };
+    if user_token.trim().is_empty() {
+        return false;
+    }
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/v1/agent/host-auth/verify",
+        cfg.api_base.trim_end_matches('/')
+    );
+    let response = client
+        .post(url)
+        .bearer_auth(&cfg.machine_token)
+        .json(&serde_json::json!({ "user_token": user_token }))
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await;
+
+    match response {
+        Ok(res) => res.status().is_success(),
+        Err(_) => false,
+    }
+}
+
 fn bump_shutdown_deadline_from_activity(state: &Arc<AppState>, now: Instant) {
     let next_deadline = now + state.idle_timeout + state.shutdown_grace;
     let mut deadline = state.shutdown_deadline.lock().unwrap();
@@ -2431,6 +2490,7 @@ mod tests {
             terminal_only,
             sso_shared_secret,
             used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
+            dashboard_auth: None,
         })
     }
 

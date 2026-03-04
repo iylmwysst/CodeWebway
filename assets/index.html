@@ -517,6 +517,7 @@
           <input id="pin" type="password" autocomplete="one-time-code" placeholder="PIN" />
           <button id="submit" class="ghost" type="submit">Connect</button>
         </div>
+        <button id="dashboard-login" class="ghost" type="button" style="display:none;">Login with Dashboard + PIN</button>
       </div>
       <div id="error"></div>
       <div id="login-note"></div>
@@ -632,6 +633,7 @@
     const passwordInput = document.getElementById('password');
     const loginSubtitle = document.getElementById('login-subtitle');
     const pinInput = document.getElementById('pin');
+    const dashboardLoginBtn = document.getElementById('dashboard-login');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
     const loginNoteEl = document.getElementById('login-note');
@@ -711,6 +713,9 @@
     let tempLinks = [];
     let ssoEnabled = false;
     const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
+    let dashboardLoginEnabled = false;
+    let dashboardClerkPublishableKey = null;
+    let clerkReady = false;
 
     function formatSeconds(total) {
       const safe = Math.max(0, Math.floor(total || 0));
@@ -928,6 +933,8 @@
       const status = await fetchPublicStatus();
       if (!status) return;
       ssoEnabled = status.sso_enabled === true;
+      dashboardLoginEnabled = status.dashboard_login_enabled === true;
+      dashboardClerkPublishableKey = status.dashboard_clerk_publishable_key || null;
       updateLoginFormMode();
       if (status.auto_shutdown_disabled === true) {
         loginNoteEl.textContent = 'No login activity: auto-shutdown disabled (public no-expiry; lockout + shutdown only).';
@@ -937,6 +944,7 @@
     }
 
     function updateLoginFormMode() {
+      dashboardLoginBtn.style.display = (dashboardLoginEnabled && dashboardClerkPublishableKey) ? 'block' : 'none';
       if (ssoEnabled) {
         if (ssoTicket) {
           passwordInput.style.display = 'none';
@@ -1180,6 +1188,31 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+    }
+
+    async function authorizeDashboard(dashboardToken, pin) {
+      return api('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dashboard_token: dashboardToken, pin })
+      });
+    }
+
+    async function ensureClerkLoaded() {
+      if (clerkReady && window.Clerk) return;
+      if (!dashboardClerkPublishableKey) throw new Error('Dashboard login unavailable');
+      if (!window.Clerk) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+          script.async = true;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      await window.Clerk.load({ publishableKey: dashboardClerkPublishableKey });
+      clerkReady = true;
     }
 
     async function logout(revokeAll) {
@@ -1715,6 +1748,52 @@
 
       submitBtn.disabled = false;
       await bootstrapWorkspace();
+    });
+
+    dashboardLoginBtn.addEventListener('click', async () => {
+      errorEl.textContent = '';
+      const pin = pinInput.value.trim() || null;
+      if (!pin) {
+        errorEl.textContent = 'PIN is required';
+        return;
+      }
+      dashboardLoginBtn.disabled = true;
+      submitBtn.disabled = true;
+      try {
+        await ensureClerkLoaded();
+        if (!window.Clerk.session) {
+          window.Clerk.openSignIn({
+            afterSignInUrl: window.location.href,
+            afterSignUpUrl: window.location.href
+          });
+          for (let i = 0; i < 240; i++) {
+            if (window.Clerk.session) break;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+        if (!window.Clerk.session) {
+          throw new Error('No dashboard session');
+        }
+        const token = await window.Clerk.session.getToken();
+        if (!token) throw new Error('No dashboard token');
+        const res = await authorizeDashboard(token, pin);
+        if (!res.ok) {
+          if (res.status === 423) {
+            errorEl.textContent = 'Access locked. Restart CodeWebway to login again.';
+          } else if (res.status === 429) {
+            errorEl.textContent = 'Too many attempts. Try again later.';
+          } else {
+            errorEl.textContent = 'Dashboard login failed or PIN invalid';
+          }
+          return;
+        }
+        await bootstrapWorkspace();
+      } catch {
+        errorEl.textContent = 'Cannot login with dashboard right now';
+      } finally {
+        dashboardLoginBtn.disabled = false;
+        submitBtn.disabled = false;
+      }
     });
 
     newTabBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));

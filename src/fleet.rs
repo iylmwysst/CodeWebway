@@ -274,6 +274,23 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 if let Some(ref pin) = creds.pin {
                     fleet_cfg.pin = Some(pin.clone());
                 }
+                fleet_cfg.dashboard_auth_machine_token = Some(creds.machine_token.clone());
+                if let Some(api_base) = cmd
+                    .payload
+                    .get("fleet_api_base")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    fleet_cfg.dashboard_auth_api_base = Some(api_base.to_string());
+                }
+                if let Some(clerk_pk) = cmd
+                    .payload
+                    .get("clerk_publishable_key")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    fleet_cfg.dashboard_auth_clerk_publishable_key = Some(clerk_pk.to_string());
+                }
 
                 // Apply per-trigger config from command payload
                 if let Some(cwd) = cmd

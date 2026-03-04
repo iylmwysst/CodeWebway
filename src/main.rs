@@ -463,6 +463,24 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         terminal_only: cfg.terminal_only,
         sso_shared_secret: cfg.sso_shared_secret.clone(),
         used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
+        dashboard_auth: match (
+            cfg.dashboard_auth_api_base.clone(),
+            cfg.dashboard_auth_machine_token.clone(),
+            cfg.dashboard_auth_clerk_publishable_key.clone(),
+        ) {
+            (Some(api_base), Some(machine_token), Some(clerk_publishable_key))
+                if !api_base.trim().is_empty()
+                    && !machine_token.trim().is_empty()
+                    && !clerk_publishable_key.trim().is_empty() =>
+            {
+                Some(server::DashboardAuthConfig {
+                    api_base,
+                    machine_token,
+                    clerk_publishable_key,
+                })
+            }
+            _ => None,
+        },
     };
 
     state.terminals.lock().unwrap().create(

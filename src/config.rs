@@ -19,6 +19,18 @@ pub struct Config {
     #[arg(long)]
     pub pin: Option<String>,
 
+    /// Dashboard API base URL used for host-login token verification
+    #[arg(long)]
+    pub dashboard_auth_api_base: Option<String>,
+
+    /// Machine token used by host-login verification against dashboard API
+    #[arg(long)]
+    pub dashboard_auth_machine_token: Option<String>,
+
+    /// Clerk publishable key used by host-login UI on this host
+    #[arg(long)]
+    pub dashboard_auth_clerk_publishable_key: Option<String>,
+
     /// Shared secret for signed SSO ticket login (keeps token+PIN fallback)
     #[arg(long)]
     pub sso_shared_secret: Option<String>,
@@ -161,6 +173,14 @@ mod tests {
     fn test_sso_shared_secret_stored() {
         let cfg = Config::parse_from(["codewebway", "--sso-shared-secret", "secret123"]);
         assert_eq!(cfg.sso_shared_secret, Some("secret123".to_string()));
+    }
+
+    #[test]
+    fn test_dashboard_auth_fields_optional() {
+        let cfg = Config::parse_from(["codewebway"]);
+        assert!(cfg.dashboard_auth_api_base.is_none());
+        assert!(cfg.dashboard_auth_machine_token.is_none());
+        assert!(cfg.dashboard_auth_clerk_publishable_key.is_none());
     }
 
     #[test]
