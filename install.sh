@@ -32,11 +32,9 @@ case "${OS}" in
     ;;
 esac
 
-# Get latest release (including pre-releases)
+# Get latest published release
 echo "Fetching latest release..."
-RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" | \
-  awk 'BEGIN{found=0} /"tag_name"/{if(!found){print; found=1}}')
-
+RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
 TAG=$(printf "%s\n" "${RELEASE_JSON}" | grep '"tag_name"' | head -n1 | sed 's/.*"tag_name": "\(.*\)".*/\1/')
 
 if [ -z "$TAG" ]; then
