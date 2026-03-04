@@ -511,13 +511,25 @@
     <form class="card" id="login-form">
       <h1>CodeWebway</h1>
       <p id="login-subtitle">Enter Token and PIN to open workspace</p>
-      <div class="stack">
+      <div id="login-primary" class="stack" style="display:none;">
+        <div class="rounded-md border border-border/50 p-3" style="border-color:#3a3a3a;background:#121212;">
+          <p style="margin:0 0 8px 0;color:#ddd;font-size:13px;font-weight:600;">Recommended login method</p>
+          <p id="login-primary-note" style="margin:0 0 10px 0;color:#999;font-size:12px;">
+            Sign in with your dashboard account, then confirm PIN.
+          </p>
+          <div class="row">
+            <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
+            <button id="dashboard-login" class="ghost" type="button">Login with Dashboard</button>
+          </div>
+        </div>
+        <button id="show-token-method" class="ghost" type="button">Use another method (Token)</button>
+      </div>
+      <div id="token-login-wrap" class="stack">
         <input id="password" type="password" autocomplete="current-password" placeholder="Token" required />
         <div class="row">
           <input id="pin" type="password" autocomplete="one-time-code" placeholder="PIN" />
           <button id="submit" class="ghost" type="submit">Connect</button>
         </div>
-        <button id="dashboard-login" class="ghost" type="button" style="display:none;">Login with Dashboard + PIN</button>
       </div>
       <div id="error"></div>
       <div id="login-note"></div>
@@ -632,7 +644,12 @@
     const form = document.getElementById('login-form');
     const passwordInput = document.getElementById('password');
     const loginSubtitle = document.getElementById('login-subtitle');
+    const loginPrimary = document.getElementById('login-primary');
+    const loginPrimaryNote = document.getElementById('login-primary-note');
+    const showTokenMethodBtn = document.getElementById('show-token-method');
+    const tokenLoginWrap = document.getElementById('token-login-wrap');
     const pinInput = document.getElementById('pin');
+    const primaryPinInput = document.getElementById('pin-primary');
     const dashboardLoginBtn = document.getElementById('dashboard-login');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
@@ -716,6 +733,7 @@
     let dashboardLoginEnabled = false;
     let dashboardClerkPublishableKey = null;
     let clerkReady = false;
+    let tokenMethodVisible = false;
 
     function formatSeconds(total) {
       const safe = Math.max(0, Math.floor(total || 0));
@@ -944,7 +962,13 @@
     }
 
     function updateLoginFormMode() {
-      dashboardLoginBtn.style.display = (dashboardLoginEnabled && dashboardClerkPublishableKey) ? 'block' : 'none';
+      const dashboardAvailable = dashboardLoginEnabled && dashboardClerkPublishableKey;
+      const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
+
+      loginPrimary.style.display = (dashboardAvailable && !signedTicketMode) ? 'flex' : 'none';
+      tokenMethodVisible = signedTicketMode || !dashboardAvailable;
+      tokenLoginWrap.style.display = tokenMethodVisible ? 'flex' : 'none';
+
       if (ssoEnabled) {
         if (ssoTicket) {
           passwordInput.style.display = 'none';
@@ -954,16 +978,35 @@
           pinInput.placeholder = 'PIN (required)';
         } else {
           passwordInput.style.display = 'block';
-          passwordInput.required = false;
-          loginSubtitle.textContent = 'Enter PIN, or use Token + PIN. Signed SSO links are supported.';
+          passwordInput.required = true;
+          loginSubtitle.textContent = dashboardAvailable
+            ? 'Sign in with Dashboard first. You can switch to Token login below.'
+            : 'Enter Token and PIN to open workspace.';
           pinInput.placeholder = 'PIN (required)';
         }
       } else {
         passwordInput.style.display = 'block';
         passwordInput.required = true;
-        loginSubtitle.textContent = 'Enter Token and PIN to open workspace';
+        loginSubtitle.textContent = dashboardAvailable
+          ? 'Sign in with Dashboard first. You can switch to Token login below.'
+          : 'Enter Token and PIN to open workspace';
         pinInput.placeholder = 'PIN';
       }
+
+      if (dashboardAvailable && !signedTicketMode) {
+        dashboardLoginBtn.style.display = 'block';
+        showTokenMethodBtn.style.display = 'block';
+        loginPrimaryNote.textContent = 'Sign in with your dashboard account, then confirm PIN.';
+      } else {
+        dashboardLoginBtn.style.display = 'none';
+        showTokenMethodBtn.style.display = 'none';
+      }
+    }
+
+    function setTokenMethodVisible(visible) {
+      tokenMethodVisible = visible;
+      tokenLoginWrap.style.display = visible ? 'flex' : 'none';
+      showTokenMethodBtn.textContent = visible ? 'Hide token login' : 'Use another method (Token)';
     }
 
     function setLoginPolling(enabled) {
@@ -1052,6 +1095,9 @@
       submitBtn.disabled = false;
       passwordInput.value = '';
       pinInput.value = '';
+      primaryPinInput.value = '';
+      setTokenMethodVisible(false);
+      updateLoginFormMode();
       if (message) {
         errorEl.textContent = message;
       }
@@ -1750,9 +1796,13 @@
       await bootstrapWorkspace();
     });
 
+    showTokenMethodBtn.addEventListener('click', () => {
+      setTokenMethodVisible(!tokenMethodVisible);
+    });
+
     dashboardLoginBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
-      const pin = pinInput.value.trim() || null;
+      const pin = primaryPinInput.value.trim() || pinInput.value.trim() || null;
       if (!pin) {
         errorEl.textContent = 'PIN is required';
         return;
@@ -1762,34 +1812,36 @@
       try {
         await ensureClerkLoaded();
         if (!window.Clerk.session) {
-          window.Clerk.openSignIn({
+          await window.Clerk.redirectToSignIn({
             afterSignInUrl: window.location.href,
             afterSignUpUrl: window.location.href
           });
-          for (let i = 0; i < 240; i++) {
-            if (window.Clerk.session) break;
-            await new Promise((r) => setTimeout(r, 500));
-          }
-        }
-        if (!window.Clerk.session) {
-          throw new Error('No dashboard session');
+          return;
         }
         const token = await window.Clerk.session.getToken();
-        if (!token) throw new Error('No dashboard token');
+        if (!token) {
+          await window.Clerk.redirectToSignIn({
+            afterSignInUrl: window.location.href,
+            afterSignUpUrl: window.location.href
+          });
+          return;
+        }
         const res = await authorizeDashboard(token, pin);
         if (!res.ok) {
           if (res.status === 423) {
             errorEl.textContent = 'Access locked. Restart CodeWebway to login again.';
           } else if (res.status === 429) {
             errorEl.textContent = 'Too many attempts. Try again later.';
+          } else if (res.status === 403) {
+            errorEl.textContent = 'This dashboard account does not own this machine.';
           } else {
-            errorEl.textContent = 'Dashboard login failed or PIN invalid';
+            errorEl.textContent = 'Dashboard login failed. Check PIN or sign in again.';
           }
           return;
         }
         await bootstrapWorkspace();
       } catch {
-        errorEl.textContent = 'Cannot login with dashboard right now';
+        errorEl.textContent = 'Cannot login with dashboard right now. Please sign in again.';
       } finally {
         dashboardLoginBtn.disabled = false;
         submitBtn.disabled = false;

@@ -621,6 +621,9 @@ pub async fn enable_qr(fleet_endpoint: &str, pin: Option<String>) -> Result<()> 
     // 1. Request device code
     let resp = client
         .post(format!("{fleet_endpoint}/api/v1/device/request"))
+        .json(&serde_json::json!({
+            "machine_name": hostname(),
+        }))
         .send()
         .await
         .context("Failed to reach fleet API")?
