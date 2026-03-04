@@ -29,6 +29,36 @@
     .card p { color: #aaa; margin-bottom: 14px; font-size: 14px; }
     .stack { display: flex; flex-direction: column; gap: 10px; }
     .row { display: flex; gap: 8px; }
+    .login-panel {
+      border: 1px solid #3a3a3a;
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      padding: 12px;
+    }
+    .login-panel h2 {
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      color: #f0f0f0;
+      margin: 0 0 6px 0;
+      font-weight: 600;
+    }
+    .login-panel p {
+      margin: 0 0 10px 0;
+      color: #b1b1b1;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .primary-cta {
+      width: 100%;
+      border-color: #8f8f8f;
+      background: #f3f3f3;
+      color: #111;
+      font-weight: 600;
+    }
+    .primary-cta:hover:not(:disabled) {
+      background: #fff;
+      border-color: #d1d1d1;
+    }
     input, select {
       width: 100%;
       background: #111;
@@ -510,21 +540,20 @@
   <div id="login">
     <form class="card" id="login-form">
       <h1>CodeWebway</h1>
-      <p id="login-subtitle">Enter Token and PIN to open workspace</p>
+      <p id="login-subtitle">Sign in to open workspace</p>
       <div id="login-primary" class="stack" style="display:none;">
-        <div class="rounded-md border border-border/50 p-3" style="border-color:#3a3a3a;background:#121212;">
-          <p style="margin:0 0 8px 0;color:#ddd;font-size:13px;font-weight:600;">Recommended login method</p>
-          <p id="login-primary-note" style="margin:0 0 10px 0;color:#999;font-size:12px;">
-            Sign in with your dashboard account, then confirm PIN.
-          </p>
-          <div class="row">
+        <div class="login-panel">
+          <h2 id="login-primary-title">Sign in</h2>
+          <p id="login-primary-note">Continue with your account, then confirm PIN.</p>
+          <button id="dashboard-login" class="primary-cta" type="button">Login</button>
+          <div id="pin-confirm-wrap" class="stack" style="display:none;margin-top:10px;">
             <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
-            <button id="dashboard-login" class="ghost" type="button">Login with Dashboard</button>
+            <button id="dashboard-continue" class="ghost" type="button">Continue</button>
           </div>
         </div>
-        <button id="show-token-method" class="ghost" type="button">Use another method (Token)</button>
+        <button id="show-token-method" class="ghost" type="button">Use access token instead</button>
       </div>
-      <div id="token-login-wrap" class="stack">
+      <div id="token-login-wrap" class="stack" style="display:none;">
         <input id="password" type="password" autocomplete="current-password" placeholder="Token" required />
         <div class="row">
           <input id="pin" type="password" autocomplete="one-time-code" placeholder="PIN" />
@@ -645,12 +674,15 @@
     const passwordInput = document.getElementById('password');
     const loginSubtitle = document.getElementById('login-subtitle');
     const loginPrimary = document.getElementById('login-primary');
+    const loginPrimaryTitle = document.getElementById('login-primary-title');
     const loginPrimaryNote = document.getElementById('login-primary-note');
+    const pinConfirmWrap = document.getElementById('pin-confirm-wrap');
     const showTokenMethodBtn = document.getElementById('show-token-method');
     const tokenLoginWrap = document.getElementById('token-login-wrap');
     const pinInput = document.getElementById('pin');
     const primaryPinInput = document.getElementById('pin-primary');
     const dashboardLoginBtn = document.getElementById('dashboard-login');
+    const dashboardContinueBtn = document.getElementById('dashboard-continue');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
     const loginNoteEl = document.getElementById('login-note');
@@ -732,6 +764,8 @@
     const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
     let dashboardLoginEnabled = false;
     let tokenMethodVisible = false;
+    const DASHBOARD_FLOW_CHALLENGE_KEY = 'cw:dashboard-flow:challenge';
+    let pendingDashboardTicket = null;
 
     function formatSeconds(total) {
       const safe = Math.max(0, Math.floor(total || 0));
@@ -977,7 +1011,7 @@
           passwordInput.style.display = 'block';
           passwordInput.required = true;
           loginSubtitle.textContent = dashboardAvailable
-            ? 'Sign in with Dashboard first. You can switch to Token login below.'
+            ? 'Sign in first, or use access token instead.'
             : 'Enter Token and PIN to open workspace.';
           pinInput.placeholder = 'PIN (required)';
         }
@@ -985,7 +1019,7 @@
         passwordInput.style.display = 'block';
         passwordInput.required = true;
         loginSubtitle.textContent = dashboardAvailable
-          ? 'Sign in with Dashboard first. You can switch to Token login below.'
+          ? 'Sign in first, or use access token instead.'
           : 'Enter Token and PIN to open workspace';
         pinInput.placeholder = 'PIN';
       }
@@ -993,7 +1027,9 @@
       if (dashboardAvailable && !signedTicketMode) {
         dashboardLoginBtn.style.display = 'block';
         showTokenMethodBtn.style.display = 'block';
-        loginPrimaryNote.textContent = 'Sign in with your dashboard account, then confirm PIN.';
+        if (!pendingDashboardTicket) {
+          resetPrimaryLoginState();
+        }
       } else {
         dashboardLoginBtn.style.display = 'none';
         showTokenMethodBtn.style.display = 'none';
@@ -1003,7 +1039,16 @@
     function setTokenMethodVisible(visible) {
       tokenMethodVisible = visible;
       tokenLoginWrap.style.display = visible ? 'flex' : 'none';
-      showTokenMethodBtn.textContent = visible ? 'Hide token login' : 'Use another method (Token)';
+      showTokenMethodBtn.textContent = visible ? 'Hide token login' : 'Use access token instead';
+    }
+
+    function resetPrimaryLoginState() {
+      pendingDashboardTicket = null;
+      pinConfirmWrap.style.display = 'none';
+      primaryPinInput.value = '';
+      loginPrimaryTitle.textContent = 'Sign in';
+      loginPrimaryNote.textContent = 'Continue with your account, then confirm PIN.';
+      dashboardLoginBtn.textContent = 'Login';
     }
 
     function setLoginPolling(enabled) {
@@ -1093,6 +1138,8 @@
       passwordInput.value = '';
       pinInput.value = '';
       primaryPinInput.value = '';
+      clearDashboardFlowState();
+      resetPrimaryLoginState();
       setTokenMethodVisible(false);
       updateLoginFormMode();
       if (message) {
@@ -1260,6 +1307,66 @@
         if (body.status === 'expired') throw new Error('challenge_expired');
       }
       throw new Error('challenge_timeout');
+    }
+
+    function buildDashboardReturnUrl(challengeId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('dashboard_challenge', challengeId);
+      url.searchParams.set('dashboard_returned', '1');
+      return url.toString();
+    }
+
+    function clearDashboardFlowState() {
+      try {
+        sessionStorage.removeItem(DASHBOARD_FLOW_CHALLENGE_KEY);
+      } catch {
+        // ignore storage failures
+      }
+    }
+
+    async function resumeDashboardRedirectFlow() {
+      const params = new URLSearchParams(window.location.search);
+      const returned = params.get('dashboard_returned') === '1';
+      if (!returned) return false;
+
+      const challengeId = params.get('dashboard_challenge') || (() => {
+        try {
+          return sessionStorage.getItem(DASHBOARD_FLOW_CHALLENGE_KEY);
+        } catch {
+          return null;
+        }
+      })();
+      if (!challengeId) return false;
+
+      dashboardLoginBtn.disabled = true;
+      submitBtn.disabled = true;
+      errorEl.textContent = '';
+      try {
+        const ticket = await pollDashboardChallenge(challengeId);
+        pendingDashboardTicket = ticket;
+        loginPrimaryTitle.textContent = 'Confirm PIN';
+        loginPrimaryNote.textContent = 'Sign in completed. Enter PIN to continue.';
+        pinConfirmWrap.style.display = 'flex';
+        primaryPinInput.focus();
+        clearDashboardFlowState();
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('dashboard_challenge');
+        cleanUrl.searchParams.delete('dashboard_returned');
+        window.history.replaceState({}, '', cleanUrl.toString());
+        return true;
+      } catch (err) {
+        if (err instanceof Error && err.message === 'challenge_expired') {
+          errorEl.textContent = 'Sign-in session expired. Please login again.';
+        } else if (err instanceof Error && err.message === 'challenge_timeout') {
+          errorEl.textContent = 'Sign-in timeout. Please login again.';
+        } else {
+          errorEl.textContent = 'Cannot sign in right now. Please try again.';
+        }
+        return false;
+      } finally {
+        dashboardLoginBtn.disabled = false;
+        submitBtn.disabled = false;
+      }
     }
 
     async function logout(revokeAll) {
@@ -1803,43 +1910,59 @@
 
     dashboardLoginBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
-      const pin = primaryPinInput.value.trim() || pinInput.value.trim() || null;
-      if (!pin) {
-        errorEl.textContent = 'PIN is required';
-        return;
-      }
       dashboardLoginBtn.disabled = true;
       submitBtn.disabled = true;
       try {
         const challenge = await startDashboardChallenge();
-        const popup = window.open(challenge.approve_url, '_blank', 'noopener,noreferrer');
-        if (!popup) {
-          errorEl.textContent = 'Popup blocked. Open this URL and approve login: ' + challenge.approve_url;
-          return;
+        const approveUrl = new URL(challenge.approve_url);
+        approveUrl.searchParams.set('return_to', buildDashboardReturnUrl(challenge.challenge_id));
+        try {
+          sessionStorage.setItem(DASHBOARD_FLOW_CHALLENGE_KEY, challenge.challenge_id);
+        } catch {
+          // ignore storage failures
         }
-        const ticket = await pollDashboardChallenge(challenge.challenge_id);
-        const res = await authorizeDashboard(ticket, pin);
+        window.location.assign(approveUrl.toString());
+        return;
+      } catch (err) {
+        errorEl.textContent = 'Cannot start sign in right now. Please try again.';
+      } finally {
+        dashboardLoginBtn.disabled = false;
+        submitBtn.disabled = false;
+      }
+    });
+
+    dashboardContinueBtn.addEventListener('click', async () => {
+      errorEl.textContent = '';
+      if (!pendingDashboardTicket) {
+        errorEl.textContent = 'Please sign in first.';
+        return;
+      }
+      const pin = primaryPinInput.value.trim();
+      if (!pin) {
+        errorEl.textContent = 'PIN is required';
+        return;
+      }
+      dashboardContinueBtn.disabled = true;
+      submitBtn.disabled = true;
+      try {
+        const res = await authorizeDashboard(pendingDashboardTicket, pin);
         if (!res.ok) {
           if (res.status === 423) {
             errorEl.textContent = 'Access locked. Restart CodeWebway to login again.';
           } else if (res.status === 429) {
             errorEl.textContent = 'Too many attempts. Try again later.';
           } else {
-            errorEl.textContent = 'Dashboard login failed. Check PIN and try again.';
+            errorEl.textContent = 'Invalid PIN. Please try again.';
           }
           return;
         }
+        clearDashboardFlowState();
+        resetPrimaryLoginState();
         await bootstrapWorkspace();
-      } catch (err) {
-        if (err instanceof Error && err.message === 'challenge_expired') {
-          errorEl.textContent = 'Dashboard login challenge expired. Please try again.';
-        } else if (err instanceof Error && err.message === 'challenge_timeout') {
-          errorEl.textContent = 'Waiting for approval timed out. Please try again.';
-        } else {
-          errorEl.textContent = 'Cannot login with dashboard right now. Please try again.';
-        }
+      } catch {
+        errorEl.textContent = 'Cannot complete login right now. Please try again.';
       } finally {
-        dashboardLoginBtn.disabled = false;
+        dashboardContinueBtn.disabled = false;
         submitBtn.disabled = false;
       }
     });
@@ -2056,6 +2179,7 @@
 
     updateEditorActionState();
     setLoginPolling(true);
+    resumeDashboardRedirectFlow();
   </script>
 </body>
 </html>
