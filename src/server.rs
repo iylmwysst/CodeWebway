@@ -66,15 +66,28 @@ pub struct AppState {
 pub struct DashboardAuthConfig {
     pub api_base: String,
     pub machine_token: String,
-    pub clerk_publishable_key: String,
 }
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
     password: Option<String>,
     sso_ticket: Option<String>,
+    dashboard_ticket: Option<String>,
     dashboard_token: Option<String>,
     pin: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct DashboardChallengeResponse {
+    challenge_id: String,
+    approve_url: String,
+    expires_in: u64,
+}
+
+#[derive(Serialize)]
+pub struct DashboardChallengeStatusResponse {
+    status: String,
+    ticket: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -294,7 +307,6 @@ struct PublicStatusResponse {
     auto_shutdown_disabled: bool,
     sso_enabled: bool,
     dashboard_login_enabled: bool,
-    dashboard_clerk_publishable_key: Option<String>,
 }
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
@@ -703,6 +715,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/favicon.svg", get(serve_favicon))
         .route("/api/capabilities", get(capabilities))
         .route("/auth/login", post(auth_login))
+        .route("/auth/dashboard/challenge", post(auth_dashboard_challenge))
+        .route(
+            "/auth/dashboard/challenge/:id",
+            get(auth_dashboard_challenge_status),
+        )
         .route("/auth/logout", post(auth_logout))
         .route("/auth/session", get(auth_session))
         .route("/auth/session/status", get(auth_session_status))
@@ -759,6 +776,118 @@ async fn capabilities(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     })
 }
 
+#[derive(Deserialize)]
+struct FleetChallengeEnvelope {
+    data: FleetChallengeData,
+}
+
+#[derive(Deserialize)]
+struct FleetChallengeData {
+    challenge_id: String,
+    approve_url: String,
+    expires_in: u64,
+}
+
+#[derive(Deserialize)]
+struct FleetChallengeStatusEnvelope {
+    data: FleetChallengeStatusData,
+}
+
+#[derive(Deserialize)]
+struct FleetChallengeStatusData {
+    status: String,
+    ticket: Option<String>,
+}
+
+async fn auth_dashboard_challenge(State(state): State<Arc<AppState>>) -> Response {
+    let Some(cfg) = state.dashboard_auth.as_ref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Dashboard login is not configured on this host",
+        )
+            .into_response();
+    };
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/v1/agent/host-auth/challenge",
+        cfg.api_base.trim_end_matches('/')
+    );
+    let result = client
+        .post(url)
+        .bearer_auth(&cfg.machine_token)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await;
+    let response = match result {
+        Ok(res) => res,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "Cannot reach dashboard API").into_response(),
+    };
+    if !response.status().is_success() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            "Dashboard API rejected challenge request",
+        )
+            .into_response();
+    }
+    let payload = match response.json::<FleetChallengeEnvelope>().await {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "Invalid challenge response").into_response(),
+    };
+    let out = DashboardChallengeResponse {
+        challenge_id: payload.data.challenge_id,
+        approve_url: payload.data.approve_url,
+        expires_in: payload.data.expires_in,
+    };
+    Json(out).into_response()
+}
+
+async fn auth_dashboard_challenge_status(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let Some(cfg) = state.dashboard_auth.as_ref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Dashboard login is not configured on this host",
+        )
+            .into_response();
+    };
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/v1/agent/host-auth/challenge/{}",
+        cfg.api_base.trim_end_matches('/'),
+        id
+    );
+    let result = client
+        .get(url)
+        .bearer_auth(&cfg.machine_token)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await;
+    let response = match result {
+        Ok(res) => res,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "Cannot reach dashboard API").into_response(),
+    };
+    if !response.status().is_success() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            "Dashboard API rejected challenge status request",
+        )
+            .into_response();
+    }
+    let payload = match response.json::<FleetChallengeStatusEnvelope>().await {
+        Ok(v) => v,
+        Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "Invalid challenge status response").into_response()
+        }
+    };
+    Json(DashboardChallengeStatusResponse {
+        status: payload.data.status,
+        ticket: payload.data.ticket,
+    })
+    .into_response()
+}
+
 async fn auth_login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -793,8 +922,8 @@ async fn auth_login(
         .map(|password| check_token(password, &state.password))
         .unwrap_or(false);
     let sso_ok = verify_sso_ticket(&state, req.sso_ticket.as_deref(), unix_now());
-    let dashboard_ok =
-        verify_dashboard_token(&state, req.dashboard_token.as_deref(), req.pin.as_deref()).await;
+    let dashboard_ok = verify_dashboard_ticket(&state, req.dashboard_ticket.as_deref()).await
+        || verify_dashboard_token(&state, req.dashboard_token.as_deref()).await;
     let pin_ok = verify_pin(req.pin.as_deref(), state.pin.as_deref());
 
     if (password_ok || sso_ok || dashboard_ok) && pin_ok {
@@ -1133,10 +1262,6 @@ async fn auth_public_status(State(state): State<Arc<AppState>>) -> Response {
         auto_shutdown_disabled: state.auto_shutdown_disabled,
         sso_enabled: state.sso_shared_secret.is_some(),
         dashboard_login_enabled: state.dashboard_auth.is_some(),
-        dashboard_clerk_publishable_key: state
-            .dashboard_auth
-            .as_ref()
-            .map(|cfg| cfg.clerk_publishable_key.clone()),
     })
     .into_response()
 }
@@ -1986,15 +2111,7 @@ fn verify_sso_ticket(state: &Arc<AppState>, ticket: Option<&str>, now_unix: u64)
     true
 }
 
-async fn verify_dashboard_token(
-    state: &Arc<AppState>,
-    dashboard_token: Option<&str>,
-    pin: Option<&str>,
-) -> bool {
-    // Enforce PIN with dashboard login as second factor.
-    if !verify_pin(pin, state.pin.as_deref()) {
-        return false;
-    }
+async fn verify_dashboard_token(state: &Arc<AppState>, dashboard_token: Option<&str>) -> bool {
     let Some(cfg) = state.dashboard_auth.as_ref() else {
         return false;
     };
@@ -2014,6 +2131,36 @@ async fn verify_dashboard_token(
         .post(url)
         .bearer_auth(&cfg.machine_token)
         .json(&serde_json::json!({ "user_token": user_token }))
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await;
+
+    match response {
+        Ok(res) => res.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn verify_dashboard_ticket(state: &Arc<AppState>, dashboard_ticket: Option<&str>) -> bool {
+    let Some(cfg) = state.dashboard_auth.as_ref() else {
+        return false;
+    };
+    let Some(ticket) = dashboard_ticket else {
+        return false;
+    };
+    if ticket.trim().is_empty() {
+        return false;
+    }
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/v1/agent/host-auth/redeem",
+        cfg.api_base.trim_end_matches('/')
+    );
+    let response = client
+        .post(url)
+        .bearer_auth(&cfg.machine_token)
+        .json(&serde_json::json!({ "ticket": ticket }))
         .timeout(Duration::from_secs(8))
         .send()
         .await;

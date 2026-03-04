@@ -731,8 +731,6 @@
     let ssoEnabled = false;
     const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
     let dashboardLoginEnabled = false;
-    let dashboardClerkPublishableKey = null;
-    let clerkReady = false;
     let tokenMethodVisible = false;
 
     function formatSeconds(total) {
@@ -952,7 +950,6 @@
       if (!status) return;
       ssoEnabled = status.sso_enabled === true;
       dashboardLoginEnabled = status.dashboard_login_enabled === true;
-      dashboardClerkPublishableKey = status.dashboard_clerk_publishable_key || null;
       updateLoginFormMode();
       if (status.auto_shutdown_disabled === true) {
         loginNoteEl.textContent = 'No login activity: auto-shutdown disabled (public no-expiry; lockout + shutdown only).';
@@ -962,7 +959,7 @@
     }
 
     function updateLoginFormMode() {
-      const dashboardAvailable = dashboardLoginEnabled && dashboardClerkPublishableKey;
+      const dashboardAvailable = dashboardLoginEnabled;
       const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
 
       loginPrimary.style.display = (dashboardAvailable && !signedTicketMode) ? 'flex' : 'none';
@@ -1236,29 +1233,33 @@
       });
     }
 
-    async function authorizeDashboard(dashboardToken, pin) {
+    async function authorizeDashboard(ticket, pin) {
       return api('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dashboard_token: dashboardToken, pin })
+        body: JSON.stringify({ dashboard_ticket: ticket, pin })
       });
     }
 
-    async function ensureClerkLoaded() {
-      if (clerkReady && window.Clerk) return;
-      if (!dashboardClerkPublishableKey) throw new Error('Dashboard login unavailable');
-      if (!window.Clerk) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
-          script.async = true;
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
+    async function startDashboardChallenge() {
+      const res = await api('/auth/dashboard/challenge', { method: 'POST' });
+      if (!res.ok) throw new Error('challenge_failed');
+      return res.json();
+    }
+
+    async function pollDashboardChallenge(challengeId) {
+      const deadline = Date.now() + 120000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const res = await api(`/auth/dashboard/challenge/${encodeURIComponent(challengeId)}`, {
+          method: 'GET'
         });
+        if (!res.ok) continue;
+        const body = await res.json();
+        if (body.status === 'approved' && body.ticket) return body.ticket;
+        if (body.status === 'expired') throw new Error('challenge_expired');
       }
-      await window.Clerk.load({ publishableKey: dashboardClerkPublishableKey });
-      clerkReady = true;
+      throw new Error('challenge_timeout');
     }
 
     async function logout(revokeAll) {
@@ -1810,38 +1811,33 @@
       dashboardLoginBtn.disabled = true;
       submitBtn.disabled = true;
       try {
-        await ensureClerkLoaded();
-        if (!window.Clerk.session) {
-          await window.Clerk.redirectToSignIn({
-            afterSignInUrl: window.location.href,
-            afterSignUpUrl: window.location.href
-          });
+        const challenge = await startDashboardChallenge();
+        const popup = window.open(challenge.approve_url, '_blank', 'noopener,noreferrer');
+        if (!popup) {
+          errorEl.textContent = 'Popup blocked. Open this URL and approve login: ' + challenge.approve_url;
           return;
         }
-        const token = await window.Clerk.session.getToken();
-        if (!token) {
-          await window.Clerk.redirectToSignIn({
-            afterSignInUrl: window.location.href,
-            afterSignUpUrl: window.location.href
-          });
-          return;
-        }
-        const res = await authorizeDashboard(token, pin);
+        const ticket = await pollDashboardChallenge(challenge.challenge_id);
+        const res = await authorizeDashboard(ticket, pin);
         if (!res.ok) {
           if (res.status === 423) {
             errorEl.textContent = 'Access locked. Restart CodeWebway to login again.';
           } else if (res.status === 429) {
             errorEl.textContent = 'Too many attempts. Try again later.';
-          } else if (res.status === 403) {
-            errorEl.textContent = 'This dashboard account does not own this machine.';
           } else {
-            errorEl.textContent = 'Dashboard login failed. Check PIN or sign in again.';
+            errorEl.textContent = 'Dashboard login failed. Check PIN and try again.';
           }
           return;
         }
         await bootstrapWorkspace();
-      } catch {
-        errorEl.textContent = 'Cannot login with dashboard right now. Please sign in again.';
+      } catch (err) {
+        if (err instanceof Error && err.message === 'challenge_expired') {
+          errorEl.textContent = 'Dashboard login challenge expired. Please try again.';
+        } else if (err instanceof Error && err.message === 'challenge_timeout') {
+          errorEl.textContent = 'Waiting for approval timed out. Please try again.';
+        } else {
+          errorEl.textContent = 'Cannot login with dashboard right now. Please try again.';
+        }
       } finally {
         dashboardLoginBtn.disabled = false;
         submitBtn.disabled = false;
