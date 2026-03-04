@@ -14,6 +14,8 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use hmac::{Hmac, Mac};
 use portable_pty::PtySize;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
@@ -55,11 +57,14 @@ pub struct AppState {
     pub temp_link_signing_key: String,
     pub auto_shutdown_disabled: bool,
     pub terminal_only: bool,
+    pub sso_shared_secret: Option<String>,
+    pub used_sso_nonces: Mutex<HashMap<String, u64>>,
 }
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    password: String,
+    password: Option<String>,
+    sso_ticket: Option<String>,
     pin: Option<String>,
 }
 
@@ -278,6 +283,7 @@ struct PublicStatusResponse {
     shutdown_remaining_secs: u64,
     access_locked: bool,
     auto_shutdown_disabled: bool,
+    sso_enabled: bool,
 }
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
@@ -769,10 +775,15 @@ async fn auth_login(
             .into_response();
     }
 
-    let password_ok = check_token(&req.password, &state.password);
+    let password_ok = req
+        .password
+        .as_deref()
+        .map(|password| check_token(password, &state.password))
+        .unwrap_or(false);
+    let sso_ok = verify_sso_ticket(&state, req.sso_ticket.as_deref(), unix_now());
     let pin_ok = verify_pin(req.pin.as_deref(), state.pin.as_deref());
 
-    if password_ok && pin_ok {
+    if (password_ok || sso_ok) && pin_ok {
         limiter.clear(&client);
         let mut sessions = state.sessions.lock().unwrap();
         let session_token = sessions.create(now);
@@ -1104,6 +1115,7 @@ async fn auth_public_status(State(state): State<Arc<AppState>>) -> Response {
         shutdown_remaining_secs: remaining,
         access_locked: *state.access_locked.lock().unwrap(),
         auto_shutdown_disabled: state.auto_shutdown_disabled,
+        sso_enabled: state.sso_shared_secret.is_some(),
     })
     .into_response()
 }
@@ -1897,6 +1909,62 @@ fn verify_pin(input: Option<&str>, expected: Option<&str>) -> bool {
     }
 }
 
+#[derive(Deserialize)]
+struct SsoTicketPayload {
+    sub: String,
+    nonce: String,
+    exp: u64,
+}
+
+fn verify_sso_ticket(state: &Arc<AppState>, ticket: Option<&str>, now_unix: u64) -> bool {
+    let Some(secret) = state.sso_shared_secret.as_deref() else {
+        return false;
+    };
+    let Some(ticket) = ticket else {
+        return false;
+    };
+    let mut parts = ticket.split('.');
+    let payload_b64 = match parts.next() {
+        Some(v) if !v.is_empty() => v,
+        _ => return false,
+    };
+    let sig_hex = match parts.next() {
+        Some(v) if !v.is_empty() => v,
+        _ => return false,
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+
+    let expected = sso_ticket_signature(secret, payload_b64);
+    if !check_token(sig_hex, &expected) {
+        return false;
+    }
+    let payload_bytes = match URL_SAFE_NO_PAD.decode(payload_b64) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let payload: SsoTicketPayload = match serde_json::from_slice(&payload_bytes) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if payload.sub.trim().is_empty() || payload.nonce.len() < 16 || payload.nonce.len() > 128 {
+        return false;
+    }
+    if payload.exp < now_unix || payload.exp > now_unix.saturating_add(5 * 60) {
+        return false;
+    }
+
+    // Single-use nonce blocks replay if ticket leaks in logs/history.
+    let mut used = state.used_sso_nonces.lock().unwrap();
+    used.retain(|_, exp| *exp >= now_unix);
+    if used.contains_key(&payload.nonce) {
+        return false;
+    }
+    used.insert(payload.nonce, payload.exp);
+    true
+}
+
 fn bump_shutdown_deadline_from_activity(state: &Arc<AppState>, now: Instant) {
     let next_deadline = now + state.idle_timeout + state.shutdown_grace;
     let mut deadline = state.shutdown_deadline.lock().unwrap();
@@ -1941,6 +2009,18 @@ struct ParsedTempToken {
 fn temp_link_signature(signing_key: &str, id: &str, expires_at_unix: u64, nonce: &str) -> String {
     let payload = format!("{id}.{expires_at_unix}.{nonce}");
     hash_bytes_hex(format!("{signing_key}:{payload}").as_bytes())
+}
+
+fn sso_ticket_signature(secret: &str, payload_b64: &str) -> String {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any length");
+    mac.update(payload_b64.as_bytes());
+    let sig = mac.finalize().into_bytes();
+    let mut out = String::with_capacity(sig.len() * 2);
+    for byte in sig {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 fn mint_temp_link_token(signing_key: &str, id: &str, expires_at_unix: u64) -> String {
@@ -2281,7 +2361,47 @@ mod tests {
         assert!(parse_and_verify_temp_link_token(key, &tampered).is_none());
     }
 
+    #[test]
+    fn test_verify_sso_ticket_accepts_valid_single_use_ticket() {
+        let state =
+            make_state_with_sso(false, Some("0123456789abcdef0123456789abcdef".to_string()));
+        let now = unix_now();
+        let payload = serde_json::json!({
+            "sub": "user_123",
+            "nonce": "nonce_1234567890abcd",
+            "exp": now + 120
+        });
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let sig = sso_ticket_signature(state.sso_shared_secret.as_deref().unwrap(), &payload_b64);
+        let ticket = format!("{payload_b64}.{sig}");
+
+        assert!(verify_sso_ticket(&state, Some(&ticket), now));
+        assert!(!verify_sso_ticket(&state, Some(&ticket), now));
+    }
+
+    #[test]
+    fn test_verify_sso_ticket_rejects_bad_signature() {
+        let state =
+            make_state_with_sso(false, Some("0123456789abcdef0123456789abcdef".to_string()));
+        let now = unix_now();
+        let payload = serde_json::json!({
+            "sub": "user_123",
+            "nonce": "nonce_1234567890abcd",
+            "exp": now + 120
+        });
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let ticket = format!("{payload_b64}.deadbeef");
+        assert!(!verify_sso_ticket(&state, Some(&ticket), now));
+    }
+
     fn make_state(terminal_only: bool) -> Arc<AppState> {
+        make_state_with_sso(terminal_only, None)
+    }
+
+    fn make_state_with_sso(
+        terminal_only: bool,
+        sso_shared_secret: Option<String>,
+    ) -> Arc<AppState> {
         use std::time::{Duration, Instant};
         Arc::new(AppState {
             password: "token".to_string(),
@@ -2309,6 +2429,8 @@ mod tests {
             temp_link_signing_key: "signingkey123456789012345678901234567890123456".to_string(),
             auto_shutdown_disabled: false,
             terminal_only,
+            sso_shared_secret,
+            used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
         })
     }
 

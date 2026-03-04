@@ -10,6 +10,7 @@ Options:
   --port <PORT>                   Listen port [default: 8080]
   --password <PASSWORD>           Token (min 16 chars; auto-generated if omitted)
   --pin <PIN>                     Secondary PIN (numeric, min 6 digits)
+  --sso-shared-secret <SECRET>    Enable signed SSO ticket login (still supports token+PIN)
   --shell <PATH>                  Shell executable [default: $SHELL]
   --cwd <PATH>                    Working directory [default: current dir]
   --scrollback <BYTES>            Scrollback buffer size [default: 131072]
@@ -146,3 +147,34 @@ codewebway --host <tailscale-ip>
 ### Reverse Proxy (Caddy, Nginx)
 
 CodeWebway can sit behind any TLS-terminating reverse proxy. Point the proxy at `127.0.0.1:8080`. Ensure the proxy forwards the `Host` and `X-Forwarded-Host` headers — CodeWebway validates the `Origin` header against these on WebSocket upgrade.
+
+## Signed SSO Ticket Login
+
+When `--sso-shared-secret` is set, `/auth/login` accepts either:
+- `password + pin` (existing flow)
+- `sso_ticket + pin` (no token copy/paste)
+
+Ticket format:
+
+```text
+<base64url(payload_json)>.<hex_hmac_sha256_signature>
+```
+
+`payload_json` must include:
+- `sub` (user id/string)
+- `nonce` (16+ chars, single-use)
+- `exp` (unix timestamp; must be within 5 minutes)
+
+Signature rule:
+
+```text
+signature = HMAC_SHA256_HEX(secret, base64url(payload_json))
+```
+
+Open URL example:
+
+```text
+https://your-codewebway-host/?sso_ticket=<ticket>
+```
+
+The login screen will request only PIN when a valid ticket is present.

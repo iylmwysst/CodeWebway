@@ -5,11 +5,11 @@ mod server;
 mod session;
 
 use std::fs;
+use std::io::{self, BufRead as _, IsTerminal};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::io::{self, BufRead as _, IsTerminal};
 
 use anyhow::Context;
 use clap::Parser;
@@ -411,6 +411,12 @@ pub struct ServerHandle {
 }
 
 pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
+    if let Some(secret) = cfg.sso_shared_secret.as_deref() {
+        if secret.len() < 16 {
+            anyhow::bail!("--sso-shared-secret must be at least 16 characters.");
+        }
+    }
+
     let token = cfg.password.clone().unwrap_or_else(|| generate_token(16));
     validate_token(&token)?;
 
@@ -455,6 +461,8 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         temp_link_signing_key: generate_token(48),
         auto_shutdown_disabled,
         terminal_only: cfg.terminal_only,
+        sso_shared_secret: cfg.sso_shared_secret.clone(),
+        used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
     };
 
     state.terminals.lock().unwrap().create(
@@ -562,20 +570,88 @@ async fn main() -> anyhow::Result<()> {
     let raw_args: Vec<String> = std::env::args().collect();
     match raw_args.get(1).map(String::as_str) {
         Some("enable") => {
-            let token = raw_args
-                .get(2)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Usage: codewebway enable <token> [--pin <pin>] [--endpoint <url>] [--service|--no-service]"
-                    )
-                })?
-                .clone();
+            let token_arg = raw_args.get(2).filter(|a| !a.starts_with('-')).cloned();
             let endpoint = raw_args
                 .windows(2)
                 .find(|w| w[0] == "--endpoint")
                 .map(|w| w[1].clone())
                 .unwrap_or_else(|| "https://webwayfleet-api.webwayfleet.workers.dev".to_string());
-            // PIN: from --pin flag, or prompt if interactive, or auto-generate
+
+            // Determine token — either from arg, QR flow, or prompt
+            let token = if let Some(t) = token_arg {
+                // ── classic path: codewebway enable <token> ──────────────────
+                t
+            } else if io::stdin().is_terminal() {
+                // ── interactive mode: show menu ───────────────────────────────
+                println!();
+                println!("  How would you like to connect to WebWayFleet?");
+                println!();
+                println!(
+                    "  [1] Scan QR Code   — use your phone (recommended for headless servers)"
+                );
+                println!("  [2] Enter Token    — paste the token from the Dashboard");
+                println!();
+                eprint!("  Choice [1/2]: ");
+                let mut choice = String::new();
+                io::stdin().lock().read_line(&mut choice).unwrap_or(0);
+
+                if choice.trim() == "1" {
+                    // ── QR path ───────────────────────────────────────────────
+                    let pin = raw_args
+                        .windows(2)
+                        .find(|w| w[0] == "--pin")
+                        .map(|w| w[1].clone())
+                        .or_else(|| {
+                            if io::stdin().is_terminal() {
+                                eprint!("  Set terminal PIN (6 digits): ");
+                                rpassword::read_password().ok().filter(|p| !p.is_empty())
+                            } else {
+                                None
+                            }
+                        });
+                    fleet::enable_qr(&endpoint, pin).await?;
+
+                    // service install prompt (same as token path below)
+                    let force_service = raw_args.iter().any(|a| a == "--service");
+                    let force_no_service = raw_args.iter().any(|a| a == "--no-service");
+                    let install = if force_service {
+                        true
+                    } else if force_no_service {
+                        false
+                    } else if io::stdin().is_terminal() {
+                        eprint!("  Install auto-start service? [Y/n]: ");
+                        let mut answer = String::new();
+                        io::stdin().lock().read_line(&mut answer).unwrap_or(0);
+                        !answer.trim().eq_ignore_ascii_case("n")
+                    } else {
+                        false
+                    };
+                    if install {
+                        return fleet::install_service();
+                    }
+                    let mut cfg = Config::parse_from(vec!["codewebway"]);
+                    cfg.zrok = true;
+                    cfg.public_no_expiry = true;
+                    if let Ok(creds) = fleet::load_credentials() {
+                        cfg.pin = creds.pin;
+                    }
+                    return fleet::run_daemon(cfg).await;
+                } else {
+                    // ── manual token prompt ───────────────────────────────────
+                    eprint!("  Enable token from Dashboard: ");
+                    let mut t = String::new();
+                    io::stdin().lock().read_line(&mut t).unwrap_or(0);
+                    let t = t.trim().to_string();
+                    if t.is_empty() {
+                        anyhow::bail!("No token entered.");
+                    }
+                    t
+                }
+            } else {
+                anyhow::bail!("Usage: codewebway enable <token>");
+            };
+
+            // ── shared path after token is known ─────────────────────────────
             let pin = raw_args
                 .windows(2)
                 .find(|w| w[0] == "--pin")

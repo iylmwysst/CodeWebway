@@ -19,6 +19,10 @@ pub struct Config {
     #[arg(long)]
     pub pin: Option<String>,
 
+    /// Shared secret for signed SSO ticket login (keeps token+PIN fallback)
+    #[arg(long)]
+    pub sso_shared_secret: Option<String>,
+
     /// Shell to spawn (default: $SHELL on Unix, cmd.exe on Windows)
     #[arg(long)]
     pub shell: Option<String>,
@@ -145,6 +149,18 @@ mod tests {
     fn test_pin_stored() {
         let cfg = Config::parse_from(["codewebway", "--pin", "123456"]);
         assert_eq!(cfg.pin, Some("123456".to_string()));
+    }
+
+    #[test]
+    fn test_sso_shared_secret_optional() {
+        let cfg = Config::parse_from(["codewebway"]);
+        assert!(cfg.sso_shared_secret.is_none());
+    }
+
+    #[test]
+    fn test_sso_shared_secret_stored() {
+        let cfg = Config::parse_from(["codewebway", "--sso-shared-secret", "secret123"]);
+        assert_eq!(cfg.sso_shared_secret, Some("secret123".to_string()));
     }
 
     #[test]

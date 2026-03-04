@@ -510,7 +510,7 @@
   <div id="login">
     <form class="card" id="login-form">
       <h1>CodeWebway</h1>
-      <p>Enter Token and PIN to open workspace</p>
+      <p id="login-subtitle">Enter Token and PIN to open workspace</p>
       <div class="stack">
         <input id="password" type="password" autocomplete="current-password" placeholder="Token" required />
         <div class="row">
@@ -630,6 +630,7 @@
     const login = document.getElementById('login');
     const form = document.getElementById('login-form');
     const passwordInput = document.getElementById('password');
+    const loginSubtitle = document.getElementById('login-subtitle');
     const pinInput = document.getElementById('pin');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
@@ -708,6 +709,8 @@
       tempLinkId: null
     };
     let tempLinks = [];
+    let ssoEnabled = false;
+    const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
 
     function formatSeconds(total) {
       const safe = Math.max(0, Math.floor(total || 0));
@@ -924,11 +927,35 @@
     async function refreshLoginNote() {
       const status = await fetchPublicStatus();
       if (!status) return;
+      ssoEnabled = status.sso_enabled === true;
+      updateLoginFormMode();
       if (status.auto_shutdown_disabled === true) {
         loginNoteEl.textContent = 'No login activity: auto-shutdown disabled (public no-expiry; lockout + shutdown only).';
         return;
       }
       loginNoteEl.textContent = `No login activity: auto-shutdown in ${formatSeconds(status.shutdown_remaining_secs)}.`;
+    }
+
+    function updateLoginFormMode() {
+      if (ssoEnabled) {
+        if (ssoTicket) {
+          passwordInput.style.display = 'none';
+          passwordInput.required = false;
+          passwordInput.value = '';
+          loginSubtitle.textContent = 'Signed in with your system account. Enter PIN to open workspace.';
+          pinInput.placeholder = 'PIN (required)';
+        } else {
+          passwordInput.style.display = 'block';
+          passwordInput.required = false;
+          loginSubtitle.textContent = 'Enter PIN, or use Token + PIN. Signed SSO links are supported.';
+          pinInput.placeholder = 'PIN (required)';
+        }
+      } else {
+        passwordInput.style.display = 'block';
+        passwordInput.required = true;
+        loginSubtitle.textContent = 'Enter Token and PIN to open workspace';
+        pinInput.placeholder = 'PIN';
+      }
     }
 
     function setLoginPolling(enabled) {
@@ -1145,10 +1172,13 @@
     }
 
     async function authorize(password, pin) {
+      const payload = { pin };
+      if (password) payload.password = password;
+      if (ssoTicket) payload.sso_ticket = ssoTicket;
       return api('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, pin })
+        body: JSON.stringify(payload)
       });
     }
 
@@ -1659,7 +1689,7 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const password = passwordInput.value;
+      const password = passwordInput.value.trim();
       const pin = pinInput.value.trim() || null;
       errorEl.textContent = '';
       submitBtn.disabled = true;
@@ -1672,7 +1702,7 @@
           } else if (res.status === 429) {
             errorEl.textContent = 'Too many attempts. Try again later.';
           } else {
-            errorEl.textContent = 'Invalid token or PIN';
+            errorEl.textContent = ssoTicket ? 'Invalid SSO ticket or PIN' : 'Invalid token or PIN';
           }
           submitBtn.disabled = false;
           return;

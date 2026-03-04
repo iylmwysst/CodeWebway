@@ -4,6 +4,7 @@ use qrcode::QrCode;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 // ─── Credentials ──────────────────────────────────────────────────────────────
@@ -54,7 +55,12 @@ pub async fn enable(fleet_endpoint: &str, enable_token: &str, pin: Option<String
     enable_to_path(fleet_endpoint, enable_token, pin, &credentials_path()).await
 }
 
-pub async fn enable_to_path(fleet_endpoint: &str, enable_token: &str, pin: Option<String>, path: &Path) -> Result<()> {
+pub async fn enable_to_path(
+    fleet_endpoint: &str,
+    enable_token: &str,
+    pin: Option<String>,
+    path: &Path,
+) -> Result<()> {
     let client = reqwest::Client::new();
     let resp: serde_json::Value = client
         .post(format!("{fleet_endpoint}/api/v1/agent/enable"))
@@ -195,8 +201,7 @@ impl DaemonState {
             status: "idle".to_string(),
             active_url: None,
             // force write on first heartbeat
-            last_d1_write: std::time::Instant::now()
-                - std::time::Duration::from_secs(400),
+            last_d1_write: std::time::Instant::now() - std::time::Duration::from_secs(400),
         }
     }
 
@@ -210,8 +215,7 @@ impl DaemonState {
 // ─── Daemon loop ───────────────────────────────────────────────────────────────
 
 pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
-    let creds = load_credentials()
-        .context("Not enabled. Run: codewebway enable <token>")?;
+    let creds = load_credentials().context("Not enabled. Run: codewebway enable <token>")?;
 
     println!("  Fleet daemon starting for \"{}\"", creds.machine_name);
     println!("  Endpoint: {}", creds.fleet_endpoint);
@@ -221,24 +225,25 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
 
     loop {
         let skip = !state.should_write(&state.status.clone(), state.active_url.as_deref());
-        let hb = match send_heartbeat(&creds, &state.status, state.active_url.as_deref(), skip).await {
-            Ok(h) => {
-                if !skip {
-                    state.last_d1_write = std::time::Instant::now();
+        let hb =
+            match send_heartbeat(&creds, &state.status, state.active_url.as_deref(), skip).await {
+                Ok(h) => {
+                    if !skip {
+                        state.last_d1_write = std::time::Instant::now();
+                    }
+                    h
                 }
-                h
-            }
-            Err(e) => {
-                if is_unauthorized(&e) {
-                    eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                    eprintln!("  Run: codewebway disable");
-                    std::process::exit(1);
+                Err(e) => {
+                    if is_unauthorized(&e) {
+                        eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
+                        eprintln!("  Run: codewebway disable");
+                        std::process::exit(1);
+                    }
+                    eprintln!("  Fleet: heartbeat error (will retry): {e}");
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
                 }
-                eprintln!("  Fleet: heartbeat error (will retry): {e}");
-                tokio::time::sleep(poll_interval).await;
-                continue;
-            }
-        };
+            };
 
         if !hb.has_command {
             tokio::time::sleep(poll_interval).await;
@@ -265,18 +270,34 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     .map(char::from)
                     .collect();
                 fleet_cfg.password = Some(session_token);
+                fleet_cfg.sso_shared_secret = Some(sha256_hex(&creds.machine_token));
                 if let Some(ref pin) = creds.pin {
                     fleet_cfg.pin = Some(pin.clone());
                 }
 
                 // Apply per-trigger config from command payload
-                if let Some(cwd) = cmd.payload.get("cwd").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                if let Some(cwd) = cmd
+                    .payload
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
                     fleet_cfg.cwd = Some(cwd.to_string());
                 }
-                if cmd.payload.get("terminal_only").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if cmd
+                    .payload
+                    .get("terminal_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     fleet_cfg.terminal_only = true;
                 }
-                if let Some(shell) = cmd.payload.get("shell").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                if let Some(shell) = cmd
+                    .payload
+                    .get("shell")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
                     fleet_cfg.shell = Some(shell.to_string());
                 }
 
@@ -289,8 +310,8 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     }
                     Ok(handle) => {
                         let url = handle.zrok_url.as_deref().unwrap_or("no-url");
-                        // Include token in report so dashboard can display it alongside URL.
-                        let output = format!("{url}\ntoken:{}", handle.token);
+                        // Do not persist session token in API execution logs.
+                        let output = url.to_string();
                         state.status = "running".to_string();
                         state.active_url = handle.zrok_url.clone();
                         state.last_d1_write =
@@ -377,8 +398,7 @@ fn systemd_service_path() -> PathBuf {
 }
 
 pub fn install_service() -> Result<()> {
-    let bin = std::env::current_exe()
-        .context("Cannot determine current executable path")?;
+    let bin = std::env::current_exe().context("Cannot determine current executable path")?;
     let bin_str = bin.to_string_lossy();
 
     #[cfg(target_os = "macos")]
@@ -525,6 +545,12 @@ fn is_unauthorized(e: &anyhow::Error) -> bool {
         .unwrap_or(false)
 }
 
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 fn hostname() -> String {
     std::process::Command::new("hostname")
         .output()
@@ -668,7 +694,10 @@ mod tests {
         let path = tmp_path(&dir);
         let result = load_credentials_from(&path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("codewebway enable"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("codewebway enable"));
     }
 
     #[test]
