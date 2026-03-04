@@ -233,16 +233,21 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
                 eprintln!("  Fleet: heartbeat error (will retry): {e}");
+                tokio::time::sleep(poll_interval).await;
                 continue;
             }
         };
 
         if !hb.has_command {
+            tokio::time::sleep(poll_interval).await;
             continue;
         }
         let cmd = match hb.command {
             Some(c) => c,
-            None => continue,
+            None => {
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
         };
 
         match cmd.kind.as_str() {
@@ -385,6 +390,11 @@ pub fn install_service() -> Result<()> {
         <string>{bin}</string>\n\
         <string>fleet</string>\n\
     </array>\n\
+    <key>EnvironmentVariables</key>\n\
+    <dict>\n\
+        <key>PATH</key>\n\
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>\n\
+    </dict>\n\
     <key>RunAtLoad</key>\n\
     <true/>\n\
     <key>KeepAlive</key>\n\
