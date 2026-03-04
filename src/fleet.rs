@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use qrcode::render::unicode;
+use qrcode::QrCode;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -528,6 +530,104 @@ fn hostname() -> String {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+// ─── QR / Device-code enable ───────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DeviceCodeResp {
+    data: DeviceCodeData,
+}
+#[derive(Deserialize)]
+struct DeviceCodeData {
+    code: String,
+    activate_url: String,
+}
+
+#[derive(Deserialize)]
+struct DevicePollResp {
+    data: DevicePollData,
+}
+#[derive(Deserialize)]
+struct DevicePollData {
+    status: String,
+    enable_token: Option<String>,
+}
+
+/// Render a URL as a QR code using Unicode block characters.
+pub fn render_qr(url: &str) {
+    if let Ok(code) = QrCode::new(url) {
+        let image = code
+            .render::<unicode::Dense1x2>()
+            .dark_color(unicode::Dense1x2::Dark)
+            .light_color(unicode::Dense1x2::Light)
+            .quiet_zone(true)
+            .build();
+        for line in image.lines() {
+            println!("  {line}");
+        }
+    }
+}
+
+/// Interactive QR-based enable: request a device code, show QR, poll for approval.
+pub async fn enable_qr(fleet_endpoint: &str, pin: Option<String>) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    // 1. Request device code
+    let resp = client
+        .post(format!("{fleet_endpoint}/api/v1/device/request"))
+        .send()
+        .await
+        .context("Failed to reach fleet API")?
+        .json::<DeviceCodeResp>()
+        .await
+        .context("Invalid response from fleet API")?;
+    let code = resp.data.code;
+    let activate_url = resp.data.activate_url;
+
+    // 2. Show QR pointing to activate URL returned by API
+    println!();
+    render_qr(&activate_url);
+    println!("  Or visit: {activate_url}");
+    println!("  Code:     {code}");
+    println!();
+    println!("  Waiting for approval in the Dashboard… (Ctrl+C to cancel)");
+
+    // 3. Poll until approved or expired (max 5 min)
+    let poll_url = format!("{fleet_endpoint}/api/v1/device/poll?code={code}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let enable_token = loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!("Activation timed out. Please try again.");
+        }
+        let poll = match client.get(&poll_url).send().await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let data = match poll.json::<DevicePollResp>().await {
+            Ok(d) => d.data,
+            Err(_) => continue,
+        };
+        match data.status.as_str() {
+            "approved" => {
+                if let Some(token) = data.enable_token {
+                    break token;
+                }
+            }
+            "expired" => anyhow::bail!("Device code expired. Please try again."),
+            _ => {
+                eprint!(".");
+            }
+        }
+    };
+    eprintln!();
+    eprintln!("  ✓ Approved!");
+
+    // 4. Proceed with normal enable
+    enable(fleet_endpoint, &enable_token, pin).await
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
