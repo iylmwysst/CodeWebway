@@ -267,6 +267,17 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     fleet_cfg.pin = Some(pin.clone());
                 }
 
+                // Apply per-trigger config from command payload
+                if let Some(cwd) = cmd.payload.get("cwd").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    fleet_cfg.cwd = Some(cwd.to_string());
+                }
+                if cmd.payload.get("terminal_only").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    fleet_cfg.terminal_only = true;
+                }
+                if let Some(shell) = cmd.payload.get("shell").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    fleet_cfg.shell = Some(shell.to_string());
+                }
+
                 match crate::start_server(fleet_cfg).await {
                     Err(e) => {
                         eprintln!("  Fleet: failed to start server: {e}");
