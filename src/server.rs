@@ -1607,7 +1607,7 @@ async fn handle_socket(
     loop {
         tokio::select! {
             _ = session_tick.tick() => {
-                if !is_session_token_valid(&state, &session_token) {
+                if !touch_session_token_if_valid(&state, &session_token) {
                     count_tx(&state, 26);
                     let _ = socket
                         .send(Message::Text("{\"type\":\"session_expired\"}".into()))
