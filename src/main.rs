@@ -64,6 +64,41 @@ fn resolve_pin(config_pin: Option<String>) -> anyhow::Result<String> {
     Ok(pin)
 }
 
+fn arg_value(raw_args: &[String], flag: &str) -> Option<String> {
+    raw_args
+        .windows(2)
+        .find(|w| w[0] == flag)
+        .map(|w| w[1].clone())
+}
+
+fn resolve_enable_pin(raw_args: &[String]) -> anyhow::Result<Option<String>> {
+    if let Some(pin) = arg_value(raw_args, "--pin") {
+        validate_pin(&pin)?;
+        return Ok(Some(pin));
+    }
+    if !io::stdin().is_terminal() {
+        return Ok(None);
+    }
+
+    loop {
+        let pin = rpassword::prompt_password("  Set terminal PIN (6 digits): ")?;
+        if pin.trim().is_empty() {
+            eprintln!("  PIN cannot be empty.");
+            continue;
+        }
+        if let Err(err) = validate_pin(&pin) {
+            eprintln!("  {err}");
+            continue;
+        }
+        let confirm = rpassword::prompt_password("  Confirm terminal PIN: ")?;
+        if pin != confirm {
+            eprintln!("  PIN confirmation does not match.");
+            continue;
+        }
+        return Ok(Some(pin));
+    }
+}
+
 fn normalized_args() -> Vec<String> {
     std::env::args()
         .map(|arg| {
@@ -611,18 +646,7 @@ async fn main() -> anyhow::Result<()> {
 
                 if choice.trim() == "1" {
                     // ── QR path ───────────────────────────────────────────────
-                    let pin = raw_args
-                        .windows(2)
-                        .find(|w| w[0] == "--pin")
-                        .map(|w| w[1].clone())
-                        .or_else(|| {
-                            if io::stdin().is_terminal() {
-                                eprint!("  Set terminal PIN (6 digits): ");
-                                rpassword::read_password().ok().filter(|p| !p.is_empty())
-                            } else {
-                                None
-                            }
-                        });
+                    let pin = resolve_enable_pin(&raw_args)?;
                     fleet::enable_qr(&endpoint, pin).await?;
 
                     // service install prompt (same as token path below)
@@ -666,18 +690,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             // ── shared path after token is known ─────────────────────────────
-            let pin = raw_args
-                .windows(2)
-                .find(|w| w[0] == "--pin")
-                .map(|w| w[1].clone())
-                .or_else(|| {
-                    if io::stdin().is_terminal() {
-                        eprint!("  Set terminal PIN (6 digits): ");
-                        rpassword::read_password().ok().filter(|p| !p.is_empty())
-                    } else {
-                        None
-                    }
-                });
+            let pin = resolve_enable_pin(&raw_args)?;
 
             fleet::enable(&endpoint, &token, pin).await?;
 

@@ -40,6 +40,29 @@
       src: local("Noto Sans Thai"), local("NotoSansThai-SemiBold");
       unicode-range: U+0E00-0E7F;
     }
+    /* Latin mono glyphs */
+    @font-face {
+      font-family: "CWTermSplit";
+      font-style: normal;
+      font-weight: 400;
+      src: local("Noto Sans Mono"), local("NotoSansMono-Regular");
+      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+    }
+    @font-face {
+      font-family: "CWTermSplit";
+      font-style: normal;
+      font-weight: 600;
+      src: local("Noto Sans Mono"), local("NotoSansMono-SemiBold");
+      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+    }
+    /* Thai terminal glyphs */
+    @font-face {
+      font-family: "CWTermSplit";
+      font-style: normal;
+      font-weight: 400;
+      src: local("Noto Sans Thai"), local("NotoSansThai-Regular");
+      unicode-range: U+0E00-0E7F;
+    }
     :root {
       --app-height: 100vh;
       --kb-inset: 0px;
@@ -478,6 +501,19 @@
       z-index: 60;
     }
     #share-modal.open { display: flex; }
+    #pin-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 70;
+    }
+    #pin-modal.open { display: flex; }
+    #pin-modal .modal-card {
+      max-width: 360px;
+    }
     #share-form {
       display: grid;
       gap: 10px;
@@ -642,7 +678,7 @@
           <h2>Enter PIN</h2>
           <p>Sign-in approved. Enter your PIN to continue.</p>
           <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
-          <div class="pin-keypad" id="pin-keypad">
+          <div class="pin-keypad" id="pin-keypad-primary">
             <button type="button" data-pin-key="1">1</button>
             <button type="button" data-pin-key="2">2</button>
             <button type="button" data-pin-key="3">3</button>
@@ -669,6 +705,20 @@
         <div class="row">
           <input id="pin" type="password" autocomplete="one-time-code" placeholder="PIN" />
           <button id="submit" class="ghost" type="submit">Connect</button>
+        </div>
+        <div class="pin-keypad" id="pin-keypad-token">
+          <button type="button" data-pin-key="1">1</button>
+          <button type="button" data-pin-key="2">2</button>
+          <button type="button" data-pin-key="3">3</button>
+          <button type="button" data-pin-key="4">4</button>
+          <button type="button" data-pin-key="5">5</button>
+          <button type="button" data-pin-key="6">6</button>
+          <button type="button" data-pin-key="7">7</button>
+          <button type="button" data-pin-key="8">8</button>
+          <button type="button" data-pin-key="9">9</button>
+          <button type="button" data-pin-key="clear">Clear</button>
+          <button type="button" data-pin-key="0">0</button>
+          <button type="button" data-pin-key="back">⌫</button>
         </div>
       </div>
       <div id="error"></div>
@@ -776,6 +826,32 @@
     </div>
   </div>
 
+  <div id="pin-modal" role="dialog" aria-modal="true" aria-labelledby="pin-modal-title">
+    <div class="modal-card">
+      <h3 id="pin-modal-title">Confirm PIN</h3>
+      <p>Enter your PIN to extend this session.</p>
+      <input id="pin-modal-input" type="password" autocomplete="one-time-code" placeholder="PIN" />
+      <div class="pin-keypad" id="pin-keypad-modal">
+        <button type="button" data-pin-key="1">1</button>
+        <button type="button" data-pin-key="2">2</button>
+        <button type="button" data-pin-key="3">3</button>
+        <button type="button" data-pin-key="4">4</button>
+        <button type="button" data-pin-key="5">5</button>
+        <button type="button" data-pin-key="6">6</button>
+        <button type="button" data-pin-key="7">7</button>
+        <button type="button" data-pin-key="8">8</button>
+        <button type="button" data-pin-key="9">9</button>
+        <button type="button" data-pin-key="clear">Clear</button>
+        <button type="button" data-pin-key="0">0</button>
+        <button type="button" data-pin-key="back">⌫</button>
+      </div>
+      <div class="modal-actions" style="margin-top: 12px;">
+        <button id="pin-modal-cancel" class="ghost" type="button">Cancel</button>
+        <button id="pin-modal-confirm" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script>
@@ -793,7 +869,8 @@
     const tokenLoginWrap = document.getElementById('token-login-wrap');
     const pinInput = document.getElementById('pin');
     const primaryPinInput = document.getElementById('pin-primary');
-    const pinKeypad = document.getElementById('pin-keypad');
+    const primaryPinKeypad = document.getElementById('pin-keypad-primary');
+    const tokenPinKeypad = document.getElementById('pin-keypad-token');
     const dashboardLoginBtn = document.getElementById('dashboard-login');
     const dashboardPinBackBtn = document.getElementById('dashboard-pin-back');
     const dashboardContinueBtn = document.getElementById('dashboard-continue');
@@ -830,6 +907,11 @@
     const logoutCancelBtn = document.getElementById('logout-cancel');
     const shareModal = document.getElementById('share-modal');
     const shareCloseBtn = document.getElementById('share-close');
+    const pinModal = document.getElementById('pin-modal');
+    const pinModalInput = document.getElementById('pin-modal-input');
+    const pinModalKeypad = document.getElementById('pin-keypad-modal');
+    const pinModalCancelBtn = document.getElementById('pin-modal-cancel');
+    const pinModalConfirmBtn = document.getElementById('pin-modal-confirm');
     const tempTtlEl = document.getElementById('temp-ttl');
     const tempScopeEl = document.getElementById('temp-scope');
     const tempOneTimeEl = document.getElementById('temp-one-time');
@@ -893,6 +975,56 @@
     function setStatus(text, color) {
       statusEl.textContent = '● ' + text;
       statusEl.style.color = color || '#c8c8c8';
+    }
+
+    function bindPinKeypad(keypadEl, inputEl) {
+      if (!keypadEl || !inputEl) return;
+      keypadEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-pin-key]');
+        if (!btn) return;
+        const key = btn.getAttribute('data-pin-key');
+        if (!key) return;
+        if (key === 'clear') {
+          inputEl.value = '';
+        } else if (key === 'back') {
+          inputEl.value = inputEl.value.slice(0, -1);
+        } else if (key >= '0' && key <= '9') {
+          inputEl.value += key;
+        }
+        inputEl.focus();
+      });
+    }
+
+    function requestPinWithKeypad() {
+      return new Promise((resolve) => {
+        const close = (value) => {
+          pinModal.classList.remove('open');
+          pinModalConfirmBtn.onclick = null;
+          pinModalCancelBtn.onclick = null;
+          pinModal.onclick = null;
+          pinModalInput.onkeydown = null;
+          resolve(value);
+        };
+
+        pinModalInput.value = '';
+        pinModalConfirmBtn.onclick = () => close(pinModalInput.value.trim());
+        pinModalCancelBtn.onclick = () => close(null);
+        pinModal.onclick = (e) => {
+          if (e.target === pinModal) close(null);
+        };
+        pinModalInput.onkeydown = (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            close(pinModalInput.value.trim());
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            close(null);
+          }
+        };
+
+        pinModal.classList.add('open');
+        pinModalInput.focus();
+      });
     }
 
     function sendTerminalResize() {
@@ -1326,8 +1458,8 @@
       term = new Terminal({
         cursorBlink: true,
         theme: { background: '#131313' },
-        fontFamily: '"Noto Sans Thai","Noto Sans",ui-monospace,Menlo,monospace',
-        lineHeight: 1.35,
+        fontFamily: '"CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
+        lineHeight: 1.25,
         letterSpacing: 0
       });
       fitAddon = new FitAddon.FitAddon();
@@ -2148,20 +2280,9 @@
       resetPrimaryLoginState();
     });
 
-    pinKeypad.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-pin-key]');
-      if (!btn) return;
-      const key = btn.getAttribute('data-pin-key');
-      if (!key) return;
-      if (key === 'clear') {
-        primaryPinInput.value = '';
-      } else if (key === 'back') {
-        primaryPinInput.value = primaryPinInput.value.slice(0, -1);
-      } else if (key >= '0' && key <= '9') {
-        primaryPinInput.value += key;
-      }
-      primaryPinInput.focus();
-    });
+    bindPinKeypad(primaryPinKeypad, primaryPinInput);
+    bindPinKeypad(tokenPinKeypad, pinInput);
+    bindPinKeypad(pinModalKeypad, pinModalInput);
 
     newTabBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
 
@@ -2347,9 +2468,13 @@
     tempMaxUsesEl.disabled = tempOneTimeEl.checked;
 
     staySignedInBtn.addEventListener('click', async () => {
-      const pin = window.prompt('Confirm PIN to extend session:');
+      const pin = await requestPinWithKeypad();
       if (pin === null) return;
-      const res = await extendSession(pin.trim());
+      if (!pin) {
+        alert('PIN is required.');
+        return;
+      }
+      const res = await extendSession(pin);
       if (!res.ok) {
         alert('PIN invalid or session expired.');
         return;
