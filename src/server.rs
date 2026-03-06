@@ -712,6 +712,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let terminal_only = state.terminal_only;
     let mut r = Router::new()
         .route("/", get(serve_index))
+        .route("/font-lab", get(serve_font_lab))
         .route("/favicon.svg", get(serve_favicon))
         .route("/api/capabilities", get(capabilities))
         .route("/auth/login", post(auth_login))
@@ -751,6 +752,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn serve_index() -> impl IntoResponse {
     let html = Assets::get("index.html").unwrap();
+    Html(std::str::from_utf8(html.data.as_ref()).unwrap().to_string())
+}
+
+async fn serve_font_lab() -> impl IntoResponse {
+    let html = Assets::get("font-lab.html").unwrap();
     Html(std::str::from_utf8(html.data.as_ref()).unwrap().to_string())
 }
 

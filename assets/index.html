@@ -5,49 +5,101 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CodeWebway</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600&family=Noto+Sans+Mono:wght@400;600&family=Noto+Sans+Thai:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   <style>
+    :root {
+      --app-height: 100vh;
+      --kb-inset: 0px;
+      --key-strip-height: 44px;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #131313; color: #ddd; font-family: ui-sans-serif, -apple-system, Segoe UI, sans-serif; height: 100vh; }
+    body {
+      background: #131313;
+      color: #ddd;
+      font-family: "Noto Sans", "Noto Sans Thai", ui-sans-serif, -apple-system, Segoe UI, sans-serif, "Apple Color Emoji";
+      height: var(--app-height);
+      overflow: hidden;
+    }
     #login {
-      height: 100vh;
+      height: var(--app-height);
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px;
+      padding: 28px;
       background: radial-gradient(circle at top, #2a2a2a, #111 70%);
     }
     .card {
       width: 100%;
-      max-width: 460px;
+      max-width: 520px;
       background: rgba(0, 0, 0, 0.45);
       border: 1px solid #3f3f3f;
-      border-radius: 12px;
-      padding: 22px;
+      border-radius: 14px;
+      padding: 26px;
+      box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32);
     }
-    .card h1 { font-size: 20px; margin-bottom: 8px; }
-    .card p { color: #aaa; margin-bottom: 14px; font-size: 14px; }
-    .stack { display: flex; flex-direction: column; gap: 10px; }
-    .row { display: flex; gap: 8px; }
+    .card h1 { font-size: 24px; margin-bottom: 10px; letter-spacing: -0.01em; }
+    .card p { color: #aaa; margin-bottom: 18px; font-size: 14px; line-height: 1.45; }
+    .stack { display: flex; flex-direction: column; gap: 12px; }
+    .row { display: flex; gap: 10px; }
     .login-panel {
       border: 1px solid #3a3a3a;
-      border-radius: 10px;
+      border-radius: 12px;
       background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
-      padding: 12px;
+      padding: 16px;
     }
     .login-panel h2 {
-      font-size: 13px;
+      font-size: 14px;
       letter-spacing: 0.02em;
       color: #f0f0f0;
-      margin: 0 0 6px 0;
+      margin: 0 0 8px 0;
       font-weight: 600;
     }
     .login-panel p {
-      margin: 0 0 10px 0;
+      margin: 0 0 12px 0;
       color: #b1b1b1;
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.4;
     }
+    .login-divider {
+      position: relative;
+      text-align: center;
+      margin: 2px 0;
+      color: #7f7f7f;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .pin-keypad {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .pin-keypad button {
+      padding: 9px 0;
+      font-size: 15px;
+      font-weight: 600;
+      background: #141414;
+      color: #e5e5e5;
+      border: 1px solid #383838;
+    }
+    .pin-keypad button:hover:not(:disabled) {
+      background: #202020;
+      border-color: #5b5b5b;
+    }
+    .login-divider::before,
+    .login-divider::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      width: 35%;
+      border-top: 1px solid #303030;
+    }
+    .login-divider::before { left: 0; }
+    .login-divider::after { right: 0; }
     .primary-cta {
       width: 100%;
       border-color: #8f8f8f;
@@ -65,7 +117,7 @@
       border: 1px solid #444;
       color: #eee;
       border-radius: 8px;
-      padding: 10px 12px;
+      padding: 11px 13px;
       font-size: 14px;
       outline: none;
     }
@@ -98,7 +150,7 @@
       font-size: 12px;
     }
 
-    #app { display: none; height: 100vh; flex-direction: column; }
+    #app { display: none; height: var(--app-height); flex-direction: column; }
     #session-warning {
       display: none;
       align-items: center;
@@ -493,6 +545,7 @@
       flex-shrink: 0;
       scrollbar-width: none;
       justify-content: center;
+      min-height: var(--key-strip-height);
     }
     #key-strip button {
       background: transparent;
@@ -527,12 +580,20 @@
       #key-strip {
         display: flex;
         position: fixed;
-        bottom: 0;
+        bottom: var(--kb-inset);
         left: 0;
         right: 0;
         z-index: 9;
       }
-      #terminal { padding-bottom: 44px; }
+      #terminal { padding-bottom: calc(var(--key-strip-height) + env(safe-area-inset-bottom)); }
+      body.keyboard-open #key-strip {
+        gap: 4px;
+        padding: 4px 6px;
+      }
+      body.keyboard-open #key-strip button {
+        padding: 4px 10px;
+        font-size: 12px;
+      }
     }
   </style>
 </head>
@@ -542,16 +603,36 @@
       <h1>CodeWebway</h1>
       <p id="login-subtitle">Sign in to open workspace</p>
       <div id="login-primary" class="stack" style="display:none;">
-        <div class="login-panel">
+        <div id="dashboard-start-wrap" class="login-panel">
           <h2 id="login-primary-title">Sign in</h2>
           <p id="login-primary-note">Continue with your account, then confirm PIN.</p>
-          <button id="dashboard-login" class="primary-cta" type="button">Login</button>
-          <div id="pin-confirm-wrap" class="stack" style="display:none;margin-top:10px;">
-            <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
-            <button id="dashboard-continue" class="ghost" type="button">Continue</button>
+          <button id="dashboard-login" class="primary-cta" type="button">Sign in</button>
+        </div>
+        <div id="dashboard-pin-wrap" class="login-panel" style="display:none;">
+          <h2>Enter PIN</h2>
+          <p>Sign-in approved. Enter your PIN to continue.</p>
+          <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
+          <div class="pin-keypad" id="pin-keypad">
+            <button type="button" data-pin-key="1">1</button>
+            <button type="button" data-pin-key="2">2</button>
+            <button type="button" data-pin-key="3">3</button>
+            <button type="button" data-pin-key="4">4</button>
+            <button type="button" data-pin-key="5">5</button>
+            <button type="button" data-pin-key="6">6</button>
+            <button type="button" data-pin-key="7">7</button>
+            <button type="button" data-pin-key="8">8</button>
+            <button type="button" data-pin-key="9">9</button>
+            <button type="button" data-pin-key="clear">Clear</button>
+            <button type="button" data-pin-key="0">0</button>
+            <button type="button" data-pin-key="back">⌫</button>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <button id="dashboard-pin-back" class="ghost" type="button">Back</button>
+            <button id="dashboard-continue" class="ghost" type="button">Verify PIN</button>
           </div>
         </div>
-        <button id="show-token-method" class="ghost" type="button">Use access token instead</button>
+        <div class="login-divider">Alternative</div>
+        <button id="show-token-method" class="ghost" type="button">Use access token</button>
       </div>
       <div id="token-login-wrap" class="stack" style="display:none;">
         <input id="password" type="password" autocomplete="current-password" placeholder="Token" required />
@@ -676,12 +757,15 @@
     const loginPrimary = document.getElementById('login-primary');
     const loginPrimaryTitle = document.getElementById('login-primary-title');
     const loginPrimaryNote = document.getElementById('login-primary-note');
-    const pinConfirmWrap = document.getElementById('pin-confirm-wrap');
+    const dashboardStartWrap = document.getElementById('dashboard-start-wrap');
+    const dashboardPinWrap = document.getElementById('dashboard-pin-wrap');
     const showTokenMethodBtn = document.getElementById('show-token-method');
     const tokenLoginWrap = document.getElementById('token-login-wrap');
     const pinInput = document.getElementById('pin');
     const primaryPinInput = document.getElementById('pin-primary');
+    const pinKeypad = document.getElementById('pin-keypad');
     const dashboardLoginBtn = document.getElementById('dashboard-login');
+    const dashboardPinBackBtn = document.getElementById('dashboard-pin-back');
     const dashboardContinueBtn = document.getElementById('dashboard-continue');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
@@ -746,6 +830,7 @@
     let sessionTimer = null;
     let publicTimer = null;
     let tempLinksRefreshTimer = null;
+    let viewportTimer = null;
     const fileMeta = new Map();
     const FILE_WARN_BYTES = 128 * 1024;
     const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
@@ -778,6 +863,40 @@
     function setStatus(text, color) {
       statusEl.textContent = '● ' + text;
       statusEl.style.color = color || '#c8c8c8';
+    }
+
+    function sendTerminalResize() {
+      if (!term) return;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    }
+
+    function scheduleTerminalFit() {
+      if (!fitAddon || !term) return;
+      if (viewportTimer) clearTimeout(viewportTimer);
+      viewportTimer = setTimeout(() => {
+        if (!fitAddon || !term) return;
+        fitAddon.fit();
+        sendTerminalResize();
+      }, 20);
+    }
+
+    function syncMobileViewport() {
+      const vv = window.visualViewport;
+      const appHeight = vv ? Math.round(vv.height) : window.innerHeight;
+      document.documentElement.style.setProperty('--app-height', `${appHeight}px`);
+      const kbInset = vv
+        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+        : 0;
+      document.documentElement.style.setProperty('--kb-inset', `${kbInset}px`);
+      const focused = document.activeElement;
+      const typingIntoInput =
+        !!focused &&
+        (focused.tagName === 'TEXTAREA' ||
+          (focused.tagName === 'INPUT' && focused.closest('#app')));
+      document.body.classList.toggle('keyboard-open', kbInset > 80 && typingIntoInput);
+      scheduleTerminalFit();
     }
 
     function updateEditorActionState() {
@@ -1011,22 +1130,22 @@
           passwordInput.style.display = 'block';
           passwordInput.required = true;
           loginSubtitle.textContent = dashboardAvailable
-            ? 'Sign in first, or use access token instead.'
-            : 'Enter Token and PIN to open workspace.';
+            ? 'Sign in first, or use access token.'
+            : 'Enter access token and PIN to open workspace.';
           pinInput.placeholder = 'PIN (required)';
         }
       } else {
         passwordInput.style.display = 'block';
         passwordInput.required = true;
         loginSubtitle.textContent = dashboardAvailable
-          ? 'Sign in first, or use access token instead.'
-          : 'Enter Token and PIN to open workspace';
+          ? 'Sign in first, or use access token.'
+          : 'Enter access token and PIN to open workspace';
         pinInput.placeholder = 'PIN';
       }
 
       if (dashboardAvailable && !signedTicketMode) {
         dashboardLoginBtn.style.display = 'block';
-        showTokenMethodBtn.style.display = 'block';
+        showTokenMethodBtn.style.display = pendingDashboardTicket ? 'none' : 'block';
         if (!pendingDashboardTicket) {
           resetPrimaryLoginState();
         }
@@ -1039,16 +1158,31 @@
     function setTokenMethodVisible(visible) {
       tokenMethodVisible = visible;
       tokenLoginWrap.style.display = visible ? 'flex' : 'none';
-      showTokenMethodBtn.textContent = visible ? 'Hide token login' : 'Use access token instead';
+      if (pendingDashboardTicket) {
+        showTokenMethodBtn.textContent = 'Use access token';
+        return;
+      }
+      showTokenMethodBtn.textContent = visible ? 'Hide access token login' : 'Use access token';
     }
 
     function resetPrimaryLoginState() {
       pendingDashboardTicket = null;
-      pinConfirmWrap.style.display = 'none';
+      dashboardStartWrap.style.display = 'block';
+      dashboardPinWrap.style.display = 'none';
       primaryPinInput.value = '';
       loginPrimaryTitle.textContent = 'Sign in';
       loginPrimaryNote.textContent = 'Continue with your account, then confirm PIN.';
-      dashboardLoginBtn.textContent = 'Login';
+      dashboardLoginBtn.textContent = 'Sign in';
+      showTokenMethodBtn.style.display = 'block';
+    }
+
+    function showDashboardPinStep(ticket) {
+      pendingDashboardTicket = ticket;
+      dashboardStartWrap.style.display = 'none';
+      dashboardPinWrap.style.display = 'block';
+      primaryPinInput.value = '';
+      showTokenMethodBtn.style.display = 'none';
+      primaryPinInput.focus();
     }
 
     function setLoginPolling(enabled) {
@@ -1159,7 +1293,13 @@
 
     function initTerminal() {
       if (term) return;
-      term = new Terminal({ cursorBlink: true, theme: { background: '#131313' } });
+      term = new Terminal({
+        cursorBlink: true,
+        theme: { background: '#131313' },
+        fontFamily: '"Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
+        lineHeight: 1.25,
+        letterSpacing: 0
+      });
       fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
       term.open(document.getElementById('terminal'));
@@ -1171,12 +1311,14 @@
         }
       });
 
-      window.addEventListener('resize', () => {
-        fitAddon.fit();
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        }
-      });
+      window.addEventListener('resize', syncMobileViewport);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', syncMobileViewport);
+        window.visualViewport.addEventListener('scroll', syncMobileViewport);
+      }
+      document.addEventListener('focusin', syncMobileViewport);
+      document.addEventListener('focusout', () => setTimeout(syncMobileViewport, 0));
+      syncMobileViewport();
     }
 
     function closeSocket() {
@@ -1215,9 +1357,7 @@
         if (connectionId !== wsConnectionId) return;
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        }
+        sendTerminalResize();
       };
 
       ws.onmessage = (e) => {
@@ -1296,8 +1436,12 @@
 
     async function pollDashboardChallenge(challengeId) {
       const deadline = Date.now() + 120000;
+      let waitMs = 0;
+      let nextWaitMs = 600;
       while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (waitMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
         const res = await api(`/auth/dashboard/challenge/${encodeURIComponent(challengeId)}`, {
           method: 'GET'
         });
@@ -1305,6 +1449,8 @@
         const body = await res.json();
         if (body.status === 'approved' && body.ticket) return body.ticket;
         if (body.status === 'expired') throw new Error('challenge_expired');
+        waitMs = nextWaitMs;
+        nextWaitMs = Math.min(2000, Math.round(nextWaitMs * 1.4));
       }
       throw new Error('challenge_timeout');
     }
@@ -1327,27 +1473,25 @@
     async function resumeDashboardRedirectFlow() {
       const params = new URLSearchParams(window.location.search);
       const returned = params.get('dashboard_returned') === '1';
-      if (!returned) return false;
-
-      const challengeId = params.get('dashboard_challenge') || (() => {
+      const storedChallenge = (() => {
         try {
           return sessionStorage.getItem(DASHBOARD_FLOW_CHALLENGE_KEY);
         } catch {
           return null;
         }
       })();
+      if (!returned && !storedChallenge) return false;
+
+      const challengeId = params.get('dashboard_challenge') || storedChallenge;
       if (!challengeId) return false;
 
       dashboardLoginBtn.disabled = true;
       submitBtn.disabled = true;
-      errorEl.textContent = '';
+      errorEl.textContent = 'Finishing sign in...';
       try {
         const ticket = await pollDashboardChallenge(challengeId);
-        pendingDashboardTicket = ticket;
-        loginPrimaryTitle.textContent = 'Confirm PIN';
-        loginPrimaryNote.textContent = 'Sign in completed. Enter PIN to continue.';
-        pinConfirmWrap.style.display = 'flex';
-        primaryPinInput.focus();
+        showDashboardPinStep(ticket);
+        errorEl.textContent = '';
         clearDashboardFlowState();
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete('dashboard_challenge');
@@ -1934,8 +2078,11 @@
     dashboardContinueBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
       if (!pendingDashboardTicket) {
-        errorEl.textContent = 'Please sign in first.';
-        return;
+        const resumed = await resumeDashboardRedirectFlow();
+        if (!resumed || !pendingDashboardTicket) {
+          errorEl.textContent = 'Please sign in first.';
+          return;
+        }
       }
       const pin = primaryPinInput.value.trim();
       if (!pin) {
@@ -1965,6 +2112,25 @@
         dashboardContinueBtn.disabled = false;
         submitBtn.disabled = false;
       }
+    });
+
+    dashboardPinBackBtn.addEventListener('click', () => {
+      resetPrimaryLoginState();
+    });
+
+    pinKeypad.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-pin-key]');
+      if (!btn) return;
+      const key = btn.getAttribute('data-pin-key');
+      if (!key) return;
+      if (key === 'clear') {
+        primaryPinInput.value = '';
+      } else if (key === 'back') {
+        primaryPinInput.value = primaryPinInput.value.slice(0, -1);
+      } else if (key >= '0' && key <= '9') {
+        primaryPinInput.value += key;
+      }
+      primaryPinInput.focus();
     });
 
     newTabBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
@@ -2178,6 +2344,7 @@
     });
 
     updateEditorActionState();
+    syncMobileViewport();
     setLoginPolling(true);
     resumeDashboardRedirectFlow();
   </script>
