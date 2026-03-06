@@ -40,30 +40,6 @@
       src: local("Noto Sans Thai"), local("NotoSansThai-SemiBold");
       unicode-range: U+0E00-0E7F;
     }
-    /* Latin mono glyphs */
-    @font-face {
-      font-family: "CWTermSplit";
-      font-style: normal;
-      font-weight: 400;
-      src: local("Noto Sans Mono"), local("NotoSansMono-Regular");
-      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
-    }
-    @font-face {
-      font-family: "CWTermSplit";
-      font-style: normal;
-      font-weight: 600;
-      src: local("Noto Sans Mono"), local("NotoSansMono-SemiBold");
-      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
-    }
-    /* Thai terminal glyphs */
-    @font-face {
-      font-family: "CWTermSplit";
-      font-style: normal;
-      font-weight: 400;
-      src: local("Noto Sans Thai"), local("NotoSansThai-Regular");
-      unicode-range: U+0E00-0E7F;
-    }
-
     :root {
       --app-height: 100vh;
       --kb-inset: 0px;
@@ -1350,8 +1326,8 @@
       term = new Terminal({
         cursorBlink: true,
         theme: { background: '#131313' },
-        fontFamily: '"CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
-        lineHeight: 1.25,
+        fontFamily: '"Noto Sans Thai","Noto Sans",ui-monospace,Menlo,monospace',
+        lineHeight: 1.35,
         letterSpacing: 0
       });
       fitAddon = new FitAddon.FitAddon();
