@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use qrcode::render::unicode;
+use qrcode::types::Color;
 use qrcode::QrCode;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
@@ -136,6 +137,27 @@ pub struct PendingCommand {
     pub kind: String,
     #[allow(dead_code)]
     pub payload: serde_json::Value,
+}
+
+fn payload_bool(payload: &serde_json::Value, key: &str) -> Option<bool> {
+    payload.get(key).and_then(|v| v.as_bool())
+}
+
+fn payload_u64_in_range(payload: &serde_json::Value, key: &str, min: u64, max: u64) -> Option<u64> {
+    let value = payload.get(key).and_then(|v| v.as_u64())?;
+    if value < min || value > max {
+        return None;
+    }
+    Some(value)
+}
+
+fn payload_str(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
 }
 
 pub async fn send_heartbeat(
@@ -275,39 +297,49 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     fleet_cfg.pin = Some(pin.clone());
                 }
                 fleet_cfg.dashboard_auth_machine_token = Some(creds.machine_token.clone());
-                if let Some(api_base) = cmd
-                    .payload
-                    .get("fleet_api_base")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                {
+                if let Some(api_base) = payload_str(&cmd.payload, "fleet_api_base") {
                     fleet_cfg.dashboard_auth_api_base = Some(api_base.to_string());
                 }
 
                 // Apply per-trigger config from command payload
-                if let Some(cwd) = cmd
-                    .payload
-                    .get("cwd")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                {
+                if let Some(cwd) = payload_str(&cmd.payload, "cwd") {
                     fleet_cfg.cwd = Some(cwd.to_string());
                 }
-                if cmd
-                    .payload
-                    .get("terminal_only")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    fleet_cfg.terminal_only = true;
+                if let Some(terminal_only) = payload_bool(&cmd.payload, "terminal_only") {
+                    fleet_cfg.terminal_only = terminal_only;
                 }
-                if let Some(shell) = cmd
-                    .payload
-                    .get("shell")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                {
+                if let Some(shell) = payload_str(&cmd.payload, "shell") {
                     fleet_cfg.shell = Some(shell.to_string());
+                }
+                if let Some(scrollback) =
+                    payload_u64_in_range(&cmd.payload, "scrollback", 16_384, 2_097_152)
+                {
+                    fleet_cfg.scrollback = scrollback as usize;
+                }
+                if let Some(max_connections) =
+                    payload_u64_in_range(&cmd.payload, "max_connections", 1, 32)
+                {
+                    fleet_cfg.max_connections = max_connections as usize;
+                }
+                if let Some(temp_link) = payload_bool(&cmd.payload, "temp_link") {
+                    fleet_cfg.temp_link = temp_link;
+                }
+                if let Some(ttl) =
+                    payload_u64_in_range(&cmd.payload, "temp_link_ttl_minutes", 1, 120)
+                {
+                    if matches!(ttl, 5 | 15 | 60) {
+                        fleet_cfg.temp_link_ttl_minutes = ttl;
+                    }
+                }
+                if let Some(scope) = payload_str(&cmd.payload, "temp_link_scope") {
+                    if scope == "read-only" || scope == "interactive" {
+                        fleet_cfg.temp_link_scope = scope;
+                    }
+                }
+                if let Some(max_uses) =
+                    payload_u64_in_range(&cmd.payload, "temp_link_max_uses", 1, 100)
+                {
+                    fleet_cfg.temp_link_max_uses = max_uses as u32;
                 }
 
                 match crate::start_server(fleet_cfg).await {
@@ -592,14 +624,41 @@ struct DevicePollData {
 /// Render a URL as a QR code using Unicode block characters.
 pub fn render_qr(url: &str) {
     if let Ok(code) = QrCode::new(url) {
-        let image = code
-            .render::<unicode::Dense1x2>()
-            .dark_color(unicode::Dense1x2::Dark)
-            .light_color(unicode::Dense1x2::Light)
-            .quiet_zone(true)
-            .build();
-        for line in image.lines() {
-            println!("  {line}");
+        // Use explicit ANSI background colors so QR remains scannable in both
+        // light and dark terminal themes.
+        let term = std::env::var("TERM").unwrap_or_default();
+        let use_ansi = std::env::var_os("NO_COLOR").is_none() && term != "dumb";
+        if use_ansi {
+            let width = code.width();
+            let colors = code.to_colors();
+            let quiet = 2usize;
+            for y in 0..(width + quiet * 2) {
+                print!("  ");
+                for x in 0..(width + quiet * 2) {
+                    let module =
+                        if x < quiet || y < quiet || x >= width + quiet || y >= width + quiet {
+                            Color::Light
+                        } else {
+                            let idx = (y - quiet) * width + (x - quiet);
+                            colors[idx]
+                        };
+                    match module {
+                        Color::Dark => print!("\x1b[48;5;0m  \x1b[0m"),
+                        Color::Light => print!("\x1b[48;5;15m  \x1b[0m"),
+                    }
+                }
+                println!();
+            }
+        } else {
+            let image = code
+                .render::<unicode::Dense1x2>()
+                .dark_color(unicode::Dense1x2::Dark)
+                .light_color(unicode::Dense1x2::Light)
+                .quiet_zone(true)
+                .build();
+            for line in image.lines() {
+                println!("  {line}");
+            }
         }
     }
 }
