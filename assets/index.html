@@ -665,11 +665,26 @@
       padding: 5px 12px;
       white-space: nowrap;
       flex-shrink: 0;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
     }
     #key-strip button:hover:not(:disabled) {
       background: rgba(255,255,255,0.07);
       border-color: #555;
       color: #ddd;
+    }
+    #key-strip button:active:not(:disabled) {
+      background: rgba(255,255,255,0.09);
+      border-color: #666;
+      color: #f1f1f1;
+    }
+    #key-strip button.cursor-key {
+      min-width: 42px;
+      color: #d0d0d0;
+      font-size: 15px;
+      font-weight: 600;
     }
     @media (max-width: 767px) {
       #workspace { position: relative; overflow: hidden; }
@@ -702,6 +717,10 @@
       body.keyboard-open #key-strip button {
         padding: 4px 10px;
         font-size: 12px;
+      }
+      body.keyboard-open #key-strip button.cursor-key {
+        min-width: 38px;
+        font-size: 14px;
       }
     }
   </style>
@@ -825,11 +844,13 @@
         </div>
         <div id="terminal"></div>
         <div id="key-strip">
-          <button type="button" data-key="ctrl-c">^C</button>
+          <button type="button" class="cursor-key" data-key="left" title="Move cursor left" aria-label="Move cursor left">←</button>
+          <button type="button" class="cursor-key" data-key="right" title="Move cursor right" aria-label="Move cursor right">→</button>
           <button type="button" data-key="tab">Tab</button>
           <button type="button" data-key="up">↑</button>
           <button type="button" data-key="down">↓</button>
           <button type="button" data-key="esc">Esc</button>
+          <button type="button" data-key="ctrl-c">^C</button>
           <button type="button" data-key="ctrl-d">^D</button>
         </div>
       </section>
@@ -963,6 +984,7 @@
     const cancelEditBtn = document.getElementById('cancel-edit');
     const openShellHereBtn = document.getElementById('open-shell-here');
     const refreshTreeBtn = document.getElementById('refresh-tree');
+    const keyStripEl = document.getElementById('key-strip');
     const logoutModal = document.getElementById('logout-modal');
     const logoutOnlyBtn = document.getElementById('logout-only');
     const logoutLockBtn = document.getElementById('logout-lock');
@@ -1014,7 +1036,25 @@
     const TERM_CACHE_PREFIX = 'cw:term:';
     const TERM_CACHE_MAX_CHARS = 500000;
     const terminalCache = new Map();
+    const textEncoder = new TextEncoder();
     const textDecoder = new TextDecoder();
+    const KEY_STRIP_SEQUENCES = {
+      left: '\x1b[D',
+      right: '\x1b[C',
+      tab: '\x09',
+      up: '\x1b[A',
+      down: '\x1b[B',
+      esc: '\x1b',
+      'ctrl-c': '\x03',
+      'ctrl-d': '\x04'
+    };
+    const REPEATABLE_KEY_STRIP_KEYS = new Set(['left', 'right']);
+    const KEY_STRIP_REPEAT_DELAY_MS = 325;
+    const KEY_STRIP_REPEAT_INTERVAL_MS = 70;
+    let keyStripRepeatDelayTimer = null;
+    let keyStripRepeatInterval = null;
+    let keyStripRepeatPointerId = null;
+    let keyStripRepeatButton = null;
     let sessionAccess = {
       readOnly: false,
       boundTerminalId: null,
@@ -1208,6 +1248,47 @@
           (focused.tagName === 'INPUT' && focused.closest('#app')));
       document.body.classList.toggle('keyboard-open', kbInset > 80 && typingIntoInput);
       scheduleTerminalFit();
+    }
+
+    function sendKeyStripSequence(key) {
+      const seq = KEY_STRIP_SEQUENCES[key];
+      if (!seq || !ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(textEncoder.encode(seq));
+      return true;
+    }
+
+    function stopKeyStripRepeat(pointerId = null) {
+      if (
+        pointerId !== null &&
+        keyStripRepeatPointerId !== null &&
+        pointerId !== keyStripRepeatPointerId
+      ) {
+        return;
+      }
+      if (keyStripRepeatDelayTimer) {
+        clearTimeout(keyStripRepeatDelayTimer);
+        keyStripRepeatDelayTimer = null;
+      }
+      if (keyStripRepeatInterval) {
+        clearInterval(keyStripRepeatInterval);
+        keyStripRepeatInterval = null;
+      }
+      if (
+        keyStripRepeatButton &&
+        keyStripRepeatPointerId !== null &&
+        typeof keyStripRepeatButton.releasePointerCapture === 'function'
+      ) {
+        try {
+          if (
+            typeof keyStripRepeatButton.hasPointerCapture === 'function' &&
+            keyStripRepeatButton.hasPointerCapture(keyStripRepeatPointerId)
+          ) {
+            keyStripRepeatButton.releasePointerCapture(keyStripRepeatPointerId);
+          }
+        } catch {}
+      }
+      keyStripRepeatPointerId = null;
+      keyStripRepeatButton = null;
     }
 
     function updateEditorActionState() {
@@ -1684,7 +1765,7 @@
 
       term.onData((data) => {
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(new TextEncoder().encode(data));
+          ws.send(textEncoder.encode(data));
         }
       });
 
@@ -2824,19 +2905,50 @@
       await refreshSessionWarning();
     });
 
-    document.getElementById('key-strip').addEventListener('click', (e) => {
+    keyStripEl.addEventListener('pointerdown', (e) => {
       const btn = e.target.closest('button[data-key]');
-      if (!btn || !ws || ws.readyState !== WebSocket.OPEN) return;
-      const seqs = {
-        'ctrl-c': '\x03',
-        'tab':    '\x09',
-        'up':     '\x1b[A',
-        'down':   '\x1b[B',
-        'esc':    '\x1b',
-        'ctrl-d': '\x04'
-      };
-      const seq = seqs[btn.dataset.key];
-      if (seq) ws.send(new TextEncoder().encode(seq));
+      if (!btn) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+      const key = btn.dataset.key;
+      const sent = sendKeyStripSequence(key);
+      if (!sent) return;
+
+      stopKeyStripRepeat();
+      if (REPEATABLE_KEY_STRIP_KEYS.has(key)) {
+        keyStripRepeatPointerId = e.pointerId;
+        keyStripRepeatButton = btn;
+        if (typeof btn.setPointerCapture === 'function') {
+          try {
+            btn.setPointerCapture(e.pointerId);
+          } catch {}
+        }
+        keyStripRepeatDelayTimer = setTimeout(() => {
+          keyStripRepeatDelayTimer = null;
+          keyStripRepeatInterval = setInterval(() => {
+            if (!sendKeyStripSequence(key)) {
+              stopKeyStripRepeat();
+            }
+          }, KEY_STRIP_REPEAT_INTERVAL_MS);
+        }, KEY_STRIP_REPEAT_DELAY_MS);
+      }
+      e.preventDefault();
+    });
+
+    keyStripEl.addEventListener('click', (e) => {
+      if (e.detail !== 0) return;
+      const btn = e.target.closest('button[data-key]');
+      if (!btn) return;
+      sendKeyStripSequence(btn.dataset.key);
+    });
+
+    keyStripEl.addEventListener('pointerup', (e) => stopKeyStripRepeat(e.pointerId));
+    keyStripEl.addEventListener('pointercancel', (e) => stopKeyStripRepeat(e.pointerId));
+    keyStripEl.addEventListener('lostpointercapture', (e) => stopKeyStripRepeat(e.pointerId));
+    window.addEventListener('pointerup', (e) => stopKeyStripRepeat(e.pointerId));
+    window.addEventListener('blur', () => stopKeyStripRepeat());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stopKeyStripRepeat();
     });
 
     updateEditorActionState();
