@@ -33,6 +33,8 @@ const MAX_ACTIVE_TEMP_LINKS: usize = 2;
 const DEFAULT_TEMP_LINK_TTL_MINUTES: u64 = 15;
 const TEMP_LINK_GRACE_SECS: u64 = 120;
 const WS_HEARTBEAT_PAYLOAD: &str = "{\"type\":\"heartbeat\"}";
+pub const DASHBOARD_PENDING_LOGIN_TTL_SECS: u64 = 180;
+pub const DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS: usize = 5;
 
 pub struct AppState {
     pub password: String,
@@ -54,6 +56,7 @@ pub struct AppState {
     pub shutdown_tx: tokio::sync::mpsc::UnboundedSender<()>,
     pub temp_links: Mutex<TempLinkStore>,
     pub temp_grants: Mutex<HashMap<String, TempSessionGrant>>,
+    pub dashboard_pending_logins: Mutex<DashboardPendingLoginStore>,
     pub temp_link_signing_key: String,
     pub auto_shutdown_disabled: bool,
     pub terminal_only: bool,
@@ -74,6 +77,7 @@ pub struct LoginRequest {
     sso_ticket: Option<String>,
     dashboard_ticket: Option<String>,
     dashboard_token: Option<String>,
+    dashboard_pending_login_id: Option<String>,
     pin: Option<String>,
 }
 
@@ -87,7 +91,13 @@ pub struct DashboardChallengeResponse {
 #[derive(Serialize)]
 pub struct DashboardChallengeStatusResponse {
     status: String,
-    ticket: Option<String>,
+    pending_login_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ApiErrorResponse {
+    code: String,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -436,6 +446,131 @@ pub struct FailedLoginTracker {
     window: Duration,
 }
 
+pub struct DashboardPendingLoginStore {
+    by_id: HashMap<String, DashboardPendingLoginRecord>,
+    by_challenge: HashMap<String, String>,
+    ttl: Duration,
+    max_pin_attempts: usize,
+}
+
+#[derive(Clone)]
+struct DashboardPendingLoginRecord {
+    challenge_id: String,
+    expires_at: Instant,
+    failed_pin_attempts: usize,
+}
+
+impl DashboardPendingLoginStore {
+    pub fn new(ttl: Duration, max_pin_attempts: usize) -> Self {
+        Self {
+            by_id: HashMap::new(),
+            by_challenge: HashMap::new(),
+            ttl,
+            max_pin_attempts,
+        }
+    }
+
+    fn make_id(&self) -> String {
+        loop {
+            let id: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(24)
+                .map(char::from)
+                .collect();
+            if !self.by_id.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
+    fn purge_expired(&mut self, now: Instant) {
+        let expired_ids: Vec<String> = self
+            .by_id
+            .iter()
+            .filter_map(|(id, record)| {
+                if now >= record.expires_at || record.failed_pin_attempts >= self.max_pin_attempts {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for id in expired_ids {
+            self.remove(&id);
+        }
+    }
+
+    fn get_by_challenge(&mut self, challenge_id: &str, now: Instant) -> Option<String> {
+        self.purge_expired(now);
+        let id = self.by_challenge.get(challenge_id)?.clone();
+        if self.by_id.contains_key(&id) {
+            Some(id)
+        } else {
+            self.by_challenge.remove(challenge_id);
+            None
+        }
+    }
+
+    fn create(&mut self, challenge_id: String, now: Instant) -> String {
+        self.purge_expired(now);
+        if let Some(existing) = self.get_by_challenge(&challenge_id, now) {
+            return existing;
+        }
+        let id = self.make_id();
+        self.by_id.insert(
+            id.clone(),
+            DashboardPendingLoginRecord {
+                challenge_id: challenge_id.clone(),
+                expires_at: now + self.ttl,
+                failed_pin_attempts: 0,
+            },
+        );
+        self.by_challenge.insert(challenge_id, id.clone());
+        id
+    }
+
+    fn is_valid(&mut self, id: &str, now: Instant) -> bool {
+        self.purge_expired(now);
+        self.by_id.contains_key(id)
+    }
+
+    fn record_pin_failure(&mut self, id: &str, now: Instant) -> bool {
+        self.purge_expired(now);
+        let Some(record) = self.by_id.get_mut(id) else {
+            return false;
+        };
+        record.failed_pin_attempts = record.failed_pin_attempts.saturating_add(1);
+        let still_valid =
+            record.failed_pin_attempts < self.max_pin_attempts && now < record.expires_at;
+        if !still_valid {
+            self.remove(id);
+        }
+        still_valid
+    }
+
+    fn consume(&mut self, id: &str, now: Instant) -> bool {
+        self.purge_expired(now);
+        if !self.by_id.contains_key(id) {
+            return false;
+        }
+        self.remove(id);
+        true
+    }
+
+    fn remove(&mut self, id: &str) {
+        if let Some(record) = self.by_id.remove(id) {
+            if self
+                .by_challenge
+                .get(&record.challenge_id)
+                .map(|mapped| mapped == id)
+                .unwrap_or(false)
+            {
+                self.by_challenge.remove(&record.challenge_id);
+            }
+        }
+    }
+}
+
 impl FailedLoginTracker {
     pub fn new(max_attempts: usize, window: Duration) -> Self {
         Self {
@@ -712,7 +847,6 @@ pub fn router(state: Arc<AppState>) -> Router {
     let terminal_only = state.terminal_only;
     let mut r = Router::new()
         .route("/", get(serve_index))
-        .route("/font-lab", get(serve_font_lab))
         .route("/favicon.svg", get(serve_favicon))
         .route("/api/capabilities", get(capabilities))
         .route("/auth/login", post(auth_login))
@@ -752,11 +886,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn serve_index() -> impl IntoResponse {
     let html = Assets::get("index.html").unwrap();
-    Html(std::str::from_utf8(html.data.as_ref()).unwrap().to_string())
-}
-
-async fn serve_font_lab() -> impl IntoResponse {
-    let html = Assets::get("font-lab.html").unwrap();
     Html(std::str::from_utf8(html.data.as_ref()).unwrap().to_string())
 }
 
@@ -858,6 +987,20 @@ async fn auth_dashboard_challenge_status(
         )
             .into_response();
     };
+    let now = Instant::now();
+    if let Some(pending_login_id) = state
+        .dashboard_pending_logins
+        .lock()
+        .unwrap()
+        .get_by_challenge(&id, now)
+    {
+        return Json(DashboardChallengeStatusResponse {
+            status: "pin_required".to_string(),
+            pending_login_id: Some(pending_login_id),
+        })
+        .into_response();
+    }
+
     let client = reqwest::Client::new();
     let url = format!(
         "{}/api/v1/agent/host-auth/challenge/{}",
@@ -875,11 +1018,16 @@ async fn auth_dashboard_challenge_status(
         Err(_) => return (StatusCode::BAD_GATEWAY, "Cannot reach dashboard API").into_response(),
     };
     if !response.status().is_success() {
-        return (
-            StatusCode::BAD_GATEWAY,
-            "Dashboard API rejected challenge status request",
-        )
-            .into_response();
+        let status = match response.status() {
+            StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND | StatusCode::GONE => "expired",
+            StatusCode::FORBIDDEN => "denied",
+            _ => "unavailable",
+        };
+        return Json(DashboardChallengeStatusResponse {
+            status: status.to_string(),
+            pending_login_id: None,
+        })
+        .into_response();
     }
     let payload = match response.json::<FleetChallengeStatusEnvelope>().await {
         Ok(v) => v,
@@ -887,11 +1035,61 @@ async fn auth_dashboard_challenge_status(
             return (StatusCode::BAD_GATEWAY, "Invalid challenge status response").into_response()
         }
     };
-    Json(DashboardChallengeStatusResponse {
-        status: payload.data.status,
-        ticket: payload.data.ticket,
-    })
-    .into_response()
+    let upstream_status = payload.data.status.trim().to_ascii_lowercase();
+    match upstream_status.as_str() {
+        "approved" => {
+            let Some(ticket) = payload.data.ticket.as_deref() else {
+                return Json(DashboardChallengeStatusResponse {
+                    status: "unavailable".to_string(),
+                    pending_login_id: None,
+                })
+                .into_response();
+            };
+            let redeem = redeem_dashboard_ticket(&state, ticket).await;
+            let local_status = match redeem {
+                DashboardTicketRedeemResult::Approved => {
+                    let pending_login_id = state
+                        .dashboard_pending_logins
+                        .lock()
+                        .unwrap()
+                        .create(id, now);
+                    return Json(DashboardChallengeStatusResponse {
+                        status: "pin_required".to_string(),
+                        pending_login_id: Some(pending_login_id),
+                    })
+                    .into_response();
+                }
+                DashboardTicketRedeemResult::Expired => "expired",
+                DashboardTicketRedeemResult::Denied => "denied",
+                DashboardTicketRedeemResult::Unavailable => "unavailable",
+            };
+            Json(DashboardChallengeStatusResponse {
+                status: local_status.to_string(),
+                pending_login_id: None,
+            })
+            .into_response()
+        }
+        "expired" => Json(DashboardChallengeStatusResponse {
+            status: "expired".to_string(),
+            pending_login_id: None,
+        })
+        .into_response(),
+        "denied" | "rejected" | "revoked" => Json(DashboardChallengeStatusResponse {
+            status: "denied".to_string(),
+            pending_login_id: None,
+        })
+        .into_response(),
+        "pending" | "waiting" | "created" => Json(DashboardChallengeStatusResponse {
+            status: "pending".to_string(),
+            pending_login_id: None,
+        })
+        .into_response(),
+        _ => Json(DashboardChallengeStatusResponse {
+            status: "unavailable".to_string(),
+            pending_login_id: None,
+        })
+        .into_response(),
+    }
 }
 
 async fn auth_login(
@@ -922,6 +1120,76 @@ async fn auth_login(
         }
     }
 
+    if let Some(pending_login_id) = req.dashboard_pending_login_id.as_deref() {
+        let pending_valid = state
+            .dashboard_pending_logins
+            .lock()
+            .unwrap()
+            .is_valid(pending_login_id, now);
+        if !pending_valid {
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "approval_expired",
+                "This sign-in expired. Continue again.",
+            );
+        }
+
+        if !verify_pin(req.pin.as_deref(), state.pin.as_deref()) {
+            let still_valid = state
+                .dashboard_pending_logins
+                .lock()
+                .unwrap()
+                .record_pin_failure(pending_login_id, now);
+            let mut limiter = state.failed_logins.lock().unwrap();
+            limiter.record_failure(&client, now);
+            if let Some(wait) = limiter.retry_after(&client, now) {
+                let wait_seconds = wait.as_secs().max(1).to_string();
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, wait_seconds)],
+                    axum::Json(ApiErrorResponse {
+                        code: "too_many_attempts".to_string(),
+                        message: "Too many failed login attempts. Try again later.".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+            if !still_valid {
+                return api_error(
+                    StatusCode::UNAUTHORIZED,
+                    "approval_expired",
+                    "This sign-in expired. Continue again.",
+                );
+            }
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "pin_invalid",
+                "Incorrect machine PIN.",
+            );
+        }
+
+        let consumed = state
+            .dashboard_pending_logins
+            .lock()
+            .unwrap()
+            .consume(pending_login_id, now);
+        if !consumed {
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "approval_expired",
+                "This sign-in expired. Continue again.",
+            );
+        }
+
+        let mut limiter = state.failed_logins.lock().unwrap();
+        limiter.clear(&client);
+        let mut sessions = state.sessions.lock().unwrap();
+        let session_token = sessions.create(now);
+        bump_shutdown_deadline_from_activity(&state, now);
+        let set_cookie = session_cookie_header(&session_token);
+        return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
+    }
+
     let password_ok = req
         .password
         .as_deref()
@@ -949,11 +1217,33 @@ async fn auth_login(
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [(header::RETRY_AFTER, wait_seconds)],
-            "Too many failed login attempts. Try again later.",
+            axum::Json(ApiErrorResponse {
+                code: "too_many_attempts".to_string(),
+                message: "Too many failed login attempts. Try again later.".to_string(),
+            }),
         )
             .into_response();
     }
-    (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+    let (code, message) = if req.sso_ticket.as_deref().is_some() {
+        ("invalid_sso_or_pin", "Invalid sign-in link or machine PIN.")
+    } else {
+        (
+            "invalid_credentials",
+            "Incorrect access token or machine PIN.",
+        )
+    };
+    api_error(StatusCode::UNAUTHORIZED, code, message)
+}
+
+fn api_error(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        axum::Json(ApiErrorResponse {
+            code: code.to_string(),
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 async fn auth_session(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
@@ -2147,15 +2437,22 @@ async fn verify_dashboard_token(state: &Arc<AppState>, dashboard_token: Option<&
     }
 }
 
-async fn verify_dashboard_ticket(state: &Arc<AppState>, dashboard_ticket: Option<&str>) -> bool {
+enum DashboardTicketRedeemResult {
+    Approved,
+    Expired,
+    Denied,
+    Unavailable,
+}
+
+async fn redeem_dashboard_ticket(
+    state: &Arc<AppState>,
+    dashboard_ticket: &str,
+) -> DashboardTicketRedeemResult {
     let Some(cfg) = state.dashboard_auth.as_ref() else {
-        return false;
+        return DashboardTicketRedeemResult::Unavailable;
     };
-    let Some(ticket) = dashboard_ticket else {
-        return false;
-    };
-    if ticket.trim().is_empty() {
-        return false;
+    if dashboard_ticket.trim().is_empty() {
+        return DashboardTicketRedeemResult::Expired;
     }
 
     let client = reqwest::Client::new();
@@ -2166,15 +2463,38 @@ async fn verify_dashboard_ticket(state: &Arc<AppState>, dashboard_ticket: Option
     let response = client
         .post(url)
         .bearer_auth(&cfg.machine_token)
-        .json(&serde_json::json!({ "ticket": ticket }))
+        .json(&serde_json::json!({ "ticket": dashboard_ticket }))
         .timeout(Duration::from_secs(8))
         .send()
         .await;
 
     match response {
-        Ok(res) => res.status().is_success(),
-        Err(_) => false,
+        Ok(res) if res.status().is_success() => DashboardTicketRedeemResult::Approved,
+        Ok(res)
+            if matches!(
+                res.status(),
+                StatusCode::BAD_REQUEST
+                    | StatusCode::NOT_FOUND
+                    | StatusCode::GONE
+                    | StatusCode::UNPROCESSABLE_ENTITY
+            ) =>
+        {
+            DashboardTicketRedeemResult::Expired
+        }
+        Ok(res) if res.status() == StatusCode::FORBIDDEN => DashboardTicketRedeemResult::Denied,
+        Ok(_) => DashboardTicketRedeemResult::Unavailable,
+        Err(_) => DashboardTicketRedeemResult::Unavailable,
     }
+}
+
+async fn verify_dashboard_ticket(state: &Arc<AppState>, dashboard_ticket: Option<&str>) -> bool {
+    let Some(ticket) = dashboard_ticket else {
+        return false;
+    };
+    matches!(
+        redeem_dashboard_ticket(state, ticket).await,
+        DashboardTicketRedeemResult::Approved
+    )
 }
 
 fn bump_shutdown_deadline_from_activity(state: &Arc<AppState>, now: Instant) {
@@ -2467,6 +2787,26 @@ mod tests {
     }
 
     #[test]
+    fn test_dashboard_pending_login_reuses_same_challenge() {
+        let mut store = DashboardPendingLoginStore::new(Duration::from_secs(180), 5);
+        let now = Instant::now();
+        let first = store.create("challenge-1".to_string(), now);
+        let second = store.create("challenge-1".to_string(), now + Duration::from_secs(1));
+        assert_eq!(first, second);
+        assert!(store.is_valid(&first, now + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn test_dashboard_pending_login_expires_after_pin_failures() {
+        let mut store = DashboardPendingLoginStore::new(Duration::from_secs(180), 2);
+        let now = Instant::now();
+        let pending = store.create("challenge-2".to_string(), now);
+        assert!(store.record_pin_failure(&pending, now + Duration::from_secs(1)));
+        assert!(!store.record_pin_failure(&pending, now + Duration::from_secs(2)));
+        assert!(!store.is_valid(&pending, now + Duration::from_secs(3)));
+    }
+
+    #[test]
     fn test_session_token_from_cookie() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2638,6 +2978,10 @@ mod tests {
             shutdown_tx: tokio::sync::mpsc::unbounded_channel::<()>().0,
             temp_links: Mutex::new(TempLinkStore::new()),
             temp_grants: Mutex::new(std::collections::HashMap::new()),
+            dashboard_pending_logins: Mutex::new(DashboardPendingLoginStore::new(
+                Duration::from_secs(DASHBOARD_PENDING_LOGIN_TTL_SECS),
+                DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS,
+            )),
             temp_link_signing_key: "signingkey123456789012345678901234567890123456".to_string(),
             auto_shutdown_disabled: false,
             terminal_only,

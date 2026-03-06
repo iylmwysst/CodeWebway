@@ -667,16 +667,16 @@
   <div id="login">
     <form class="card" id="login-form">
       <h1>CodeWebway</h1>
-      <p id="login-subtitle">Sign in to open workspace</p>
+      <p id="login-subtitle">Unlock this machine</p>
       <div id="login-primary" class="stack" style="display:none;">
         <div id="dashboard-start-wrap" class="login-panel">
-          <h2 id="login-primary-title">Sign in</h2>
-          <p id="login-primary-note">Continue with your account, then confirm PIN.</p>
-          <button id="dashboard-login" class="primary-cta" type="button">Sign in</button>
+          <h2 id="login-primary-title">Unlock this machine</h2>
+          <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
+          <button id="dashboard-login" class="primary-cta" type="button">Continue</button>
         </div>
         <div id="dashboard-pin-wrap" class="login-panel" style="display:none;">
-          <h2>Enter PIN</h2>
-          <p>Sign-in approved. Enter your PIN to continue.</p>
+          <h2>Enter machine PIN</h2>
+          <p>Account verified. Enter the PIN for this machine to continue.</p>
           <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
           <div class="pin-keypad" id="pin-keypad-primary">
             <button type="button" data-pin-key="1">1</button>
@@ -693,19 +693,24 @@
             <button type="button" data-pin-key="back">⌫</button>
           </div>
           <div class="row" style="margin-top:10px;">
-            <button id="dashboard-pin-back" class="ghost" type="button">Back</button>
-            <button id="dashboard-continue" class="ghost" type="button">Verify PIN</button>
+            <button id="dashboard-pin-back" class="ghost" type="button">Start over</button>
+            <button id="dashboard-continue" class="ghost" type="button">Unlock</button>
           </div>
         </div>
-        <div class="login-divider">Alternative</div>
-        <button id="show-token-method" class="ghost" type="button">Use access token</button>
+        <div class="login-divider">Other options</div>
+        <button id="show-token-method" class="ghost" type="button">Use access token instead</button>
       </div>
       <div id="token-login-wrap" class="stack" style="display:none;">
-        <input id="password" type="password" autocomplete="current-password" placeholder="Token" required />
-        <div class="row">
-          <input id="pin" type="password" autocomplete="one-time-code" placeholder="PIN" />
-          <button id="submit" class="ghost" type="submit">Connect</button>
+        <div class="login-panel">
+          <h2>Use access token</h2>
+          <p>Enter the access token and machine PIN if you cannot continue with your account.</p>
+          <input id="password" type="password" autocomplete="current-password" placeholder="Access token" required />
+          <div class="row" style="margin-top:10px;">
+            <input id="pin" type="password" autocomplete="one-time-code" placeholder="Machine PIN" />
+            <button id="submit" class="ghost" type="submit">Unlock</button>
+          </div>
         </div>
+        <button id="hide-token-method" class="ghost" type="button" style="display:none;">Back to account sign-in</button>
         <div class="pin-keypad" id="pin-keypad-token">
           <button type="button" data-pin-key="1">1</button>
           <button type="button" data-pin-key="2">2</button>
@@ -866,6 +871,7 @@
     const dashboardStartWrap = document.getElementById('dashboard-start-wrap');
     const dashboardPinWrap = document.getElementById('dashboard-pin-wrap');
     const showTokenMethodBtn = document.getElementById('show-token-method');
+    const hideTokenMethodBtn = document.getElementById('hide-token-method');
     const tokenLoginWrap = document.getElementById('token-login-wrap');
     const pinInput = document.getElementById('pin');
     const primaryPinInput = document.getElementById('pin-primary');
@@ -960,9 +966,17 @@
     let ssoEnabled = false;
     const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
     let dashboardLoginEnabled = false;
+    let dashboardFlowBusy = false;
     let tokenMethodVisible = false;
     const DASHBOARD_FLOW_CHALLENGE_KEY = 'cw:dashboard-flow:challenge';
-    let pendingDashboardTicket = null;
+    const DASHBOARD_PENDING_LOGIN_KEY = 'cw:dashboard-flow:pending-login';
+    let pendingDashboardLoginId = (() => {
+      try {
+        return sessionStorage.getItem(DASHBOARD_PENDING_LOGIN_KEY);
+      } catch {
+        return null;
+      }
+    })();
 
     function formatSeconds(total) {
       const safe = Math.max(0, Math.floor(total || 0));
@@ -1278,8 +1292,11 @@
       const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
 
       loginPrimary.style.display = (dashboardAvailable && !signedTicketMode) ? 'flex' : 'none';
-      tokenMethodVisible = signedTicketMode || !dashboardAvailable;
+      tokenMethodVisible = signedTicketMode || !dashboardAvailable || tokenMethodVisible;
       tokenLoginWrap.style.display = tokenMethodVisible ? 'flex' : 'none';
+      if (hideTokenMethodBtn) {
+        hideTokenMethodBtn.style.display = tokenMethodVisible && dashboardAvailable && !signedTicketMode ? 'block' : 'none';
+      }
 
       if (ssoEnabled) {
         if (ssoTicket) {
@@ -1287,28 +1304,33 @@
           passwordInput.required = false;
           passwordInput.value = '';
           loginSubtitle.textContent = 'Signed in with your system account. Enter PIN to open workspace.';
-          pinInput.placeholder = 'PIN (required)';
+          pinInput.placeholder = 'Machine PIN';
         } else {
           passwordInput.style.display = 'block';
           passwordInput.required = true;
           loginSubtitle.textContent = dashboardAvailable
-            ? 'Sign in first, or use access token.'
-            : 'Enter access token and PIN to open workspace.';
-          pinInput.placeholder = 'PIN (required)';
+            ? 'Continue with your account, or use an access token.'
+            : 'Enter the access token and machine PIN to continue.';
+          pinInput.placeholder = 'Machine PIN';
         }
       } else {
         passwordInput.style.display = 'block';
         passwordInput.required = true;
         loginSubtitle.textContent = dashboardAvailable
-          ? 'Sign in first, or use access token.'
-          : 'Enter access token and PIN to open workspace';
-        pinInput.placeholder = 'PIN';
+          ? 'Continue with your account, or use an access token.'
+          : 'Enter the access token and machine PIN to continue.';
+        pinInput.placeholder = 'Machine PIN';
       }
 
       if (dashboardAvailable && !signedTicketMode) {
         dashboardLoginBtn.style.display = 'block';
-        showTokenMethodBtn.style.display = pendingDashboardTicket ? 'none' : 'block';
-        if (!pendingDashboardTicket) {
+        showTokenMethodBtn.style.display = (pendingDashboardLoginId || dashboardFlowBusy) ? 'none' : 'block';
+        if (dashboardFlowBusy) {
+          return;
+        }
+        if (pendingDashboardLoginId) {
+          restoreDashboardPinStep();
+        } else {
           resetPrimaryLoginState();
         }
       } else {
@@ -1320,30 +1342,70 @@
     function setTokenMethodVisible(visible) {
       tokenMethodVisible = visible;
       tokenLoginWrap.style.display = visible ? 'flex' : 'none';
-      if (pendingDashboardTicket) {
-        showTokenMethodBtn.textContent = 'Use access token';
+      if (hideTokenMethodBtn) {
+        hideTokenMethodBtn.style.display = visible && dashboardLoginEnabled && !ssoTicket ? 'block' : 'none';
+      }
+      if (pendingDashboardLoginId || dashboardFlowBusy) {
+        showTokenMethodBtn.textContent = 'Use access token instead';
         return;
       }
-      showTokenMethodBtn.textContent = visible ? 'Hide access token login' : 'Use access token';
+      showTokenMethodBtn.textContent = visible ? 'Use account sign-in instead' : 'Use access token instead';
+    }
+
+    function clearPendingDashboardLoginState() {
+      pendingDashboardLoginId = null;
+      try {
+        sessionStorage.removeItem(DASHBOARD_PENDING_LOGIN_KEY);
+      } catch {
+        // ignore storage failures
+      }
+    }
+
+    function storePendingDashboardLoginState(id) {
+      pendingDashboardLoginId = id;
+      try {
+        sessionStorage.setItem(DASHBOARD_PENDING_LOGIN_KEY, id);
+      } catch {
+        // ignore storage failures
+      }
     }
 
     function resetPrimaryLoginState() {
-      pendingDashboardTicket = null;
+      dashboardFlowBusy = false;
+      clearPendingDashboardLoginState();
       dashboardStartWrap.style.display = 'block';
       dashboardPinWrap.style.display = 'none';
       primaryPinInput.value = '';
-      loginPrimaryTitle.textContent = 'Sign in';
-      loginPrimaryNote.textContent = 'Continue with your account, then confirm PIN.';
-      dashboardLoginBtn.textContent = 'Sign in';
+      loginPrimaryTitle.textContent = 'Unlock this machine';
+      loginPrimaryNote.textContent = 'Continue with your account first. You will enter the machine PIN in the next step.';
+      dashboardLoginBtn.textContent = 'Continue';
+      dashboardLoginBtn.disabled = false;
       showTokenMethodBtn.style.display = 'block';
     }
 
-    function showDashboardPinStep(ticket) {
-      pendingDashboardTicket = ticket;
+    function showDashboardProgressState() {
+      dashboardFlowBusy = true;
+      dashboardStartWrap.style.display = 'block';
+      dashboardPinWrap.style.display = 'none';
+      loginPrimaryTitle.textContent = 'Finishing sign-in';
+      loginPrimaryNote.textContent = 'Checking approval from your account...';
+      dashboardLoginBtn.textContent = 'Please wait';
+      dashboardLoginBtn.disabled = true;
+      showTokenMethodBtn.style.display = 'none';
+    }
+
+    function restoreDashboardPinStep() {
+      dashboardFlowBusy = false;
       dashboardStartWrap.style.display = 'none';
       dashboardPinWrap.style.display = 'block';
-      primaryPinInput.value = '';
       showTokenMethodBtn.style.display = 'none';
+      dashboardLoginBtn.disabled = false;
+    }
+
+    function showDashboardPinStep(pendingLoginId) {
+      storePendingDashboardLoginState(pendingLoginId);
+      restoreDashboardPinStep();
+      primaryPinInput.value = '';
       primaryPinInput.focus();
     }
 
@@ -1582,12 +1644,29 @@
       });
     }
 
-    async function authorizeDashboard(ticket, pin) {
+    async function authorizeDashboardPending(pendingLoginId, pin) {
       return api('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dashboard_ticket: ticket, pin })
+        body: JSON.stringify({ dashboard_pending_login_id: pendingLoginId, pin })
       });
+    }
+
+    async function readApiError(res) {
+      const type = res.headers.get('content-type') || '';
+      if (type.includes('application/json')) {
+        try {
+          return await res.json();
+        } catch {
+          return null;
+        }
+      }
+      try {
+        const text = await res.text();
+        return text ? { message: text } : null;
+      } catch {
+        return null;
+      }
     }
 
     async function startDashboardChallenge() {
@@ -1600,6 +1679,7 @@
       const deadline = Date.now() + 120000;
       let waitMs = 0;
       let nextWaitMs = 600;
+      let unavailableCount = 0;
       while (Date.now() < deadline) {
         if (waitMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -1607,10 +1687,21 @@
         const res = await api(`/auth/dashboard/challenge/${encodeURIComponent(challengeId)}`, {
           method: 'GET'
         });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          unavailableCount += 1;
+          if (unavailableCount >= 3) throw new Error('challenge_unavailable');
+          continue;
+        }
         const body = await res.json();
-        if (body.status === 'approved' && body.ticket) return body.ticket;
+        if (body.status === 'pin_required' && body.pending_login_id) return body.pending_login_id;
         if (body.status === 'expired') throw new Error('challenge_expired');
+        if (body.status === 'denied') throw new Error('challenge_denied');
+        if (body.status === 'unavailable') {
+          unavailableCount += 1;
+          if (unavailableCount >= 3) throw new Error('challenge_unavailable');
+          continue;
+        }
+        unavailableCount = 0;
         waitMs = nextWaitMs;
         nextWaitMs = Math.min(2000, Math.round(nextWaitMs * 1.4));
       }
@@ -1647,12 +1738,13 @@
       const challengeId = params.get('dashboard_challenge') || storedChallenge;
       if (!challengeId) return false;
 
+      showDashboardProgressState();
       dashboardLoginBtn.disabled = true;
       submitBtn.disabled = true;
-      errorEl.textContent = 'Finishing sign in...';
+      errorEl.textContent = '';
       try {
-        const ticket = await pollDashboardChallenge(challengeId);
-        showDashboardPinStep(ticket);
+        const pendingLoginId = await pollDashboardChallenge(challengeId);
+        showDashboardPinStep(pendingLoginId);
         errorEl.textContent = '';
         clearDashboardFlowState();
         const cleanUrl = new URL(window.location.href);
@@ -1661,15 +1753,24 @@
         window.history.replaceState({}, '', cleanUrl.toString());
         return true;
       } catch (err) {
+        clearDashboardFlowState();
+        clearPendingDashboardLoginState();
+        dashboardFlowBusy = false;
+        resetPrimaryLoginState();
         if (err instanceof Error && err.message === 'challenge_expired') {
-          errorEl.textContent = 'Sign-in session expired. Please login again.';
+          errorEl.textContent = 'This sign-in expired. Continue again.';
+        } else if (err instanceof Error && err.message === 'challenge_denied') {
+          errorEl.textContent = 'This account does not have access to this machine.';
+        } else if (err instanceof Error && err.message === 'challenge_unavailable') {
+          errorEl.textContent = 'Cannot reach account approval right now. Try again.';
         } else if (err instanceof Error && err.message === 'challenge_timeout') {
-          errorEl.textContent = 'Sign-in timeout. Please login again.';
+          errorEl.textContent = 'Approval timed out. Continue again.';
         } else {
-          errorEl.textContent = 'Cannot sign in right now. Please try again.';
+          errorEl.textContent = 'Cannot finish sign-in right now. Try again.';
         }
         return false;
       } finally {
+        dashboardFlowBusy = false;
         dashboardLoginBtn.disabled = false;
         submitBtn.disabled = false;
       }
@@ -2182,6 +2283,10 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (dashboardPinWrap.style.display !== 'none') {
+        dashboardContinueBtn.click();
+        return;
+      }
       const password = passwordInput.value.trim();
       const pin = pinInput.value.trim() || null;
       errorEl.textContent = '';
@@ -2190,12 +2295,15 @@
       try {
         const res = await authorize(password, pin);
         if (!res.ok) {
+          const problem = await readApiError(res);
           if (res.status === 423) {
-            errorEl.textContent = 'Access locked. Restart CodeWebway to login again.';
+            errorEl.textContent = problem?.message || 'Access locked. Restart CodeWebway to login again.';
           } else if (res.status === 429) {
-            errorEl.textContent = 'Too many attempts. Try again later.';
+            errorEl.textContent = problem?.message || 'Too many attempts. Try again later.';
           } else {
-            errorEl.textContent = ssoTicket ? 'Invalid SSO ticket or PIN' : 'Invalid token or PIN';
+            errorEl.textContent = problem?.message || (ssoTicket
+              ? 'Invalid sign-in link or machine PIN.'
+              : 'Incorrect access token or machine PIN.');
           }
           submitBtn.disabled = false;
           return;
@@ -2213,6 +2321,9 @@
     showTokenMethodBtn.addEventListener('click', () => {
       setTokenMethodVisible(!tokenMethodVisible);
     });
+    if (hideTokenMethodBtn) {
+      hideTokenMethodBtn.addEventListener('click', () => setTokenMethodVisible(false));
+    }
 
     dashboardLoginBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
@@ -2230,7 +2341,7 @@
         window.location.assign(approveUrl.toString());
         return;
       } catch (err) {
-        errorEl.textContent = 'Cannot start sign in right now. Please try again.';
+        errorEl.textContent = 'Cannot start sign-in right now. Try again.';
       } finally {
         dashboardLoginBtn.disabled = false;
         submitBtn.disabled = false;
@@ -2239,37 +2350,44 @@
 
     dashboardContinueBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
-      if (!pendingDashboardTicket) {
+      if (!pendingDashboardLoginId) {
         const resumed = await resumeDashboardRedirectFlow();
-        if (!resumed || !pendingDashboardTicket) {
-          errorEl.textContent = 'Please sign in first.';
+        if (!resumed || !pendingDashboardLoginId) {
+          errorEl.textContent = 'Continue with your account first.';
           return;
         }
       }
       const pin = primaryPinInput.value.trim();
       if (!pin) {
-        errorEl.textContent = 'PIN is required';
+        errorEl.textContent = 'Machine PIN is required.';
         return;
       }
       dashboardContinueBtn.disabled = true;
       submitBtn.disabled = true;
       try {
-        const res = await authorizeDashboard(pendingDashboardTicket, pin);
+        const res = await authorizeDashboardPending(pendingDashboardLoginId, pin);
         if (!res.ok) {
+          const problem = await readApiError(res);
           if (res.status === 423) {
-            errorEl.textContent = 'Access locked. Restart CodeWebway to login again.';
+            errorEl.textContent = problem?.message || 'Access locked. Restart CodeWebway to login again.';
           } else if (res.status === 429) {
-            errorEl.textContent = 'Too many attempts. Try again later.';
+            errorEl.textContent = problem?.message || 'Too many attempts. Try again later.';
+          } else if (problem?.code === 'approval_expired') {
+            resetPrimaryLoginState();
+            errorEl.textContent = problem.message || 'This sign-in expired. Continue again.';
+          } else if (problem?.code === 'pin_invalid') {
+            errorEl.textContent = problem.message || 'Incorrect machine PIN.';
           } else {
-            errorEl.textContent = 'Invalid PIN. Please try again.';
+            errorEl.textContent = problem?.message || 'Cannot complete sign-in right now. Try again.';
           }
           return;
         }
         clearDashboardFlowState();
+        clearPendingDashboardLoginState();
         resetPrimaryLoginState();
         await bootstrapWorkspace();
       } catch {
-        errorEl.textContent = 'Cannot complete login right now. Please try again.';
+        errorEl.textContent = 'Cannot complete sign-in right now. Try again.';
       } finally {
         dashboardContinueBtn.disabled = false;
         submitBtn.disabled = false;
@@ -2277,7 +2395,15 @@
     });
 
     dashboardPinBackBtn.addEventListener('click', () => {
+      clearDashboardFlowState();
       resetPrimaryLoginState();
+    });
+
+    primaryPinInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        dashboardContinueBtn.click();
+      }
     });
 
     bindPinKeypad(primaryPinKeypad, primaryPinInput);

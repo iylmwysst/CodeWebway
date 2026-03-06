@@ -493,6 +493,10 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         shutdown_tx: shutdown_tx.clone(),
         temp_links: Mutex::new(server::TempLinkStore::new()),
         temp_grants: Mutex::new(std::collections::HashMap::new()),
+        dashboard_pending_logins: Mutex::new(server::DashboardPendingLoginStore::new(
+            Duration::from_secs(server::DASHBOARD_PENDING_LOGIN_TTL_SECS),
+            server::DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS,
+        )),
         temp_link_signing_key: generate_token(48),
         auto_shutdown_disabled,
         terminal_only: cfg.terminal_only,
