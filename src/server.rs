@@ -35,11 +35,16 @@ const TEMP_LINK_GRACE_SECS: u64 = 120;
 const WS_HEARTBEAT_PAYLOAD: &str = "{\"type\":\"heartbeat\"}";
 pub const DASHBOARD_PENDING_LOGIN_TTL_SECS: u64 = 180;
 pub const DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS: usize = 5;
+const CREDENTIAL_ATTEMPT_MAX: usize = 5;
+const PIN_ATTEMPT_MAX: usize = 8;
+const CHALLENGE_POLL_ATTEMPT_MAX: usize = 90;
+const AUTH_ATTEMPT_WINDOW_SECS: u64 = 300;
+const CHALLENGE_POLL_WINDOW_SECS: u64 = 120;
 
 pub struct AppState {
     pub password: String,
     pub pin: Option<String>,
-    pub failed_logins: Mutex<FailedLoginTracker>,
+    pub auth_attempts: Mutex<AuthAttemptTracker>,
     pub sessions: Mutex<SessionStore>,
     pub access_locked: Mutex<bool>,
     pub terminals: Mutex<TerminalManager>,
@@ -107,6 +112,11 @@ pub struct LogoutRequest {
 
 #[derive(Deserialize)]
 pub struct ExtendSessionRequest {
+    pin: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct StopTerminalRequest {
     pin: Option<String>,
 }
 
@@ -440,10 +450,21 @@ impl UsageTracker {
     }
 }
 
-pub struct FailedLoginTracker {
-    by_client: HashMap<String, VecDeque<Instant>>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AuthAttemptBucket {
+    Credentials,
+    Pin,
+    ChallengePoll,
+}
+
+#[derive(Clone, Copy)]
+struct AuthAttemptPolicy {
     max_attempts: usize,
     window: Duration,
+}
+
+pub struct AuthAttemptTracker {
+    by_client: HashMap<(AuthAttemptBucket, String), VecDeque<Instant>>,
 }
 
 pub struct DashboardPendingLoginStore {
@@ -571,49 +592,79 @@ impl DashboardPendingLoginStore {
     }
 }
 
-impl FailedLoginTracker {
-    pub fn new(max_attempts: usize, window: Duration) -> Self {
+impl AuthAttemptTracker {
+    pub fn new() -> Self {
         Self {
             by_client: HashMap::new(),
-            max_attempts,
-            window,
         }
     }
 
-    fn purge_expired(&mut self, client: &str, now: Instant) {
-        let Some(queue) = self.by_client.get_mut(client) else {
+    fn policy(bucket: AuthAttemptBucket) -> AuthAttemptPolicy {
+        match bucket {
+            AuthAttemptBucket::Credentials => AuthAttemptPolicy {
+                max_attempts: CREDENTIAL_ATTEMPT_MAX,
+                window: Duration::from_secs(AUTH_ATTEMPT_WINDOW_SECS),
+            },
+            AuthAttemptBucket::Pin => AuthAttemptPolicy {
+                max_attempts: PIN_ATTEMPT_MAX,
+                window: Duration::from_secs(AUTH_ATTEMPT_WINDOW_SECS),
+            },
+            AuthAttemptBucket::ChallengePoll => AuthAttemptPolicy {
+                max_attempts: CHALLENGE_POLL_ATTEMPT_MAX,
+                window: Duration::from_secs(CHALLENGE_POLL_WINDOW_SECS),
+            },
+        }
+    }
+
+    fn purge_expired(&mut self, bucket: AuthAttemptBucket, client: &str, now: Instant) {
+        let key = (bucket, client.to_string());
+        let Some(queue) = self.by_client.get_mut(&key) else {
             return;
         };
+        let policy = Self::policy(bucket);
         while let Some(first) = queue.front() {
-            if now.duration_since(*first) >= self.window {
+            if now.duration_since(*first) >= policy.window {
                 queue.pop_front();
             } else {
                 break;
             }
         }
         if queue.is_empty() {
-            self.by_client.remove(client);
+            self.by_client.remove(&key);
         }
     }
 
-    pub fn retry_after(&mut self, client: &str, now: Instant) -> Option<Duration> {
-        self.purge_expired(client, now);
-        let queue = self.by_client.get(client)?;
-        if queue.len() < self.max_attempts {
+    fn retry_after(
+        &mut self,
+        bucket: AuthAttemptBucket,
+        client: &str,
+        now: Instant,
+    ) -> Option<Duration> {
+        self.purge_expired(bucket, client, now);
+        let key = (bucket, client.to_string());
+        let queue = self.by_client.get(&key)?;
+        let policy = Self::policy(bucket);
+        if queue.len() < policy.max_attempts {
             return None;
         }
         let earliest = *queue.front()?;
-        Some(self.window.saturating_sub(now.duration_since(earliest)))
+        Some(policy.window.saturating_sub(now.duration_since(earliest)))
     }
 
-    pub fn record_failure(&mut self, client: &str, now: Instant) {
-        self.purge_expired(client, now);
-        let queue = self.by_client.entry(client.to_string()).or_default();
+    fn record_attempt(&mut self, bucket: AuthAttemptBucket, client: &str, now: Instant) {
+        self.purge_expired(bucket, client, now);
+        let key = (bucket, client.to_string());
+        let queue = self.by_client.entry(key).or_default();
         queue.push_back(now);
     }
 
-    pub fn clear(&mut self, client: &str) {
-        self.by_client.remove(client);
+    fn clear_bucket(&mut self, bucket: AuthAttemptBucket, client: &str) {
+        self.by_client.remove(&(bucket, client.to_string()));
+    }
+
+    fn clear_login(&mut self, client: &str) {
+        self.clear_bucket(AuthAttemptBucket::Credentials, client);
+        self.clear_bucket(AuthAttemptBucket::Pin, client);
     }
 }
 
@@ -859,6 +910,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/auth/session", get(auth_session))
         .route("/auth/session/status", get(auth_session_status))
         .route("/auth/extend", post(auth_extend))
+        .route("/auth/stop-terminal", post(auth_stop_terminal))
         .route(
             "/auth/temp-links",
             get(list_temp_links).post(create_temp_link),
@@ -935,6 +987,9 @@ struct FleetChallengeStatusData {
 }
 
 async fn auth_dashboard_challenge(State(state): State<Arc<AppState>>) -> Response {
+    if *state.access_locked.lock().unwrap() {
+        return access_paused_response();
+    }
     let Some(cfg) = state.dashboard_auth.as_ref() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -978,8 +1033,12 @@ async fn auth_dashboard_challenge(State(state): State<Arc<AppState>>) -> Respons
 
 async fn auth_dashboard_challenge_status(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
+    if *state.access_locked.lock().unwrap() {
+        return access_paused_response();
+    }
     let Some(cfg) = state.dashboard_auth.as_ref() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -988,12 +1047,31 @@ async fn auth_dashboard_challenge_status(
             .into_response();
     };
     let now = Instant::now();
+    let client = client_key_from_headers(&headers);
+    let poll_client = format!("{client}:{id}");
+    {
+        let mut attempts = state.auth_attempts.lock().unwrap();
+        if let Some(wait) =
+            attempts.retry_after(AuthAttemptBucket::ChallengePoll, &poll_client, now)
+        {
+            return too_many_attempts_response(
+                wait,
+                "Too many approval checks. Wait a moment and try again.",
+            );
+        }
+        attempts.record_attempt(AuthAttemptBucket::ChallengePoll, &poll_client, now);
+    }
     if let Some(pending_login_id) = state
         .dashboard_pending_logins
         .lock()
         .unwrap()
         .get_by_challenge(&id, now)
     {
+        state
+            .auth_attempts
+            .lock()
+            .unwrap()
+            .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
         return Json(DashboardChallengeStatusResponse {
             status: "pin_required".to_string(),
             pending_login_id: Some(pending_login_id),
@@ -1023,6 +1101,11 @@ async fn auth_dashboard_challenge_status(
             StatusCode::FORBIDDEN => "denied",
             _ => "unavailable",
         };
+        state
+            .auth_attempts
+            .lock()
+            .unwrap()
+            .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
         return Json(DashboardChallengeStatusResponse {
             status: status.to_string(),
             pending_login_id: None,
@@ -1048,6 +1131,11 @@ async fn auth_dashboard_challenge_status(
             let redeem = redeem_dashboard_ticket(&state, ticket).await;
             let local_status = match redeem {
                 DashboardTicketRedeemResult::Approved => {
+                    state
+                        .auth_attempts
+                        .lock()
+                        .unwrap()
+                        .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
                     let pending_login_id = state
                         .dashboard_pending_logins
                         .lock()
@@ -1063,32 +1151,58 @@ async fn auth_dashboard_challenge_status(
                 DashboardTicketRedeemResult::Denied => "denied",
                 DashboardTicketRedeemResult::Unavailable => "unavailable",
             };
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
             Json(DashboardChallengeStatusResponse {
                 status: local_status.to_string(),
                 pending_login_id: None,
             })
             .into_response()
         }
-        "expired" => Json(DashboardChallengeStatusResponse {
-            status: "expired".to_string(),
-            pending_login_id: None,
-        })
-        .into_response(),
-        "denied" | "rejected" | "revoked" => Json(DashboardChallengeStatusResponse {
-            status: "denied".to_string(),
-            pending_login_id: None,
-        })
-        .into_response(),
+        "expired" => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+            Json(DashboardChallengeStatusResponse {
+                status: "expired".to_string(),
+                pending_login_id: None,
+            })
+            .into_response()
+        }
+        "denied" | "rejected" | "revoked" => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+            Json(DashboardChallengeStatusResponse {
+                status: "denied".to_string(),
+                pending_login_id: None,
+            })
+            .into_response()
+        }
         "pending" | "waiting" | "created" => Json(DashboardChallengeStatusResponse {
             status: "pending".to_string(),
             pending_login_id: None,
         })
         .into_response(),
-        _ => Json(DashboardChallengeStatusResponse {
-            status: "unavailable".to_string(),
-            pending_login_id: None,
-        })
-        .into_response(),
+        _ => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+            Json(DashboardChallengeStatusResponse {
+                status: "unavailable".to_string(),
+                pending_login_id: None,
+            })
+            .into_response()
+        }
     }
 }
 
@@ -1098,29 +1212,22 @@ async fn auth_login(
     Json(req): Json<LoginRequest>,
 ) -> Response {
     if *state.access_locked.lock().unwrap() {
-        return (
-            StatusCode::LOCKED,
-            "Access is locked. Restart CodeWebway to enable login again.",
-        )
-            .into_response();
+        return access_paused_response();
     }
 
     let now = Instant::now();
     let client = client_key_from_headers(&headers);
-    {
-        let mut limiter = state.failed_logins.lock().unwrap();
-        if let Some(wait) = limiter.retry_after(&client, now) {
-            let wait_seconds = wait.as_secs().max(1).to_string();
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, wait_seconds)],
-                "Too many failed login attempts. Try again later.",
-            )
-                .into_response();
-        }
-    }
 
     if let Some(pending_login_id) = req.dashboard_pending_login_id.as_deref() {
+        {
+            let mut attempts = state.auth_attempts.lock().unwrap();
+            if let Some(wait) = attempts.retry_after(AuthAttemptBucket::Pin, &client, now) {
+                return too_many_attempts_response(
+                    wait,
+                    "Too many PIN attempts. Wait a moment and try again.",
+                );
+            }
+        }
         let pending_valid = state
             .dashboard_pending_logins
             .lock()
@@ -1140,19 +1247,13 @@ async fn auth_login(
                 .lock()
                 .unwrap()
                 .record_pin_failure(pending_login_id, now);
-            let mut limiter = state.failed_logins.lock().unwrap();
-            limiter.record_failure(&client, now);
-            if let Some(wait) = limiter.retry_after(&client, now) {
-                let wait_seconds = wait.as_secs().max(1).to_string();
-                return (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    [(header::RETRY_AFTER, wait_seconds)],
-                    axum::Json(ApiErrorResponse {
-                        code: "too_many_attempts".to_string(),
-                        message: "Too many failed login attempts. Try again later.".to_string(),
-                    }),
-                )
-                    .into_response();
+            let mut attempts = state.auth_attempts.lock().unwrap();
+            attempts.record_attempt(AuthAttemptBucket::Pin, &client, now);
+            if let Some(wait) = attempts.retry_after(AuthAttemptBucket::Pin, &client, now) {
+                return too_many_attempts_response(
+                    wait,
+                    "Too many PIN attempts. Wait a moment and try again.",
+                );
             }
             if !still_valid {
                 return api_error(
@@ -1181,8 +1282,7 @@ async fn auth_login(
             );
         }
 
-        let mut limiter = state.failed_logins.lock().unwrap();
-        limiter.clear(&client);
+        state.auth_attempts.lock().unwrap().clear_login(&client);
         let mut sessions = state.sessions.lock().unwrap();
         let session_token = sessions.create(now);
         bump_shutdown_deadline_from_activity(&state, now);
@@ -1199,30 +1299,52 @@ async fn auth_login(
     let dashboard_ok = verify_dashboard_ticket(&state, req.dashboard_ticket.as_deref()).await
         || verify_dashboard_token(&state, req.dashboard_token.as_deref()).await;
     let pin_ok = verify_pin(req.pin.as_deref(), state.pin.as_deref());
+    let auth_factor_ok = password_ok || sso_ok || dashboard_ok;
 
-    if (password_ok || sso_ok || dashboard_ok) && pin_ok {
-        let mut limiter = state.failed_logins.lock().unwrap();
-        limiter.clear(&client);
+    {
+        let mut attempts = state.auth_attempts.lock().unwrap();
+        if let Some(wait) = attempts.retry_after(AuthAttemptBucket::Credentials, &client, now) {
+            return too_many_attempts_response(
+                wait,
+                "Too many sign-in attempts. Wait a moment and try again.",
+            );
+        }
+        if auth_factor_ok {
+            if let Some(wait) = attempts.retry_after(AuthAttemptBucket::Pin, &client, now) {
+                return too_many_attempts_response(
+                    wait,
+                    "Too many PIN attempts. Wait a moment and try again.",
+                );
+            }
+        }
+    }
+
+    if auth_factor_ok && pin_ok {
+        state.auth_attempts.lock().unwrap().clear_login(&client);
         let mut sessions = state.sessions.lock().unwrap();
         let session_token = sessions.create(now);
         bump_shutdown_deadline_from_activity(&state, now);
         let set_cookie = session_cookie_header(&session_token);
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
-    let mut limiter = state.failed_logins.lock().unwrap();
-    limiter.record_failure(&client, now);
 
-    if let Some(wait) = limiter.retry_after(&client, now) {
-        let wait_seconds = wait.as_secs().max(1).to_string();
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, wait_seconds)],
-            axum::Json(ApiErrorResponse {
-                code: "too_many_attempts".to_string(),
-                message: "Too many failed login attempts. Try again later.".to_string(),
-            }),
-        )
-            .into_response();
+    let bucket = if auth_factor_ok {
+        AuthAttemptBucket::Pin
+    } else {
+        AuthAttemptBucket::Credentials
+    };
+    let wait = {
+        let mut attempts = state.auth_attempts.lock().unwrap();
+        attempts.record_attempt(bucket, &client, now);
+        attempts.retry_after(bucket, &client, now)
+    };
+    if let Some(wait) = wait {
+        let message = if bucket == AuthAttemptBucket::Pin {
+            "Too many PIN attempts. Wait a moment and try again."
+        } else {
+            "Too many sign-in attempts. Wait a moment and try again."
+        };
+        return too_many_attempts_response(wait, message);
     }
     let (code, message) = if req.sso_ticket.as_deref().is_some() {
         ("invalid_sso_or_pin", "Invalid sign-in link or machine PIN.")
@@ -1244,6 +1366,27 @@ fn api_error(status: StatusCode, code: &str, message: &str) -> Response {
         }),
     )
         .into_response()
+}
+
+fn too_many_attempts_response(wait: Duration, message: &str) -> Response {
+    let wait_seconds = wait.as_secs().max(1).to_string();
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, wait_seconds)],
+        axum::Json(ApiErrorResponse {
+            code: "too_many_attempts".to_string(),
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn access_paused_response() -> Response {
+    api_error(
+        StatusCode::LOCKED,
+        "access_paused",
+        "Sign-in is paused on this host. Restart CodeWebway to allow new sign-ins.",
+    )
 }
 
 async fn auth_session(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
@@ -1317,6 +1460,43 @@ async fn auth_extend(
     (
         StatusCode::OK,
         [(header::SET_COOKIE, session_cookie_header(&session_token))],
+        "OK",
+    )
+        .into_response()
+}
+
+async fn auth_stop_terminal(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<StopTerminalRequest>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, false) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if !verify_pin(req.pin.as_deref(), state.pin.as_deref()) {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "pin_invalid",
+            "Incorrect machine PIN.",
+        );
+    }
+    let now = Instant::now();
+    if !state.sessions.lock().unwrap().is_valid(&session_token, now) {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    state.sessions.lock().unwrap().revoke_all();
+    state.temp_grants.lock().unwrap().clear();
+    state.temp_links.lock().unwrap().revoke_all(unix_now());
+    state.terminals.lock().unwrap().remove_all();
+    let _ = state.shutdown_tx.send(());
+
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            "codewebway_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0".to_string(),
+        )],
         "OK",
     )
         .into_response()
@@ -1492,7 +1672,7 @@ async fn redeem_temp_link(
     if *state.access_locked.lock().unwrap() {
         return (
             StatusCode::LOCKED,
-            "Access is locked. Restart CodeWebway to enable login again.",
+            "Sign-in is paused on this host. Restart CodeWebway to allow new sign-ins.",
         )
             .into_response();
     }
@@ -2263,6 +2443,15 @@ fn parse_query_bool(value: Option<&str>) -> bool {
 }
 
 fn client_key_from_headers(headers: &HeaderMap) -> String {
+    if let Some(cf_connecting_ip) = headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+    {
+        let trimmed = cf_connecting_ip.trim();
+        if !trimmed.is_empty() {
+            return format!("ip:{trimmed}");
+        }
+    }
     if let Some(forwarded) = headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
@@ -2270,7 +2459,7 @@ fn client_key_from_headers(headers: &HeaderMap) -> String {
         if let Some(client) = forwarded.split(',').next() {
             let trimmed = client.trim();
             if !trimmed.is_empty() {
-                return trimmed.to_string();
+                return format!("ip:{trimmed}");
             }
         }
     }
@@ -2280,10 +2469,29 @@ fn client_key_from_headers(headers: &HeaderMap) -> String {
     {
         let trimmed = real_ip.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_string();
+            return format!("ip:{trimmed}");
         }
     }
-    "unknown".to_string()
+
+    let mut fingerprint_parts = Vec::new();
+    for header_name in [
+        "user-agent",
+        "sec-ch-ua-platform",
+        "accept-language",
+        "host",
+    ] {
+        if let Some(value) = headers.get(header_name).and_then(|v| v.to_str().ok()) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                fingerprint_parts.push(trimmed);
+            }
+        }
+    }
+    if fingerprint_parts.is_empty() {
+        return "client:anonymous".to_string();
+    }
+    let digest = hash_bytes_hex(fingerprint_parts.join("|").as_bytes());
+    format!("fp:{}", &digest[..16])
 }
 
 fn is_allowed_origin(headers: &HeaderMap) -> bool {
@@ -2710,22 +2918,36 @@ mod tests {
     }
 
     #[test]
-    fn test_failed_login_tracker_blocks_after_limit() {
-        let mut tracker = FailedLoginTracker::new(3, Duration::from_secs(300));
+    fn test_auth_attempt_tracker_separates_buckets() {
+        let mut tracker = AuthAttemptTracker::new();
         let now = Instant::now();
-        tracker.record_failure("1.2.3.4", now);
-        tracker.record_failure("1.2.3.4", now);
-        assert_eq!(tracker.retry_after("1.2.3.4", now), None);
-
-        tracker.record_failure("1.2.3.4", now);
-        assert!(tracker.retry_after("1.2.3.4", now).is_some());
+        for _ in 0..CREDENTIAL_ATTEMPT_MAX {
+            tracker.record_attempt(AuthAttemptBucket::Credentials, "ip:1.2.3.4", now);
+        }
+        assert!(tracker
+            .retry_after(AuthAttemptBucket::Credentials, "ip:1.2.3.4", now)
+            .is_some());
+        assert_eq!(
+            tracker.retry_after(AuthAttemptBucket::Pin, "ip:1.2.3.4", now),
+            None
+        );
     }
 
     #[test]
     fn test_client_key_from_forwarded_for() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "203.0.113.8, 10.0.0.1".parse().unwrap());
-        assert_eq!(client_key_from_headers(&headers), "203.0.113.8");
+        assert_eq!(client_key_from_headers(&headers), "ip:203.0.113.8");
+    }
+
+    #[test]
+    fn test_client_key_from_headers_uses_fingerprint_without_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "Mozilla/5.0".parse().unwrap());
+        headers.insert("accept-language", "en-US".parse().unwrap());
+        let key = client_key_from_headers(&headers);
+        assert!(key.starts_with("fp:"));
+        assert_ne!(key, "client:anonymous");
     }
 
     #[test]
@@ -2958,7 +3180,7 @@ mod tests {
         Arc::new(AppState {
             password: "token".to_string(),
             pin: None,
-            failed_logins: Mutex::new(FailedLoginTracker::new(3, Duration::from_secs(300))),
+            auth_attempts: Mutex::new(AuthAttemptTracker::new()),
             sessions: Mutex::new(SessionStore::new(
                 Duration::from_secs(1800),
                 Duration::from_secs(43200),
@@ -2991,6 +3213,48 @@ mod tests {
         })
     }
 
+    fn make_state_with_pin_and_shutdown(
+        pin: Option<String>,
+    ) -> (Arc<AppState>, tokio::sync::mpsc::UnboundedReceiver<()>) {
+        use std::time::{Duration, Instant};
+        let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let state = Arc::new(AppState {
+            password: "token".to_string(),
+            pin,
+            auth_attempts: Mutex::new(AuthAttemptTracker::new()),
+            sessions: Mutex::new(SessionStore::new(
+                Duration::from_secs(1800),
+                Duration::from_secs(43200),
+            )),
+            access_locked: Mutex::new(false),
+            terminals: Mutex::new(TerminalManager::new(8)),
+            default_shell: "/bin/sh".to_string(),
+            root_dir: std::env::temp_dir(),
+            scrollback: 131072,
+            usage: Mutex::new(UsageTracker::new()),
+            ws_connections: Mutex::new(0),
+            max_ws_connections: 8,
+            idle_timeout: Duration::from_secs(1800),
+            shutdown_grace: Duration::from_secs(10800),
+            warning_window: Duration::from_secs(120),
+            shutdown_deadline: Mutex::new(Instant::now() + Duration::from_secs(10800)),
+            shutdown_tx,
+            temp_links: Mutex::new(TempLinkStore::new()),
+            temp_grants: Mutex::new(std::collections::HashMap::new()),
+            dashboard_pending_logins: Mutex::new(DashboardPendingLoginStore::new(
+                Duration::from_secs(DASHBOARD_PENDING_LOGIN_TTL_SECS),
+                DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS,
+            )),
+            temp_link_signing_key: "signingkey123456789012345678901234567890123456".to_string(),
+            auto_shutdown_disabled: false,
+            terminal_only: false,
+            sso_shared_secret: None,
+            used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
+            dashboard_auth: None,
+        });
+        (state, shutdown_rx)
+    }
+
     #[tokio::test]
     async fn test_capabilities_terminal_only_false() {
         use axum::{body::Body, http::Request};
@@ -3005,6 +3269,66 @@ mod tests {
         let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["terminal_only"], false);
+    }
+
+    #[tokio::test]
+    async fn test_stop_terminal_requires_valid_pin_and_does_not_pause_sign_in() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+
+        let (state, mut shutdown_rx) = make_state_with_pin_and_shutdown(Some("4321".to_string()));
+        let session_token = state.sessions.lock().unwrap().create(Instant::now());
+        let app = router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/auth/stop-terminal")
+            .header(
+                header::COOKIE,
+                format!("codewebway_session={session_token}"),
+            )
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"pin":"4321"}"#))
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(shutdown_rx.try_recv().is_ok());
+        assert!(!*state.access_locked.lock().unwrap());
+        assert!(!state
+            .sessions
+            .lock()
+            .unwrap()
+            .is_valid(&session_token, Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn test_stop_terminal_rejects_wrong_pin() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+
+        let (state, mut shutdown_rx) = make_state_with_pin_and_shutdown(Some("4321".to_string()));
+        let session_token = state.sessions.lock().unwrap().create(Instant::now());
+        let app = router(state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/auth/stop-terminal")
+            .header(
+                header::COOKIE,
+                format!("codewebway_session={session_token}"),
+            )
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"pin":"0000"}"#))
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        assert!(shutdown_rx.try_recv().is_err());
+        assert!(!*state.access_locked.lock().unwrap());
+        assert!(state
+            .sessions
+            .lock()
+            .unwrap()
+            .is_valid(&session_token, Instant::now()));
     }
 
     #[tokio::test]

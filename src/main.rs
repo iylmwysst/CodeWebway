@@ -17,7 +17,7 @@ use config::Config;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use server::AppState;
-use server::FailedLoginTracker;
+use server::AuthAttemptTracker;
 use server::TempLinkScope;
 use server::TerminalManager;
 use tokio::sync::mpsc;
@@ -476,7 +476,7 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
     let state = AppState {
         password: token.clone(),
         pin: Some(pin.clone()),
-        failed_logins: Mutex::new(FailedLoginTracker::new(3, Duration::from_secs(300))),
+        auth_attempts: Mutex::new(AuthAttemptTracker::new()),
         sessions: Mutex::new(server::SessionStore::new(idle_timeout, absolute_timeout)),
         access_locked: Mutex::new(false),
         terminals: Mutex::new(TerminalManager::new(8)),

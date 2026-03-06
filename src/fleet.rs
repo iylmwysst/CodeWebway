@@ -351,8 +351,15 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     }
                     Ok(handle) => {
                         let url = handle.zrok_url.as_deref().unwrap_or("no-url");
-                        // Do not persist session token in API execution logs.
-                        let output = url.to_string();
+                        // Report the runtime token via structured payload so the dashboard
+                        // can expose fallback token login without writing secrets to logs.
+                        let output = serde_json::json!({
+                            "kind": "codewebway_runtime",
+                            "url": url,
+                            "access_token": handle.token,
+                            "access_token_ttl_secs": 12 * 60 * 60,
+                        })
+                        .to_string();
                         state.status = "running".to_string();
                         state.active_url = handle.zrok_url.clone();
                         state.last_d1_write =

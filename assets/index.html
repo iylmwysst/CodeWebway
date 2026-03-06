@@ -195,12 +195,49 @@
       border-color: #4f4f4f;
       color: #ddd;
     }
-    #error { color: #ff8a80; margin-top: 10px; min-height: 20px; font-size: 13px; }
-    #login-note {
-      color: #f4c36a;
-      margin-top: 8px;
-      min-height: 18px;
+    #error {
+      color: #ff8a80;
+      margin-top: 10px;
+      min-height: 20px;
+      font-size: 13px;
+    }
+    .login-status-card {
+      display: none;
+      margin-top: 12px;
+      border: 1px solid #343434;
+      border-radius: 10px;
+      padding: 12px 13px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .login-status-card[data-tone="neutral"] {
+      border-color: #31414a;
+      background: rgba(72, 107, 126, 0.12);
+    }
+    .login-status-card[data-tone="warning"] {
+      border-color: #70551b;
+      background: rgba(121, 92, 18, 0.18);
+    }
+    .login-status-card[data-tone="error"] {
+      border-color: #6f2f3b;
+      background: rgba(112, 36, 48, 0.2);
+    }
+    .login-status-card .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #aab6c2;
+      margin-bottom: 5px;
+    }
+    .login-status-card[data-tone="warning"] .eyebrow {
+      color: #f1c976;
+    }
+    .login-status-card[data-tone="error"] .eyebrow {
+      color: #ffb1a8;
+    }
+    .login-status-card .copy {
+      color: #d6d6d6;
       font-size: 12px;
+      line-height: 1.45;
     }
 
     #app { display: none; height: var(--app-height); flex-direction: column; }
@@ -486,6 +523,12 @@
       font-size: 13px;
       margin-bottom: 12px;
     }
+    #pin-modal-error {
+      min-height: 18px;
+      margin-top: 8px;
+      color: #ff8a80;
+      font-size: 12px;
+    }
     .modal-actions {
       display: flex;
       gap: 8px;
@@ -727,7 +770,14 @@
         </div>
       </div>
       <div id="error"></div>
-      <div id="login-note"></div>
+      <div id="login-feedback" class="login-status-card" data-tone="warning">
+        <div id="login-feedback-title" class="eyebrow"></div>
+        <div id="login-feedback-text" class="copy"></div>
+      </div>
+      <div id="login-meta" class="login-status-card" data-tone="neutral">
+        <div id="login-meta-title" class="eyebrow"></div>
+        <div id="login-meta-text" class="copy"></div>
+      </div>
     </form>
   </div>
 
@@ -788,12 +838,12 @@
 
   <div id="logout-modal" role="dialog" aria-modal="true" aria-labelledby="logout-title">
     <div class="modal-card">
-      <h3 id="logout-title">Logout options</h3>
-      <p>Choose whether to logout only, or lockout and shutdown the server now.</p>
+      <h3 id="logout-title">Session actions</h3>
+      <p>Choose whether to sign out from this session or stop the terminal for everyone currently connected.</p>
       <div class="modal-actions">
         <button id="logout-cancel" class="ghost" type="button">Cancel</button>
-        <button id="logout-only" class="ghost" type="button">Logout only</button>
-        <button id="logout-lock" class="ghost" type="button">Lockout + Shutdown</button>
+        <button id="logout-only" class="ghost" type="button">Sign out</button>
+        <button id="logout-lock" class="ghost" type="button">Stop Terminal</button>
       </div>
     </div>
   </div>
@@ -834,8 +884,9 @@
   <div id="pin-modal" role="dialog" aria-modal="true" aria-labelledby="pin-modal-title">
     <div class="modal-card">
       <h3 id="pin-modal-title">Confirm PIN</h3>
-      <p>Enter your PIN to extend this session.</p>
+      <p id="pin-modal-copy">Enter your PIN to extend this session.</p>
       <input id="pin-modal-input" type="password" autocomplete="one-time-code" placeholder="PIN" />
+      <div id="pin-modal-error"></div>
       <div class="pin-keypad" id="pin-keypad-modal">
         <button type="button" data-pin-key="1">1</button>
         <button type="button" data-pin-key="2">2</button>
@@ -882,7 +933,12 @@
     const dashboardContinueBtn = document.getElementById('dashboard-continue');
     const submitBtn = document.getElementById('submit');
     const errorEl = document.getElementById('error');
-    const loginNoteEl = document.getElementById('login-note');
+    const loginFeedbackEl = document.getElementById('login-feedback');
+    const loginFeedbackTitleEl = document.getElementById('login-feedback-title');
+    const loginFeedbackTextEl = document.getElementById('login-feedback-text');
+    const loginMetaEl = document.getElementById('login-meta');
+    const loginMetaTitleEl = document.getElementById('login-meta-title');
+    const loginMetaTextEl = document.getElementById('login-meta-text');
     const statusEl = document.getElementById('status');
     const usageEl = document.getElementById('usage');
     const shareBtn = document.getElementById('share');
@@ -914,7 +970,9 @@
     const shareModal = document.getElementById('share-modal');
     const shareCloseBtn = document.getElementById('share-close');
     const pinModal = document.getElementById('pin-modal');
+    const pinModalCopyEl = document.getElementById('pin-modal-copy');
     const pinModalInput = document.getElementById('pin-modal-input');
+    const pinModalErrorEl = document.getElementById('pin-modal-error');
     const pinModalKeypad = document.getElementById('pin-keypad-modal');
     const pinModalCancelBtn = document.getElementById('pin-modal-cancel');
     const pinModalConfirmBtn = document.getElementById('pin-modal-confirm');
@@ -991,6 +1049,73 @@
       statusEl.style.color = color || '#c8c8c8';
     }
 
+    function clearLoginFeedback() {
+      loginFeedbackEl.style.display = 'none';
+      loginFeedbackEl.dataset.tone = 'warning';
+      loginFeedbackTitleEl.textContent = '';
+      loginFeedbackTextEl.textContent = '';
+    }
+
+    function showLoginFeedback(tone, title, text) {
+      errorEl.textContent = '';
+      loginFeedbackEl.dataset.tone = tone || 'warning';
+      loginFeedbackTitleEl.textContent = title || '';
+      loginFeedbackTextEl.textContent = text || '';
+      loginFeedbackEl.style.display = (title || text) ? 'block' : 'none';
+    }
+
+    function setLoginMeta(tone, title, text) {
+      loginMetaEl.dataset.tone = tone || 'neutral';
+      loginMetaTitleEl.textContent = title || '';
+      loginMetaTextEl.textContent = text || '';
+      loginMetaEl.style.display = (title || text) ? 'block' : 'none';
+    }
+
+    function showInlineError(message) {
+      clearLoginFeedback();
+      errorEl.textContent = message || '';
+    }
+
+    function showAccessPausedState(message) {
+      showLoginFeedback(
+        'warning',
+        'Sign-in paused',
+        message || 'This host is not accepting new sign-ins right now. Restart CodeWebway to allow access again.'
+      );
+    }
+
+    function showTooManyAttemptsState(message) {
+      showLoginFeedback(
+        'warning',
+        'Too many attempts',
+        message || 'Wait a moment before trying again.'
+      );
+    }
+
+    function showApprovalExpiredState(message) {
+      showLoginFeedback(
+        'warning',
+        'Approval expired',
+        message || 'Continue again to verify your account, then enter the machine PIN.'
+      );
+    }
+
+    function showAccessDeniedState(message) {
+      showLoginFeedback(
+        'error',
+        'This account does not have access',
+        message || 'Try another account or switch to access token login.'
+      );
+    }
+
+    function showServiceUnavailableState(message) {
+      showLoginFeedback(
+        'warning',
+        'Service unavailable',
+        message || 'We could not reach the sign-in service right now. Try again in a moment.'
+      );
+    }
+
     function bindPinKeypad(keypadEl, inputEl) {
       if (!keypadEl || !inputEl) return;
       keypadEl.addEventListener('click', (e) => {
@@ -1009,7 +1134,13 @@
       });
     }
 
-    function requestPinWithKeypad() {
+    function requestPinWithKeypad(options = {}) {
+      const {
+        title = 'Confirm PIN',
+        message = 'Enter your PIN to extend this session.',
+        confirmLabel = 'Confirm',
+        errorText = ''
+      } = options;
       return new Promise((resolve) => {
         const close = (value) => {
           pinModal.classList.remove('open');
@@ -1020,6 +1151,10 @@
           resolve(value);
         };
 
+        document.getElementById('pin-modal-title').textContent = title;
+        pinModalCopyEl.textContent = message;
+        pinModalConfirmBtn.textContent = confirmLabel;
+        pinModalErrorEl.textContent = errorText;
         pinModalInput.value = '';
         pinModalConfirmBtn.onclick = () => close(pinModalInput.value.trim());
         pinModalCancelBtn.onclick = () => close(null);
@@ -1110,7 +1245,7 @@
       updateEditorActionState();
     }
 
-    function chooseLogoutMode() {
+    function choosePowerAction() {
       return new Promise((resolve) => {
         const close = (value) => {
           logoutModal.classList.remove('open');
@@ -1121,8 +1256,8 @@
           resolve(value);
         };
 
-        logoutOnlyBtn.onclick = () => close(false);
-        logoutLockBtn.onclick = () => close(true);
+        logoutOnlyBtn.onclick = () => close('logout');
+        logoutLockBtn.onclick = () => close('stop');
         logoutCancelBtn.onclick = () => close(null);
         logoutModal.onclick = (e) => {
           if (e.target === logoutModal) close(null);
@@ -1274,17 +1409,33 @@
       }
     }
 
-    async function refreshLoginNote() {
+    async function refreshLoginMeta() {
       const status = await fetchPublicStatus();
       if (!status) return;
       ssoEnabled = status.sso_enabled === true;
       dashboardLoginEnabled = status.dashboard_login_enabled === true;
       updateLoginFormMode();
-      if (status.auto_shutdown_disabled === true) {
-        loginNoteEl.textContent = 'No login activity: auto-shutdown disabled (public no-expiry; lockout + shutdown only).';
+      if (status.access_locked === true) {
+        setLoginMeta(
+          'warning',
+          'Host status',
+          'New sign-ins are paused on this host until CodeWebway is restarted.'
+        );
         return;
       }
-      loginNoteEl.textContent = `No login activity: auto-shutdown in ${formatSeconds(status.shutdown_remaining_secs)}.`;
+      if (status.auto_shutdown_disabled === true) {
+        setLoginMeta(
+          'neutral',
+          'Idle policy',
+          'This host stays online until you close it manually.'
+        );
+        return;
+      }
+      setLoginMeta(
+        'neutral',
+        'Idle policy',
+        `This host stops after ${formatSeconds(status.shutdown_remaining_secs)} without sign-in activity.`
+      );
     }
 
     function updateLoginFormMode() {
@@ -1415,10 +1566,10 @@
         publicTimer = null;
       }
       if (enabled) {
-        refreshLoginNote();
-        publicTimer = setInterval(refreshLoginNote, 15000);
+        refreshLoginMeta();
+        publicTimer = setInterval(refreshLoginMeta, 15000);
       } else {
-        loginNoteEl.textContent = '';
+        setLoginMeta('', '', '');
       }
     }
 
@@ -1496,12 +1647,14 @@
       passwordInput.value = '';
       pinInput.value = '';
       primaryPinInput.value = '';
+      errorEl.textContent = '';
+      clearLoginFeedback();
       clearDashboardFlowState();
       resetPrimaryLoginState();
       setTokenMethodVisible(false);
       updateLoginFormMode();
       if (message) {
-        errorEl.textContent = message;
+        showInlineError(message);
       }
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
@@ -1608,7 +1761,7 @@
           return;
         }
         if (loggingOut) {
-          const notice = logoutNotice || 'Logged out.';
+          const notice = logoutNotice || 'Signed out.';
           loggingOut = false;
           logoutNotice = '';
           showLogin(notice);
@@ -1671,7 +1824,11 @@
 
     async function startDashboardChallenge() {
       const res = await api('/auth/dashboard/challenge', { method: 'POST' });
-      if (!res.ok) throw new Error('challenge_failed');
+      if (!res.ok) {
+        const problem = await readApiError(res);
+        const code = problem?.code || (res.status === 423 ? 'access_paused' : 'challenge_failed');
+        throw new Error(code);
+      }
       return res.json();
     }
 
@@ -1687,6 +1844,8 @@
         const res = await api(`/auth/dashboard/challenge/${encodeURIComponent(challengeId)}`, {
           method: 'GET'
         });
+        if (res.status === 423) throw new Error('access_paused');
+        if (res.status === 429) throw new Error('challenge_rate_limited');
         if (!res.ok) {
           unavailableCount += 1;
           if (unavailableCount >= 3) throw new Error('challenge_unavailable');
@@ -1742,10 +1901,12 @@
       dashboardLoginBtn.disabled = true;
       submitBtn.disabled = true;
       errorEl.textContent = '';
+      clearLoginFeedback();
       try {
         const pendingLoginId = await pollDashboardChallenge(challengeId);
         showDashboardPinStep(pendingLoginId);
         errorEl.textContent = '';
+        clearLoginFeedback();
         clearDashboardFlowState();
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete('dashboard_challenge');
@@ -1758,15 +1919,19 @@
         dashboardFlowBusy = false;
         resetPrimaryLoginState();
         if (err instanceof Error && err.message === 'challenge_expired') {
-          errorEl.textContent = 'This sign-in expired. Continue again.';
+          showApprovalExpiredState();
         } else if (err instanceof Error && err.message === 'challenge_denied') {
-          errorEl.textContent = 'This account does not have access to this machine.';
+          showAccessDeniedState();
+        } else if (err instanceof Error && err.message === 'challenge_rate_limited') {
+          showTooManyAttemptsState('Too many approval checks. Wait a moment before trying again.');
+        } else if (err instanceof Error && err.message === 'access_paused') {
+          showAccessPausedState();
         } else if (err instanceof Error && err.message === 'challenge_unavailable') {
-          errorEl.textContent = 'Cannot reach account approval right now. Try again.';
+          showServiceUnavailableState();
         } else if (err instanceof Error && err.message === 'challenge_timeout') {
-          errorEl.textContent = 'Approval timed out. Continue again.';
+          showApprovalExpiredState('Approval took too long. Continue again to verify your account.');
         } else {
-          errorEl.textContent = 'Cannot finish sign-in right now. Try again.';
+          showServiceUnavailableState('Cannot finish sign-in right now. Try again in a moment.');
         }
         return false;
       } finally {
@@ -1781,6 +1946,14 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ revoke_all: revokeAll })
+      });
+    }
+
+    async function stopTerminal(pin) {
+      return api('/auth/stop-terminal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin })
       });
     }
 
@@ -2290,6 +2463,7 @@
       const password = passwordInput.value.trim();
       const pin = pinInput.value.trim() || null;
       errorEl.textContent = '';
+      clearLoginFeedback();
       submitBtn.disabled = true;
 
       try {
@@ -2297,19 +2471,19 @@
         if (!res.ok) {
           const problem = await readApiError(res);
           if (res.status === 423) {
-            errorEl.textContent = problem?.message || 'Access locked. Restart CodeWebway to login again.';
+            showAccessPausedState(problem?.message);
           } else if (res.status === 429) {
-            errorEl.textContent = problem?.message || 'Too many attempts. Try again later.';
+            showTooManyAttemptsState(problem?.message);
           } else {
-            errorEl.textContent = problem?.message || (ssoTicket
+            showInlineError(problem?.message || (ssoTicket
               ? 'Invalid sign-in link or machine PIN.'
-              : 'Incorrect access token or machine PIN.');
+              : 'Incorrect access token or machine PIN.'));
           }
           submitBtn.disabled = false;
           return;
         }
       } catch {
-        errorEl.textContent = 'Cannot reach server';
+        showServiceUnavailableState('Cannot reach this host right now. Try again in a moment.');
         submitBtn.disabled = false;
         return;
       }
@@ -2319,14 +2493,21 @@
     });
 
     showTokenMethodBtn.addEventListener('click', () => {
+      errorEl.textContent = '';
+      clearLoginFeedback();
       setTokenMethodVisible(!tokenMethodVisible);
     });
     if (hideTokenMethodBtn) {
-      hideTokenMethodBtn.addEventListener('click', () => setTokenMethodVisible(false));
+      hideTokenMethodBtn.addEventListener('click', () => {
+        errorEl.textContent = '';
+        clearLoginFeedback();
+        setTokenMethodVisible(false);
+      });
     }
 
     dashboardLoginBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
+      clearLoginFeedback();
       dashboardLoginBtn.disabled = true;
       submitBtn.disabled = true;
       try {
@@ -2341,7 +2522,11 @@
         window.location.assign(approveUrl.toString());
         return;
       } catch (err) {
-        errorEl.textContent = 'Cannot start sign-in right now. Try again.';
+        if (err instanceof Error && err.message === 'access_paused') {
+          showAccessPausedState();
+        } else {
+          showServiceUnavailableState('Cannot start sign-in right now. Try again in a moment.');
+        }
       } finally {
         dashboardLoginBtn.disabled = false;
         submitBtn.disabled = false;
@@ -2350,16 +2535,17 @@
 
     dashboardContinueBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
+      clearLoginFeedback();
       if (!pendingDashboardLoginId) {
         const resumed = await resumeDashboardRedirectFlow();
         if (!resumed || !pendingDashboardLoginId) {
-          errorEl.textContent = 'Continue with your account first.';
+          showInlineError('Continue with your account first.');
           return;
         }
       }
       const pin = primaryPinInput.value.trim();
       if (!pin) {
-        errorEl.textContent = 'Machine PIN is required.';
+        showInlineError('Machine PIN is required.');
         return;
       }
       dashboardContinueBtn.disabled = true;
@@ -2369,16 +2555,16 @@
         if (!res.ok) {
           const problem = await readApiError(res);
           if (res.status === 423) {
-            errorEl.textContent = problem?.message || 'Access locked. Restart CodeWebway to login again.';
+            showAccessPausedState(problem?.message);
           } else if (res.status === 429) {
-            errorEl.textContent = problem?.message || 'Too many attempts. Try again later.';
+            showTooManyAttemptsState(problem?.message);
           } else if (problem?.code === 'approval_expired') {
             resetPrimaryLoginState();
-            errorEl.textContent = problem.message || 'This sign-in expired. Continue again.';
+            showApprovalExpiredState(problem.message);
           } else if (problem?.code === 'pin_invalid') {
-            errorEl.textContent = problem.message || 'Incorrect machine PIN.';
+            showInlineError(problem.message || 'Incorrect machine PIN.');
           } else {
-            errorEl.textContent = problem?.message || 'Cannot complete sign-in right now. Try again.';
+            showServiceUnavailableState(problem?.message || 'Cannot complete sign-in right now. Try again in a moment.');
           }
           return;
         }
@@ -2387,7 +2573,7 @@
         resetPrimaryLoginState();
         await bootstrapWorkspace();
       } catch {
-        errorEl.textContent = 'Cannot complete sign-in right now. Try again.';
+        showServiceUnavailableState('Cannot complete sign-in right now. Try again in a moment.');
       } finally {
         dashboardContinueBtn.disabled = false;
         submitBtn.disabled = false;
@@ -2397,6 +2583,8 @@
     dashboardPinBackBtn.addEventListener('click', () => {
       clearDashboardFlowState();
       resetPrimaryLoginState();
+      errorEl.textContent = '';
+      clearLoginFeedback();
     });
 
     primaryPinInput.addEventListener('keydown', (e) => {
@@ -2545,14 +2733,41 @@
     });
 
     logoutBtn.addEventListener('click', async () => {
-      const lockSystem = await chooseLogoutMode();
-      if (lockSystem === null) return;
-      loggingOut = true;
-      logoutNotice = lockSystem
-        ? 'Lockout enabled. Server is shutting down now.'
-        : 'Logged out.';
+      const action = await choosePowerAction();
+      if (action === null) return;
 
-      await logout(lockSystem);
+      if (action === 'stop') {
+        let pinError = '';
+        while (true) {
+          const pin = await requestPinWithKeypad({
+            title: 'Stop Terminal',
+            message: 'Enter the machine PIN to stop this terminal for everyone currently connected.',
+            confirmLabel: 'Stop Terminal',
+            errorText: pinError
+          });
+          if (pin === null) {
+            return;
+          }
+          const res = await stopTerminal(pin);
+          if (res.ok) {
+            loggingOut = true;
+            logoutNotice = 'Terminal stopped. Start it again from the dashboard.';
+            break;
+          }
+          const problem = await readApiError(res);
+          if (problem?.code === 'pin_invalid') {
+            pinError = problem.message || 'Incorrect machine PIN.';
+            continue;
+          }
+          alert(problem?.message || 'Cannot stop the terminal right now.');
+          return;
+        }
+      } else {
+        loggingOut = true;
+        logoutNotice = 'Signed out.';
+        await logout(false);
+      }
+
       closeSocket();
       terminals.forEach((t) => {
         try {
