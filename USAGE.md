@@ -39,6 +39,12 @@ codewebway -z --temp-link --temp-link-scope read-only --temp-link-ttl-minutes 15
 
 # Auto-disable the zrok share after 30 minutes
 codewebway -z --public-timeout-minutes 30 --pin 123456
+
+# Register a headless machine with WebWayFleet
+codewebway enable
+
+# After registration, run the long-lived fleet daemon
+codewebway fleet
 ```
 
 ## Global Options
@@ -125,7 +131,27 @@ Fleet mode lets WebWayFleet start and stop CodeWebway remotely without SSH.
 
 ### One-Time Registration
 
-Classic enable flow:
+Current primary flow:
+
+```bash
+codewebway enable
+```
+
+When you run `codewebway enable` in an interactive terminal, CodeWebway shows a menu:
+
+- `Scan QR Code`
+- `Enter Token`
+
+That is the normal current setup flow for real users.
+
+Recommended flow:
+
+1. Run `codewebway enable`
+2. Choose `Scan QR Code` for headless machines, or `Enter Token` if you already copied a token from WebWayFleet
+3. Complete the PIN prompt
+4. Optionally install the auto-start service
+
+Direct token mode is still supported as a shortcut:
 
 ```bash
 codewebway enable <token-from-dashboard>
@@ -134,19 +160,20 @@ codewebway enable <token-from-dashboard>
 Self-hosted API:
 
 ```bash
+codewebway enable --endpoint https://your-fleet-api.example.com
+```
+
+Direct token + self-hosted API:
+
+```bash
 codewebway enable <token-from-dashboard> --endpoint https://your-fleet-api.example.com
 ```
 
-Interactive mode:
+`enable` currently supports:
 
-```bash
-codewebway enable
-```
-
-Interactive `enable` currently supports:
-
-- QR/device-code flow
-- manual token entry
+- QR/device-code approval flow
+- manual token entry from the prompt
+- direct `enable <token>` shortcut
 - optional PIN prompt
 - optional service install prompt after registration
 
