@@ -2375,10 +2375,6 @@ fn session_token_from_headers(headers: &HeaderMap) -> Option<String> {
     cookie_value(raw_cookie, "codewebway_session").map(|value| value.to_string())
 }
 
-fn is_session_token_valid(state: &Arc<AppState>, session: &str) -> bool {
-    is_session_token_valid_at(state, session, Instant::now())
-}
-
 fn is_session_token_valid_at(state: &Arc<AppState>, session: &str, now: Instant) -> bool {
     let mut sessions = state.sessions.lock().unwrap();
     sessions.is_valid(session, now)

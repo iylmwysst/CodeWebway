@@ -234,6 +234,22 @@ impl DaemonState {
     }
 }
 
+async fn write_status_now(creds: &FleetCredentials, state: &mut DaemonState, context: &str) {
+    match send_heartbeat(creds, &state.status, state.active_url.as_deref(), false).await {
+        Ok(_) => {
+            state.last_d1_write = std::time::Instant::now();
+        }
+        Err(e) => {
+            if is_unauthorized(&e) {
+                eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
+                eprintln!("  Run: codewebway disable");
+                std::process::exit(1);
+            }
+            eprintln!("  Fleet: heartbeat error {context}: {e}");
+        }
+    }
+}
+
 // ─── Daemon loop ───────────────────────────────────────────────────────────────
 
 pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
@@ -371,12 +387,18 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                             }
                         }
 
-                        wait_for_stop(&creds, &mut state, handle.shutdown_tx, poll_interval).await;
+                        wait_for_stop(
+                            &creds,
+                            &mut state,
+                            handle.shutdown_tx,
+                            handle.server_done,
+                            poll_interval,
+                        )
+                        .await;
 
                         state.status = "idle".to_string();
                         state.active_url = None;
-                        state.last_d1_write =
-                            std::time::Instant::now() - std::time::Duration::from_secs(400);
+                        write_status_now(&creds, &mut state, "after terminal stop").await;
                     }
                 }
             }
@@ -395,11 +417,25 @@ async fn wait_for_stop(
     creds: &FleetCredentials,
     state: &mut DaemonState,
     shutdown_tx: tokio::sync::mpsc::UnboundedSender<()>,
+    server_done: tokio::sync::oneshot::Receiver<()>,
     interval: std::time::Duration,
 ) {
+    tokio::pin!(server_done);
+
     loop {
         let skip = !state.should_write(&state.status, state.active_url.as_deref());
-        match send_heartbeat(creds, &state.status, state.active_url.as_deref(), skip).await {
+        let heartbeat = send_heartbeat(creds, &state.status, state.active_url.as_deref(), skip);
+        let hb = tokio::select! {
+            done = &mut server_done => {
+                if done.is_err() {
+                    eprintln!("  Fleet: server stop signal dropped unexpectedly.");
+                }
+                return;
+            }
+            hb = heartbeat => hb,
+        };
+
+        match hb {
             Ok(hb) => {
                 if !skip {
                     state.last_d1_write = std::time::Instant::now();
@@ -425,7 +461,15 @@ async fn wait_for_stop(
             }
         }
 
-        tokio::time::sleep(interval).await;
+        tokio::select! {
+            done = &mut server_done => {
+                if done.is_err() {
+                    eprintln!("  Fleet: server stop signal dropped unexpectedly.");
+                }
+                return;
+            }
+            _ = tokio::time::sleep(interval) => {}
+        }
     }
 }
 
@@ -906,5 +950,51 @@ mod tests {
             .await
             .unwrap();
         m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_stop_returns_when_server_stops_locally() {
+        let mut server = mockito::Server::new_async().await;
+        let heartbeat = server
+            .mock("POST", "/api/v1/agent/heartbeat")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"has_command":false}}"#)
+            .create_async()
+            .await;
+
+        let creds = make_creds(&server.url());
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let wait = tokio::spawn(async move {
+            let mut state = DaemonState::new();
+            state.status = "running".to_string();
+            state.active_url = Some("https://live.zrok.io".to_string());
+            state.last_d1_write = std::time::Instant::now();
+            wait_for_stop(
+                &creds,
+                &mut state,
+                shutdown_tx,
+                server_done_rx,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let _ = server_done_tx.send(());
+
+        tokio::time::timeout(std::time::Duration::from_millis(250), wait)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            shutdown_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        heartbeat.assert_async().await;
     }
 }
