@@ -1,122 +1,261 @@
 # Usage
 
-## CLI Options
+CodeWebway has one global option parser plus a few manual subcommands handled before Clap.
+
+Global form:
 
 ```text
 codewebway [OPTIONS]
-
-Options:
-  --host <HOST>                   Listen host [default: 127.0.0.1]
-  --port <PORT>                   Listen port [default: 8080]
-  --password <PASSWORD>           Token (min 16 chars; auto-generated if omitted)
-  --pin <PIN>                     Secondary PIN (numeric, min 6 digits)
-  --sso-shared-secret <SECRET>    Enable signed SSO ticket login (still supports token+PIN)
-  --shell <PATH>                  Shell executable [default: $SHELL]
-  --cwd <PATH>                    Working directory [default: current dir]
-  --scrollback <BYTES>            Scrollback buffer size [default: 131072]
-  --max-connections <N>           Max concurrent WebSocket connections [default: 8]
-  --terminal-only                 Disable file explorer and editor
-  --temp-link                     Generate one temporary link at startup
-  --temp-link-ttl-minutes <N>     Temporary link TTL: 5, 15, or 60 [default: 15]
-  --temp-link-scope <SCOPE>       read-only | interactive [default: read-only]
-  --temp-link-max-uses <N>        Max redemptions [default: 1]
-  -z, --zrok                      Start zrok public share (zrok must be installed)
-  --public-timeout-minutes <N>    Auto-close zrok share after N minutes
-  --public-no-expiry              Keep zrok share open until manual shutdown
-  -h, --help                      Print help
 ```
 
-## Examples
+Manual subcommands:
+
+```text
+codewebway enable [<token>] [--endpoint <url>] [--pin <pin>] [--service|--no-service]
+codewebway fleet [OPTIONS]
+codewebway disable
+codewebway uninstall-service
+```
+
+These subcommands are routed manually in `src/main.rs`, so `codewebway --help` only prints the global option set.
+
+## Common Examples
 
 ```bash
-# Basic local access (LAN or localhost only)
-codewebway
+# Local-only terminal on localhost
+codewebway --pin 123456
 
-# Public access via zrok with PIN
+# Public share through zrok
 codewebway -z --pin 123456
 
-# Restrict to a specific project directory
-codewebway -z --cwd ~/project
+# Restrict the HTTP file/editor root
+codewebway -z --cwd ~/project --pin 123456
 
-# Terminal only — no file browser or editor
-codewebway -z --terminal-only
+# Terminal only: no file browser or editor routes
+codewebway -z --terminal-only --pin 123456
 
-# Auto-close the public share after 30 minutes
-codewebway -z --public-timeout-minutes 30
+# Print one startup temp link
+codewebway -z --temp-link --temp-link-scope read-only --temp-link-ttl-minutes 15 --pin 123456
 
-# Generate a temporary read-only link (expires in 15 min, single use)
-codewebway -z --temp-link
-
-# Generate a temporary interactive link (one use, 60 min TTL)
-codewebway -z --temp-link --temp-link-scope interactive --temp-link-ttl-minutes 60
-
-# Let an AI coding agent access a remote shell session
-codewebway -z --temp-link --temp-link-scope interactive
-
-# Share a read-only terminal view for debugging help
-codewebway -z --temp-link --temp-link-scope read-only --temp-link-ttl-minutes 15
+# Auto-disable the zrok share after 30 minutes
+codewebway -z --public-timeout-minutes 30 --pin 123456
 ```
+
+## Global Options
+
+These are the current `codewebway --help` flags:
+
+```text
+  --host <HOST>                                   Host/IP to bind (default: localhost only)
+  --port <PORT>                                   Port to listen on
+  --password <PASSWORD>                           Access token (auto-generated if not provided)
+  --pin <PIN>                                     Secondary login PIN
+  --dashboard-auth-api-base <URL>                 WebWayFleet API base for host-login challenge verification
+  --dashboard-auth-machine-token <TOKEN>          Machine token used for WebWayFleet host-login verification
+  --dashboard-auth-clerk-publishable-key <KEY>    Parsed today but not used by the runtime
+  --sso-shared-secret <SECRET>                    Shared secret for signed SSO ticket login
+  --shell <SHELL>                                 Shell executable
+  --cwd <PATH>                                    Working directory / file API root
+  --scrollback <BYTES>                            Scrollback buffer size in bytes
+  -z, --zrok                                      Create a public URL with zrok
+  --public-timeout-minutes <N>                    Auto-disable zrok share after N minutes
+  --public-no-expiry                              Keep zrok share active until shutdown
+  --max-connections <N>                           Maximum concurrent WebSocket clients
+  --terminal-only                                 Disable file explorer and editor routes
+  --temp-link                                     Print one temporary link at startup
+  --temp-link-ttl-minutes <N>                     Temporary link TTL: 5, 15, or 60
+  --temp-link-scope <SCOPE>                       read-only | interactive
+  --temp-link-max-uses <N>                        Temporary link max uses
+```
+
+Notes:
+
+- `--max-connections` limits concurrent WebSocket clients, not terminal tabs.
+- Terminal tab count is currently fixed at 8 per process.
+- `--dashboard-auth-api-base`, `--dashboard-auth-machine-token`, and `--sso-shared-secret` are usually set by fleet mode, not by hand.
+- `--dashboard-auth-clerk-publishable-key` is currently a no-op in the runtime.
+
+## Direct Login Modes
+
+### Access Token + PIN
+
+The default login page asks for:
+
+- access token
+- machine PIN
+
+If `--password` is omitted, CodeWebway generates a token and prints it once at startup.
+
+### Signed SSO Ticket + PIN
+
+If `--sso-shared-secret` is configured, `/auth/login` also accepts:
+
+```text
+<base64url(payload_json)>.<hex_hmac_sha256_signature>
+```
+
+Required payload fields:
+
+- `sub`
+- `nonce`
+- `exp`
+
+This is what the WebWayFleet dashboard uses for "Open Terminal". The ticket replaces the access token prompt, but the machine PIN is still required.
+
+### Temporary Links
+
+Temporary links are created either:
+
+- at startup with `--temp-link`
+- after login from the Share dialog in the web UI
+
+Current behavior:
+
+- TTL: 5, 15, or 60 minutes
+- scope: `read-only` or `interactive`
+- max uses: 1 to 100
+- optional binding to one terminal tab
+- max 2 active links at once
+
+Read-only temp sessions can still view output, but server-side input and file writes are dropped.
 
 ## Fleet Mode
 
-Control CodeWebway remotely from a browser — no SSH required.
+Fleet mode lets WebWayFleet start and stop CodeWebway remotely without SSH.
 
-### Setup (first time)
+### One-Time Registration
 
-1. Create a machine on the [WebwayFleet dashboard](https://webwayfleet.dev)
-2. Run on your Pi / Jetson / headless device:
+Classic enable flow:
 
 ```bash
-# Register device with WebwayFleet
 codewebway enable <token-from-dashboard>
-
-# Start the fleet daemon (waits for start/stop commands from the dashboard)
-codewebway fleet --zrok --public-no-expiry --pin 123456
 ```
 
-### Commands
-
-| Command | Purpose |
-|---------|---------|
-| `codewebway enable <token>` | Register this device with WebwayFleet |
-| `codewebway enable <token> --endpoint <url>` | Register with a self-hosted fleet server |
-| `codewebway fleet [flags]` | Run as fleet daemon (polls for start/stop commands) |
-| `codewebway disable` | Remove fleet credentials from this device |
-
-### Systemd service (recommended)
-
-```ini
-[Unit]
-Description=CodeWebway Fleet Daemon
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/codewebway fleet --zrok --public-no-expiry --pin 123456
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
+Self-hosted API:
 
 ```bash
-sudo systemctl enable --now codewebway-fleet
+codewebway enable <token-from-dashboard> --endpoint https://your-fleet-api.example.com
 ```
 
----
+Interactive mode:
 
-## Public Access
+```bash
+codewebway enable
+```
+
+Interactive `enable` currently supports:
+
+- QR/device-code flow
+- manual token entry
+- optional PIN prompt
+- optional service install prompt after registration
+
+If you skip service installation, `enable` immediately starts the fleet daemon in the foreground.
+
+After success, credentials are stored in:
+
+```text
+~/.config/codewebway/fleet.toml
+```
+
+### Running the Daemon
+
+Foreground daemon:
+
+```bash
+codewebway fleet
+```
+
+You can still pass normal runtime flags to the daemon, for example:
+
+```bash
+codewebway fleet --cwd /srv/app --scrollback 262144
+```
+
+Important fleet-mode behavior:
+
+- `codewebway fleet` always forces `--zrok --public-no-expiry`
+- if `--pin` is omitted, CodeWebway loads the stored PIN from `fleet.toml`
+- the daemon heartbeats to WebWayFleet every 30 seconds
+- dashboard start/stop requests are delivered through the pending command channel
+- each dashboard "Start Terminal" creates a fresh runtime access token for that run
+
+### Service Installation
+
+There is no separate `install-service` subcommand. Service install happens after `enable`.
+
+Examples:
+
+```bash
+# Register, then immediately install the user service
+codewebway enable <token> --service
+
+# Register, but skip the install prompt
+codewebway enable <token> --no-service
+
+# Remove the installed service
+codewebway uninstall-service
+```
+
+Current platform support:
+
+- macOS: LaunchAgent
+- Linux: `systemd --user`
+
+`codewebway uninstall-service` removes the auto-start service only. It does not delete `fleet.toml`.
+
+### Disable Fleet
+
+```bash
+codewebway disable
+```
+
+This removes the local `fleet.toml` credentials file.
+
+## WebWayFleet Dashboard Access Paths
+
+Once a machine is running, the dashboard supports three ways to reach it:
+
+1. `Open Terminal`
+   - gets a short-lived signed launch URL
+   - opens CodeWebway with `?sso_ticket=...`
+   - still requires the machine PIN on the host page
+
+2. `Reveal Token`
+   - fetches the runtime access token stored in WebWayFleet KV
+   - useful as a fallback when launch URLs are not enough
+   - still requires the machine PIN
+
+3. Host page `Continue`
+   - starts a WebWayFleet approval challenge from the CodeWebway login page itself
+   - you approve the request on the dashboard
+   - the host then asks for the machine PIN
+
+## Dashboard Policy Overrides
+
+When the dashboard starts a terminal, it can send policy values from the project or machine record:
+
+- `cwd`
+- `shell`
+- `terminal_only`
+- `scrollback`
+- `max_connections`
+- `temp_link_enabled`
+- `temp_link_ttl_minutes`
+- `temp_link_scope`
+- `temp_link_max_uses`
+
+Those values are merged in WebWayFleet and sent in the `run_codewebway` command payload.
+
+## Public Exposure
 
 ### zrok (recommended)
 
-The easiest way to expose CodeWebway over a public HTTPS URL with no port forwarding or VPS required.
-
 ```bash
-codewebway -z
+codewebway -z --pin 123456
 ```
 
-Requires `zrok` installed and enabled:
+Requirements:
 
 ```bash
 # macOS
@@ -125,56 +264,34 @@ brew install openziti/ziti/zrok
 # Linux
 curl -sSf https://get.zrok.io | bash
 
-# Enable (one-time, from https://zrok.io)
-zrok enable <your_token>
+# one-time account enable
+zrok enable <token>
 ```
 
-### ngrok
+### Reverse Proxy
+
+Point your HTTPS proxy at `127.0.0.1:8080`.
+
+Forward these headers:
+
+- `Host`
+- `X-Forwarded-Host`
+- `X-Forwarded-Proto`
+
+CodeWebway uses them when validating WebSocket `Origin`.
+
+### Tailscale / LAN-only
+
+Bind to a specific interface instead of using zrok:
 
 ```bash
-codewebway --port 8080
-ngrok http 8080
+codewebway --host <tailscale-ip> --pin 123456
 ```
 
-### Tailscale
+## Runtime Notes
 
-Bind CodeWebway to your Tailscale IP so it is only reachable within your Tailnet:
-
-```bash
-codewebway --host <tailscale-ip>
-```
-
-### Reverse Proxy (Caddy, Nginx)
-
-CodeWebway can sit behind any TLS-terminating reverse proxy. Point the proxy at `127.0.0.1:8080`. Ensure the proxy forwards the `Host` and `X-Forwarded-Host` headers — CodeWebway validates the `Origin` header against these on WebSocket upgrade.
-
-## Signed SSO Ticket Login
-
-When `--sso-shared-secret` is set, `/auth/login` accepts either:
-- `password + pin` (existing flow)
-- `sso_ticket + pin` (no token copy/paste)
-
-Ticket format:
-
-```text
-<base64url(payload_json)>.<hex_hmac_sha256_signature>
-```
-
-`payload_json` must include:
-- `sub` (user id/string)
-- `nonce` (16+ chars, single-use)
-- `exp` (unix timestamp; must be within 5 minutes)
-
-Signature rule:
-
-```text
-signature = HMAC_SHA256_HEX(secret, base64url(payload_json))
-```
-
-Open URL example:
-
-```text
-https://your-codewebway-host/?sso_ticket=<ticket>
-```
-
-The login screen will request only PIN when a valid ticket is present.
+- File API operations only work on existing paths under the configured root.
+- Directory listings hide dotfiles, but explicit file requests can still access known dotfile paths under the root.
+- `--terminal-only` removes the file routes entirely.
+- Auto-shutdown is disabled only when `--zrok --public-no-expiry` is combined.
+- `--public-timeout-minutes` and `--public-no-expiry` only affect zrok mode.

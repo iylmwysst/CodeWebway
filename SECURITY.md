@@ -1,145 +1,284 @@
 # Security
 
-CodeWebway is built for **personal public exposure** — a single trusted operator accessing their own machine. A terminal in a browser carries full shell access, so security was a first-class design constraint.
+CodeWebway is a single-user remote terminal with optional WebWayFleet control. It is designed for one trusted operator accessing their own machine, not for multi-tenant hosting or shared team shells.
 
-This document covers the threat model, implemented mitigations, and how to report vulnerabilities.
+Anyone who successfully authenticates gets a shell with the same OS privileges as the user who started `codewebway`. That is the core trust boundary.
 
-## Best Practices
+## Deployment Recommendations
 
-Before exposing CodeWebway publicly:
+Before exposing a host publicly:
 
-- **Always use TLS.** Use `--zrok` or a TLS-terminating reverse proxy (Caddy, Nginx). Never expose plain HTTP to the public internet.
-- **Set a PIN.** The auto-generated token is strong, but adding `--pin` gives you a second independent factor.
-- **Set a public timeout.** Use `--public-timeout-minutes` to cap how long the share stays active. Avoid `--public-no-expiry` unless you have a specific reason.
-- **Restrict the working directory.** Use `--cwd` to point CodeWebway at a specific project folder rather than your home directory.
-- **Run as a non-root user.** CodeWebway requires no elevated privileges. Running it as a dedicated low-privilege user limits blast radius if something goes wrong.
-- **Use `--terminal-only` when file access is not needed.** Disables the file browser and editor API surface entirely.
+- Use TLS. The built-in server speaks plain HTTP; use `--zrok` or an HTTPS reverse proxy.
+- Run as a non-root dedicated user.
+- Narrow the filesystem root with `--cwd`.
+- Use `--terminal-only` when you do not need the file browser/editor routes.
+- Protect `~/.config/codewebway/fleet.toml` if you use fleet mode. It stores the raw machine token and PIN in plaintext.
+- Avoid passing long-lived secrets on the CLI in multi-user environments. `ps` can expose `--password` and `--pin`.
 
-## Transport Flow
+## System Overview
+
+CodeWebway supports four access paths:
+
+1. Direct login: access token plus machine PIN.
+2. Fleet host-login challenge: dashboard account approval plus machine PIN.
+3. Fleet launch URL: short-lived signed `sso_ticket` plus machine PIN.
+4. Temporary links: delegated session cookies minted from a signed link. These do not ask for the machine PIN again.
+
+The default bind is `127.0.0.1:8080`, so nothing is reachable off-host unless you explicitly opt into public exposure.
+
+## Trust Boundaries
+
+- Browser to CodeWebway: HTTP on localhost by default, or HTTPS when fronted by zrok/reverse proxy.
+- CodeWebway to PTY/filesystem: same OS user privileges as the CodeWebway process.
+- CodeWebway to WebWayFleet API: outbound HTTPS with bearer machine token in fleet mode.
+- WebWayFleet Dashboard/API to users: Clerk bearer tokens for dashboard auth, D1 for persistent state, KV for short-lived challenge/token state.
+
+## Authentication Flows
+
+### 1. Direct Token Login
+
+- `--password` may be provided or auto-generated.
+- The token must be at least 16 characters.
+- `--pin` is required for standard interactive use and must be at least 6 digits.
+- `/auth/login` accepts the access factor (`password`, `sso_ticket`, `dashboard_ticket`, or `dashboard_token`) plus the PIN.
+
+### 2. Fleet Host-Login Challenge
+
+This is the "Continue" button on the host login page.
+
+Flow:
+
+1. CodeWebway calls WebWayFleet `/api/v1/agent/host-auth/challenge` using the machine token.
+2. WebWayFleet stores a 180-second challenge in KV and returns an approval URL.
+3. The dashboard user signs in with Clerk and approves `/api/v1/machines/host-auth/approve`.
+4. CodeWebway polls `/api/v1/agent/host-auth/challenge/:id`.
+5. After approval, CodeWebway creates a local `dashboard_pending_login_id`.
+6. The browser must still submit the machine PIN to `/auth/login`.
+
+This keeps account ownership verification in WebWayFleet and PIN verification local to the device.
+
+Current local guardrails:
+
+- the pending local login window lives for 180 seconds
+- the pending login is discarded after 5 wrong PIN submissions
+
+### 3. Fleet Launch URL (`sso_ticket`)
+
+This is the "Open Terminal" flow from the dashboard.
+
+Flow:
+
+1. The dashboard calls `/api/v1/machines/:id/terminal/launch-url`.
+2. WebWayFleet signs a short-lived ticket with HMAC-SHA256 using the hashed machine token stored in D1.
+3. The browser opens `https://host/?sso_ticket=...`.
+4. CodeWebway verifies the signature with `--sso-shared-secret`.
+5. The user still enters the machine PIN locally.
+
+Current runtime behavior:
+
+- WebWayFleet issues launch URLs with about 120 seconds of validity.
+- CodeWebway rejects expired tickets and rejects tickets with `exp` more than 5 minutes in the future.
+- Nonces are single-use. Replays are rejected.
+
+### 4. Temporary Links
+
+Temporary links are explicit delegated access, separate from token+PIN auth.
+
+Current behavior:
+
+- Max 2 active links at a time.
+- TTL must be 5, 15, or 60 minutes.
+- `max_uses` can be 1 to 100.
+- Scope can be `read-only` or `interactive`.
+- Links can optionally be bound to one terminal tab.
+
+Implementation details:
+
+- The URL token is signed with a random per-process signing key and SHA-256 over `key:id.expires.nonce`.
+- Tokens include a nonce and expiry timestamp.
+- Links are enforced server-side. Read-only sessions silently drop PTY input and file writes.
+- Redeemed links mint normal session cookies plus an in-memory grant describing read-only or terminal-bound restrictions.
+
+## Rate Limiting
+
+CodeWebway tracks attempts by client key. The client key prefers:
+
+1. `CF-Connecting-IP`
+2. First IP in `X-Forwarded-For`
+3. `X-Real-IP`
+4. A fingerprint derived from headers such as `User-Agent`, `Accept-Language`, and `Host`
+
+Current limits in CodeWebway:
+
+- Credential attempts: 5 per 5 minutes
+- PIN attempts: 8 per 5 minutes
+- Host-login challenge polls: 90 per 120 seconds
+
+When limited, CodeWebway returns `429 Too Many Requests` with `Retry-After`.
+
+WebWayFleet adds separate best-effort in-memory rate limits on machine endpoints:
+
+- `/api/v1/agent/heartbeat`: 20 requests/minute per machine token, 120/minute per client IP
+- `/api/v1/agent/report`: 30 requests/minute per machine token, 180/minute per client IP
+
+When those trip, WebWayFleet records a `security_events` audit entry when the table exists.
+
+## Comparison and Secret Handling
+
+- Token and PIN comparisons use a byte-wise XOR fold when the lengths match.
+- Length mismatches fail immediately. This is not a fully constant-time comparison across different lengths.
+- Token and PIN are stored as plain `String` values in process memory.
+- There is no explicit memory zeroization on exit.
+
+## Sessions and Cookies
+
+Current session behavior:
+
+- Session tokens are 48 random alphanumeric characters.
+- Idle timeout: 30 minutes.
+- Absolute timeout: 12 hours.
+- `/auth/extend` requires a valid session plus the machine PIN.
+- Session validity is re-checked inside the WebSocket loop every 15 seconds.
+
+Current cookie attributes:
 
 ```text
-Browser
-  │
-  │  HTTPS (TLS by zrok)
-  ▼
-zrok edge server  (public internet)
-  │
-  │  outbound tunnel (no inbound port required)
-  ▼
-CodeWebway  127.0.0.1:8080  (your machine)
-  │  ✔ origin check
-  │  ✔ session cookie validated
-  │  ✔ rate limit enforced
-  ▼
-PTY / file system
+codewebway_session=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800
 ```
 
-**Do not expose CodeWebway over plain HTTP to the public internet.** Use `-z` (zrok) or a TLS-terminating reverse proxy. With `-z`, all traffic travels over zrok's HTTPS tunnel before reaching the host. The default bind of `127.0.0.1` means the server is unreachable from any external network unless you explicitly opt in.
+Important limitation:
 
-## Two-Factor Authentication
+- The cookie is not marked `Secure` today because the same binary still supports plain local HTTP.
+- If you expose the service publicly, terminate TLS externally and do not serve the same public hostname over plain HTTP.
 
-Login requires both factors to be submitted together:
+## Shutdown and Session Revocation
 
-| Factor | Constraint |
-|--------|-----------|
-| **Token** | Minimum 16 characters. Auto-generated (80-bit entropy) if omitted. |
-| **PIN** | Numeric, minimum 6 digits. Never printed to stdout. |
+### `POST /auth/logout`
 
-Both are compared using **constant-time equality** (byte-by-byte XOR fold), which eliminates timing side-channels.
+- Without `revoke_all`, only the current session is revoked.
+- With `{ "revoke_all": true }`, a valid session can:
+  - revoke all sessions
+  - revoke all temporary links
+  - clear temp grants
+  - set `access_locked = true`
+  - close all terminals
+  - trigger process shutdown
 
-## Brute-Force Lockout
+This flow does not ask for the PIN again.
 
-Failed attempts are tracked per client IP. After **3 failures within 5 minutes** the endpoint returns `429 Too Many Requests` with a `Retry-After` header. A successful login clears the counter. Under `--zrok`, the local port is only reachable via the zrok process — external clients cannot spoof the IP that the rate limiter sees.
+### `POST /auth/stop-terminal`
 
-## Session Management
+- Requires a valid session and the machine PIN.
+- Revokes all sessions, temp grants, and temp links.
+- Closes all terminals and shuts the process down.
 
-- Session tokens: 48-character random alphanumeric (~285-bit entropy).
-- Cookies: `HttpOnly; SameSite=Strict` — no JavaScript access, no cross-site submission.
-- Idle timeout: 30 minutes. Absolute timeout: 12 hours. Both enforced server-side.
-- Extending a session via `POST /auth/extend` requires re-submitting the PIN — a stolen cookie alone cannot silently renew the session.
+## Auto-Shutdown Behavior
 
-## Temporary Links
+CodeWebway has an inactivity shutdown timer unless `--zrok --public-no-expiry` is combined.
 
-For sharing access without giving out your primary credentials:
+Current behavior:
 
-- Links are **HMAC-signed** (SHA-256, random signing key per process, per-link nonce + expiry). Forgery is computationally infeasible.
-- Scope is enforced **server-side**: `read-only` sessions have terminal input and file writes silently dropped at the server, not just hidden in the UI.
-- Configurable TTL (5 / 15 / 60 min), max-use count, and optional binding to a single terminal tab.
-- At most 2 active links at a time. Any link can be individually revoked.
+- Fresh process with no authenticated activity: shuts down after 3 hours.
+- After authenticated activity: shutdown deadline becomes `now + 30 minutes idle timeout + 3 hours grace`.
+- Public status is exposed through `/auth/public-status` so the host page can show the remaining time.
 
-## File Access
+## WebSocket Protections
 
-- All file paths go through a **canonical prefix check** against the configured root directory. Absolute paths and `..` segments are rejected before canonicalization. Post-canonicalization the result must be a descendant of the root — symlink escapes are blocked.
-- File preview capped at 256 KB; writes at 512 KB.
-- File APIs are absent entirely in `--terminal-only` mode.
+- WebSocket upgrade is rejected unless `Origin` matches `Host` or `X-Forwarded-Host`.
+- If `X-Forwarded-Proto` is present, the scheme must also match exactly.
+- Concurrent WebSocket clients are limited by `--max-connections`.
+- Terminal tab count is a separate hard limit and is currently fixed at 8 tabs per process.
 
-## WebSocket
+## Filesystem and Editor Surface
 
-- The upgrade handler validates the `Origin` header against `Host` (and `X-Forwarded-Host`) before accepting any connection, preventing cross-origin WebSocket hijacking.
-- Concurrent connections are capped (default 8, configurable).
-- Session validity is re-checked every 15 seconds inside the WebSocket loop; expired sessions are disconnected without waiting for client action.
+If `--terminal-only` is enabled, CodeWebway does not register any `/api/fs/*` routes.
 
-## Emergency Shutdown
+When file routes are enabled:
 
-`POST /auth/logout` with `{ "revoke_all": true }` (requires a valid session):
+- Absolute paths are rejected.
+- `..` path segments are rejected.
+- Requested paths are canonicalized and must stay under the configured root directory.
+- The HTTP editor only works on paths that already exist.
+- Preview is capped at 256 KiB.
+- Save/diff writes are capped at 512 KiB.
+- Diff saves require the current SHA-256 file hash and valid UTF-8 file contents.
 
-1. Invalidates all sessions and temporary links immediately.
-2. Locks the login endpoint — no new sessions until the process restarts.
-3. Closes all open terminal tabs.
-4. Triggers graceful process shutdown.
+Important nuance:
 
-## Threat Model
+- Directory listing hides names starting with `.`
+- Explicit file requests can still read or overwrite existing dotfiles under the root if the caller already knows the path
 
-CodeWebway is designed for a **single trusted operator** accessing their own machine. It is not a multi-tenant platform. Anyone who successfully authenticates gets a shell with the same OS privileges as the user who started CodeWebway — that is the intended behavior.
+That means `--cwd` remains a primary containment control.
 
-Practical attack surface with `codewebway -z --pin <pin>` (auto-generated token):
+## Fleet Credential Storage
 
-| Attack vector | Mitigation |
-|---------------|-----------|
-| Token brute-force | Lockout after 3 attempts; 80-bit token is infeasible to guess |
-| Credential sniffing | zrok provides end-to-end TLS; local bind is 127.0.0.1 |
-| Cross-site request forgery | `SameSite=Strict` cookie + `Origin` header validation on WebSocket |
-| Path traversal | Canonical prefix check on every file request |
-| Session hijack | Short-lived tokens; idle + absolute expiry; PIN required to extend |
-| Temp link forgery | HMAC-signed with nonce; forgery is computationally infeasible |
-| Stale zrok share after crash | PID-file ownership check reclaims orphaned shares on restart |
-| PTY escape sequence injection | Any authenticated session can already write to the PTY — escape sequences are an in-scope capability, not a bypass. Unauthenticated users cannot reach the PTY. |
-| Privilege escalation via shell | CodeWebway runs as the invoking user. The shell it spawns inherits the same OS privileges — no privilege boundary exists by design. Run as a low-privilege user to limit blast radius. |
+`codewebway enable` stores this file locally:
 
-## Secret Management
-
-**Avoid passing credentials as raw CLI arguments in shared or multi-user environments.** Arguments passed via `--password` and `--pin` are visible to other users on the same machine via `ps aux` or `/proc/<pid>/cmdline` for the lifetime of the process.
-
-Safer patterns:
-
-```bash
-# Read token from environment variable (not visible in ps on most systems)
-export CODEWEBWAY_TOKEN=$(openssl rand -hex 16)
-codewebway --password "$CODEWEBWAY_TOKEN" --pin 123456
-
-# Or: let CodeWebway auto-generate the token (printed once at startup)
-# and type the PIN interactively when prompted
-codewebway -z
+```text
+~/.config/codewebway/fleet.toml
 ```
 
-On Linux, you can additionally restrict `/proc/<pid>/cmdline` visibility with tools like `hidepid` on the `/proc` mount, or run CodeWebway under a dedicated user account that others cannot inspect.
+It contains:
 
-## Credential Storage in Memory
+- raw machine token
+- machine name
+- fleet endpoint
+- PIN
 
-Token and PIN are stored as plain `String` values in process memory for the lifetime of the process. They are **not hashed or salted** — this is by design, because constant-time equality comparison (which prevents timing attacks) requires both values to be in plaintext at comparison time. Hashing would break this property.
+Current implementation notes:
 
-There is currently no explicit memory zeroing (`zeroize`) on process exit. An attacker with local memory access (e.g., `ptrace`, `/proc/<pid>/mem`, or a core dump) could extract the credentials. This is an acceptable risk for the intended single-operator personal-use case where the attacker would already need elevated OS access to perform such a read — at which point the machine itself is compromised regardless.
+- The file is written with normal OS defaults and whatever umask is active.
+- The binary does not currently apply stricter permissions with `chmod`.
+- WebWayFleet stores the machine token hashed in D1; the raw token is not returned again after enable.
 
-If your threat model includes local privilege escalation, run CodeWebway under a dedicated non-root user account with minimal OS permissions, and ensure core dumps are disabled for that account.
+## Runtime Access Tokens in Fleet Mode
 
-## Static Analysis
+Each `run_codewebway` command creates a fresh runtime access token for that one live terminal run.
 
-CodeQL static analysis runs automatically on every push to `main` and on every pull request via GitHub Actions. Results are visible in the [Security tab](https://github.com/iylmwysst/CodeWebway/security/code-scanning) of this repository.
+Current pipeline:
+
+1. CodeWebway fleet daemon generates a 24-character runtime token.
+2. The daemon reports structured JSON back to WebWayFleet:
+   - `url`
+   - `access_token`
+   - `access_token_ttl_secs`
+3. WebWayFleet stores the public URL in D1.
+4. WebWayFleet stores the runtime access token only in KV `terminal_access:<machineId>` with a TTL capped at 12 hours.
+5. Execution logs in D1 receive sanitized output with the secret removed.
+
+This limits secret persistence compared with storing runtime tokens in execution history.
+
+## Static Analysis and CI
+
+This repository currently runs:
+
+- `cargo test`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo fmt --all -- --check`
+
+on every push to `main` and every pull request.
+
+CodeQL runs on:
+
+- push to `main`
+- pull requests to `main`
+- a weekly scheduled scan
+
+Results are published in the repository Security tab.
 
 ## Reporting a Vulnerability
 
-If you find a security vulnerability, **please do not open a public GitHub issue.**
+Please do not open a public issue for a security report.
 
-Use [GitHub private security advisories](https://github.com/iylmwysst/CodeWebway/security/advisories/new) to report it privately. Include a description of the issue, reproduction steps, and any relevant environment details.
+Use GitHub private security advisories:
 
-We aim to acknowledge reports within **48 hours** and to ship a fix as quickly as possible. Researchers will be credited in the release notes unless anonymity is requested.
+- https://github.com/iylmwysst/CodeWebway/security/advisories/new
+
+Include:
+
+- affected version or commit
+- deployment mode (`local`, `zrok`, `reverse proxy`, `fleet`)
+- reproduction steps
+- whether WebWayFleet is involved
+
+Target response time is 48 hours for initial acknowledgement.

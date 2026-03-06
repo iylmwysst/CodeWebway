@@ -12,9 +12,14 @@
                                                             |___/
 ```
 
-> **Browser-based remote terminal and file editor — no port forwarding, no VPS, no network admin required.**
+> **Browser-based remote terminal and file editor — standalone or dashboard-controlled, with no port forwarding required.**
 
 CodeWebway is a single Rust binary that gives you a full terminal and file editor in the browser, on any device. It is built for developers working on machines behind firewalls, NAT, or institutional networks where traditional SSH access is not practical.
+
+It can run in two ways:
+
+- **Standalone:** run `codewebway -z` and open the generated URL directly.
+- **With WebWayFleet:** register the machine once, then start and stop browser terminals from the dashboard without SSH.
 
 ![CodeWebway demo](.github/assets/demo.gif)
 
@@ -24,12 +29,17 @@ CodeWebway is a single Rust binary that gives you a full terminal and file edito
 Browser  ──HTTPS──▶  zrok edge  ──tunnel──▶  CodeWebway  ──PTY──▶  Shell
 ```
 
+- The diagram above is the standalone `codewebway -z` path.
 - One process serves both the backend and the web UI — no separate frontend server.
 - Terminal sessions are real server-side PTYs with scrollback replay on reconnect.
 - Works on any modern browser — desktop, tablet, or mobile (iOS and Android tested).
 - The server binds to `127.0.0.1` by default. Public access is opt-in via `--zrok` or a reverse proxy.
 
+With WebWayFleet, the same host can also be opened through dashboard-approved host login, signed launch URLs, and a short-lived runtime token fallback.
+
 ## Quick Start
+
+### Standalone
 
 **Install (macOS / Linux)**
 
@@ -43,7 +53,19 @@ curl -fsSL https://raw.githubusercontent.com/iylmwysst/CodeWebway/main/install.s
 codewebway -z
 ```
 
-The startup output prints the token, bind address, and public URL. Open the URL, log in with token + PIN, and you have a terminal.
+If you start from an interactive terminal, CodeWebway will prompt for a machine PIN, generate an access token if needed, and print the public URL. Open the URL, log in, and you have a terminal.
+
+### With WebWayFleet
+
+```bash
+# first-time registration
+codewebway enable
+
+# long-running daemon for dashboard start/stop
+codewebway fleet
+```
+
+`enable` supports QR/device-code setup for headless machines, stores local fleet credentials, and can install an auto-start service on macOS or Linux.
 
 → Full CLI reference and examples: [USAGE.md](USAGE.md)
 → Security model and threat analysis: [SECURITY.md](SECURITY.md)
@@ -66,6 +88,10 @@ It is not a VPN replacement. It is not an enterprise access platform. It fills t
 # Trigger a build on a remote machine from your laptop's browser
 codewebway -z --cwd ~/project
 
+# Register a Pi/Jetson once, then start terminals later from WebWayFleet
+codewebway enable
+codewebway fleet
+
 # Let an AI coding agent access a remote shell session
 codewebway -z --temp-link --temp-link-scope interactive
 
@@ -81,7 +107,7 @@ codewebway -z --terminal-only
 - Multi-user environments or shared team access
 - Replacing a zero-trust access platform (Tailscale, Cloudflare Access)
 - Exposing production infrastructure or sensitive services
-- Any scenario requiring more than one concurrent authenticated operator
+- Any scenario that depends on rich multi-user collaboration or role separation
 
 ## Comparison
 
