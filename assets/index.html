@@ -10,6 +10,60 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600&family=Noto+Sans+Mono:wght@400;600&family=Noto+Sans+Thai:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   <style>
+    /* Latin glyphs */
+    @font-face {
+      font-family: "CWTextSplit";
+      font-style: normal;
+      font-weight: 400;
+      src: local("Noto Sans"), local("NotoSans-Regular");
+      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+    }
+    @font-face {
+      font-family: "CWTextSplit";
+      font-style: normal;
+      font-weight: 600;
+      src: local("Noto Sans"), local("NotoSans-SemiBold");
+      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+    }
+    /* Thai glyphs */
+    @font-face {
+      font-family: "CWTextSplit";
+      font-style: normal;
+      font-weight: 400;
+      src: local("Noto Sans Thai"), local("NotoSansThai-Regular");
+      unicode-range: U+0E00-0E7F;
+    }
+    @font-face {
+      font-family: "CWTextSplit";
+      font-style: normal;
+      font-weight: 600;
+      src: local("Noto Sans Thai"), local("NotoSansThai-SemiBold");
+      unicode-range: U+0E00-0E7F;
+    }
+    /* Latin mono glyphs */
+    @font-face {
+      font-family: "CWTermSplit";
+      font-style: normal;
+      font-weight: 400;
+      src: local("Noto Sans Mono"), local("NotoSansMono-Regular");
+      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+    }
+    @font-face {
+      font-family: "CWTermSplit";
+      font-style: normal;
+      font-weight: 600;
+      src: local("Noto Sans Mono"), local("NotoSansMono-SemiBold");
+      unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F;
+    }
+    /* Thai terminal glyphs */
+    @font-face {
+      font-family: "CWTermSplit";
+      font-style: normal;
+      font-weight: 400;
+      src: local("Noto Sans Thai"), local("NotoSansThai-Regular");
+      unicode-range: U+0E00-0E7F;
+    }
+
     :root {
       --app-height: 100vh;
       --kb-inset: 0px;
@@ -19,7 +73,7 @@
     body {
       background: #131313;
       color: #ddd;
-      font-family: "Noto Sans", "Noto Sans Thai", ui-sans-serif, -apple-system, Segoe UI, sans-serif, "Apple Color Emoji";
+      font-family: "CWTextSplit", "Noto Sans", "Noto Sans Thai", ui-sans-serif, -apple-system, Segoe UI, sans-serif, "Apple Color Emoji";
       height: var(--app-height);
       overflow: hidden;
     }
@@ -1296,7 +1350,7 @@
       term = new Terminal({
         cursorBlink: true,
         theme: { background: '#131313' },
-        fontFamily: '"Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
+        fontFamily: '"CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
         lineHeight: 1.25,
         letterSpacing: 0
       });
