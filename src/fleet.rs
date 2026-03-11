@@ -353,7 +353,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             state.runtime_instance_id.as_deref(),
             skip,
         )
-            .await
+        .await
         {
             Ok(h) => {
                 if !skip {
@@ -984,16 +984,8 @@ mod tests {
         state.active_url = Some("https://old.zrok.io".to_string());
         state.runtime_instance_id = Some("instance-old".to_string());
 
-        assert!(!state.should_write(
-            "running",
-            Some("https://old.zrok.io"),
-            Some("instance-old")
-        ));
-        assert!(state.should_write(
-            "running",
-            Some("https://old.zrok.io"),
-            Some("instance-new")
-        ));
+        assert!(!state.should_write("running", Some("https://old.zrok.io"), Some("instance-old")));
+        assert!(state.should_write("running", Some("https://old.zrok.io"), Some("instance-new")));
     }
 
     #[tokio::test]
