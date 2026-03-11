@@ -1322,7 +1322,9 @@
     };
     let tempLinks = [];
     let ssoEnabled = false;
-    const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
+    const entryParams = new URLSearchParams(window.location.search);
+    const ssoTicket = entryParams.get('sso_ticket');
+    const dashboardTicket = entryParams.get('dashboard_ticket');
     let dashboardLoginEnabled = false;
     let hostAccessLocked = false;
     let dashboardFlowBusy = false;
@@ -2003,6 +2005,14 @@
       }
     }
 
+    function clearOneTimeEntryParams() {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('dashboard_ticket');
+      cleanUrl.searchParams.delete('dashboard_challenge');
+      cleanUrl.searchParams.delete('dashboard_returned');
+      window.history.replaceState({}, '', cleanUrl.toString());
+    }
+
     function storePendingDashboardLoginState(id) {
       pendingDashboardLoginId = id;
       try {
@@ -2293,6 +2303,14 @@
       });
     }
 
+    async function exchangeDashboardTicket(ticket) {
+      return api('/auth/dashboard/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dashboard_ticket: ticket })
+      });
+    }
+
     async function readApiError(res) {
       const type = res.headers.get('content-type') || '';
       if (type.includes('application/json')) {
@@ -2418,6 +2436,56 @@
           showServiceUnavailableState();
         } else if (err instanceof Error && err.message === 'challenge_timeout') {
           showApprovalExpiredState('Approval took too long. Continue again to verify your account.');
+        } else {
+          showServiceUnavailableState('Cannot finish sign-in right now. Try again in a moment.');
+        }
+        return false;
+      } finally {
+        dashboardFlowBusy = false;
+        dashboardLoginBtn.disabled = false;
+        submitBtn.disabled = false;
+      }
+    }
+
+    async function resumeDashboardTicketFlow(ticket) {
+      showDashboardProgressState();
+      dashboardLoginBtn.disabled = true;
+      submitBtn.disabled = true;
+      errorEl.textContent = '';
+      clearLoginFeedback();
+      try {
+        const res = await exchangeDashboardTicket(ticket);
+        if (res.status === 423) throw new Error('access_paused');
+        if (res.status === 429) throw new Error('challenge_rate_limited');
+        if (!res.ok) {
+          const problem = await readApiError(res);
+          throw new Error(problem?.code || 'challenge_unavailable');
+        }
+        const body = await res.json();
+        if (!body.pending_login_id) throw new Error('challenge_unavailable');
+        showDashboardPinStep(body.pending_login_id);
+        errorEl.textContent = '';
+        clearLoginFeedback();
+        clearDashboardFlowState();
+        clearOneTimeEntryParams();
+        return true;
+      } catch (err) {
+        clearDashboardFlowState();
+        clearPendingDashboardLoginState();
+        clearOneTimeEntryParams();
+        dashboardFlowBusy = false;
+        resetPrimaryLoginState();
+        if (err instanceof Error && err.message === 'approval_expired') {
+          showApprovalExpiredState();
+        } else if (
+          err instanceof Error &&
+          (err.message === 'approval_denied' || err.message === 'challenge_denied')
+        ) {
+          showAccessDeniedState();
+        } else if (err instanceof Error && err.message === 'challenge_rate_limited') {
+          showTooManyAttemptsState('Too many approval checks. Wait a moment before trying again.');
+        } else if (err instanceof Error && err.message === 'access_paused') {
+          showAccessPausedState();
         } else {
           showServiceUnavailableState('Cannot finish sign-in right now. Try again in a moment.');
         }
@@ -3086,6 +3154,9 @@
       }
 
       submitBtn.disabled = false;
+      clearDashboardFlowState();
+      clearPendingDashboardLoginState();
+      clearOneTimeEntryParams();
       await bootstrapWorkspace();
     });
 
@@ -3488,7 +3559,21 @@
       await refreshLoginMeta();
       setLoginPolling(true, { refreshNow: false });
 
+      if (dashboardTicket) {
+        clearDashboardFlowState();
+        clearPendingDashboardLoginState();
+        showAuthForm({
+          allowBack: false,
+          preferToken: false,
+          preserveDashboardState: true
+        });
+        await resumeDashboardTicketFlow(dashboardTicket);
+        return;
+      }
+
       if (ssoTicket) {
+        clearDashboardFlowState();
+        clearPendingDashboardLoginState();
         await showLogin('', { allowBack: false, preferToken: true });
         return;
       }

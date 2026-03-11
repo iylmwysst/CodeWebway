@@ -101,6 +101,16 @@ pub struct DashboardChallengeStatusResponse {
 }
 
 #[derive(Deserialize)]
+struct DashboardTicketExchangeRequest {
+    dashboard_ticket: String,
+}
+
+#[derive(Serialize)]
+struct DashboardTicketExchangeResponse {
+    pending_login_id: String,
+}
+
+#[derive(Deserialize)]
 struct TempLinkChallengeQuery {
     token: String,
 }
@@ -974,6 +984,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/auth/login", post(auth_login))
         .route("/auth/dashboard/challenge", post(auth_dashboard_challenge))
         .route(
+            "/auth/dashboard/ticket",
+            post(auth_dashboard_ticket_exchange),
+        )
+        .route(
             "/auth/dashboard/challenge/:id",
             get(auth_dashboard_challenge_status),
         )
@@ -1277,6 +1291,115 @@ async fn auth_dashboard_challenge_status(
                 pending_login_id: None,
             })
             .into_response()
+        }
+    }
+}
+
+async fn auth_dashboard_ticket_exchange(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<DashboardTicketExchangeRequest>,
+) -> Response {
+    if *state.access_locked.lock().unwrap() {
+        return access_paused_response();
+    }
+    if state.dashboard_auth.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Dashboard login is not configured on this host",
+        )
+            .into_response();
+    }
+
+    let now = Instant::now();
+    let client = client_key_from_headers(&headers);
+    {
+        let mut attempts = state.auth_attempts.lock().unwrap();
+        if let Some(wait) = attempts.retry_after(AuthAttemptBucket::ChallengePoll, &client, now) {
+            return too_many_attempts_response(
+                wait,
+                "Too many approval checks. Wait a moment and try again.",
+            );
+        }
+        attempts.record_attempt(AuthAttemptBucket::ChallengePoll, &client, now);
+    }
+
+    let ticket = req.dashboard_ticket.trim();
+    if ticket.is_empty() {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "approval_expired",
+            "This sign-in expired. Continue again.",
+        );
+    }
+
+    let synthetic_challenge_id = format!("ticket:{ticket}");
+    if let Some(existing) = state
+        .dashboard_pending_logins
+        .lock()
+        .unwrap()
+        .get_by_challenge(&synthetic_challenge_id, now)
+    {
+        state
+            .auth_attempts
+            .lock()
+            .unwrap()
+            .clear_bucket(AuthAttemptBucket::ChallengePoll, &client);
+        return Json(DashboardTicketExchangeResponse {
+            pending_login_id: existing,
+        })
+        .into_response();
+    }
+
+    match redeem_dashboard_ticket(&state, ticket).await {
+        DashboardTicketRedeemResult::Approved => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &client);
+            let pending_login_id = state
+                .dashboard_pending_logins
+                .lock()
+                .unwrap()
+                .create(synthetic_challenge_id, now);
+            Json(DashboardTicketExchangeResponse { pending_login_id }).into_response()
+        }
+        DashboardTicketRedeemResult::Expired => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &client);
+            api_error(
+                StatusCode::UNAUTHORIZED,
+                "approval_expired",
+                "This sign-in expired. Continue again.",
+            )
+        }
+        DashboardTicketRedeemResult::Denied => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &client);
+            api_error(
+                StatusCode::FORBIDDEN,
+                "approval_denied",
+                "This sign-in was denied. Continue again.",
+            )
+        }
+        DashboardTicketRedeemResult::Unavailable => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &client);
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "approval_unavailable",
+                "Cannot finish sign-in right now. Try again in a moment.",
+            )
         }
     }
 }
