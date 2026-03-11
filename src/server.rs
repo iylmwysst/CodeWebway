@@ -1375,12 +1375,14 @@ async fn auth_login(
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
 
+    let now_unix = unix_now();
     let password_ok = req
         .password
         .as_deref()
         .map(|password| check_token(password, &state.password))
         .unwrap_or(false);
-    let sso_ok = verify_sso_ticket(&state, req.sso_ticket.as_deref(), unix_now());
+    let sso_ticket = inspect_sso_ticket(&state, req.sso_ticket.as_deref(), now_unix);
+    let sso_ok = sso_ticket.is_some();
     let dashboard_ok = verify_dashboard_ticket(&state, req.dashboard_ticket.as_deref()).await
         || verify_dashboard_token(&state, req.dashboard_token.as_deref()).await;
     let pin_ok = verify_pin(req.pin.as_deref(), state.pin.as_deref());
@@ -1405,6 +1407,15 @@ async fn auth_login(
     }
 
     if auth_factor_ok && pin_ok {
+        if let Some(payload) = sso_ticket.as_ref() {
+            if !consume_sso_ticket_nonce(&state, &payload.nonce, payload.exp, now_unix) {
+                return api_error(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_sso_or_pin",
+                    "Invalid sign-in link or machine PIN.",
+                );
+            }
+        }
         state.auth_attempts.lock().unwrap().clear_login(&client);
         let session_token = {
             let mut sessions = state.sessions.lock().unwrap();
@@ -3060,57 +3071,60 @@ struct SsoTicketPayload {
     instance: Option<String>,
 }
 
-fn verify_sso_ticket(state: &Arc<AppState>, ticket: Option<&str>, now_unix: u64) -> bool {
-    let Some(secret) = state.sso_shared_secret.as_deref() else {
-        return false;
-    };
-    let Some(ticket) = ticket else {
-        return false;
-    };
+fn inspect_sso_ticket(
+    state: &Arc<AppState>,
+    ticket: Option<&str>,
+    now_unix: u64,
+) -> Option<SsoTicketPayload> {
+    let secret = state.sso_shared_secret.as_deref()?;
+    let ticket = ticket?;
     let mut parts = ticket.split('.');
     let payload_b64 = match parts.next() {
         Some(v) if !v.is_empty() => v,
-        _ => return false,
+        _ => return None,
     };
     let sig_hex = match parts.next() {
         Some(v) if !v.is_empty() => v,
-        _ => return false,
+        _ => return None,
     };
     if parts.next().is_some() {
-        return false;
+        return None;
     }
 
     let expected = sso_ticket_signature(secret, payload_b64);
     if !check_token(sig_hex, &expected) {
-        return false;
+        return None;
     }
     let payload_bytes = match URL_SAFE_NO_PAD.decode(payload_b64) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     let payload: SsoTicketPayload = match serde_json::from_slice(&payload_bytes) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     if payload.sub.trim().is_empty() || payload.nonce.len() < 16 || payload.nonce.len() > 128 {
-        return false;
+        return None;
     }
     if let Some(expected_instance) = state.runtime_instance_id.as_deref() {
         if payload.instance.as_deref() != Some(expected_instance) {
-            return false;
+            return None;
         }
     }
     if payload.exp < now_unix || payload.exp > now_unix.saturating_add(5 * 60) {
-        return false;
+        return None;
     }
+    Some(payload)
+}
 
+fn consume_sso_ticket_nonce(state: &Arc<AppState>, nonce: &str, exp: u64, now_unix: u64) -> bool {
     // Single-use nonce blocks replay if ticket leaks in logs/history.
     let mut used = state.used_sso_nonces.lock().unwrap();
     used.retain(|_, exp| *exp >= now_unix);
-    if used.contains_key(&payload.nonce) {
+    if used.contains_key(nonce) {
         return false;
     }
-    used.insert(payload.nonce, payload.exp);
+    used.insert(nonce.to_string(), exp);
     true
 }
 
@@ -3888,7 +3902,7 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_sso_ticket_accepts_valid_single_use_ticket() {
+    fn test_inspect_sso_ticket_does_not_consume_before_success() {
         let state =
             make_state_with_sso(false, Some("0123456789abcdef0123456789abcdef".to_string()));
         let now = unix_now();
@@ -3901,12 +3915,24 @@ mod tests {
         let sig = sso_ticket_signature(state.sso_shared_secret.as_deref().unwrap(), &payload_b64);
         let ticket = format!("{payload_b64}.{sig}");
 
-        assert!(verify_sso_ticket(&state, Some(&ticket), now));
-        assert!(!verify_sso_ticket(&state, Some(&ticket), now));
+        let inspected = inspect_sso_ticket(&state, Some(&ticket), now).expect("valid ticket");
+        assert!(inspect_sso_ticket(&state, Some(&ticket), now).is_some());
+        assert!(consume_sso_ticket_nonce(
+            &state,
+            &inspected.nonce,
+            inspected.exp,
+            now
+        ));
+        assert!(!consume_sso_ticket_nonce(
+            &state,
+            &inspected.nonce,
+            inspected.exp,
+            now
+        ));
     }
 
     #[test]
-    fn test_verify_sso_ticket_rejects_bad_signature() {
+    fn test_inspect_sso_ticket_rejects_bad_signature() {
         let state =
             make_state_with_sso(false, Some("0123456789abcdef0123456789abcdef".to_string()));
         let now = unix_now();
@@ -3917,11 +3943,11 @@ mod tests {
         });
         let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
         let ticket = format!("{payload_b64}.deadbeef");
-        assert!(!verify_sso_ticket(&state, Some(&ticket), now));
+        assert!(inspect_sso_ticket(&state, Some(&ticket), now).is_none());
     }
 
     #[test]
-    fn test_verify_sso_ticket_rejects_wrong_runtime_instance() {
+    fn test_inspect_sso_ticket_rejects_wrong_runtime_instance() {
         let state = make_state_with_sso_and_instance(
             false,
             Some("0123456789abcdef0123456789abcdef".to_string()),
@@ -3937,7 +3963,7 @@ mod tests {
         let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
         let sig = sso_ticket_signature("0123456789abcdef0123456789abcdef", &payload_b64);
         let ticket = format!("{payload_b64}.{sig}");
-        assert!(!verify_sso_ticket(&state, Some(&ticket), now));
+        assert!(inspect_sso_ticket(&state, Some(&ticket), now).is_none());
     }
 
     fn make_state(terminal_only: bool) -> Arc<AppState> {
