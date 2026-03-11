@@ -176,6 +176,7 @@ pub async fn send_heartbeat(
     creds: &FleetCredentials,
     status: &str,
     active_url: Option<&str>,
+    runtime_instance_id: Option<&str>,
     skip_status_write: bool,
 ) -> Result<HeartbeatData> {
     let client = reqwest::Client::new();
@@ -185,6 +186,9 @@ pub async fn send_heartbeat(
     });
     if let Some(url) = active_url {
         body["active_url"] = serde_json::json!(url);
+    }
+    if let Some(runtime_instance_id) = runtime_instance_id {
+        body["runtime_instance_id"] = serde_json::json!(runtime_instance_id);
     }
 
     let resp: HeartbeatResponse = client
@@ -273,6 +277,7 @@ async fn rotate_machine_token(creds: &mut FleetCredentials) -> Result<bool> {
 struct DaemonState {
     status: String,
     active_url: Option<String>,
+    runtime_instance_id: Option<String>,
     last_d1_write: std::time::Instant,
 }
 
@@ -281,20 +286,35 @@ impl DaemonState {
         Self {
             status: "idle".to_string(),
             active_url: None,
+            runtime_instance_id: None,
             // force write on first heartbeat
             last_d1_write: std::time::Instant::now() - std::time::Duration::from_secs(400),
         }
     }
 
-    fn should_write(&self, new_status: &str, new_url: Option<&str>) -> bool {
+    fn should_write(
+        &self,
+        new_status: &str,
+        new_url: Option<&str>,
+        new_runtime_instance_id: Option<&str>,
+    ) -> bool {
         new_status != self.status
             || new_url != self.active_url.as_deref()
+            || new_runtime_instance_id != self.runtime_instance_id.as_deref()
             || self.last_d1_write.elapsed() > std::time::Duration::from_secs(300)
     }
 }
 
 async fn write_status_now(creds: &FleetCredentials, state: &mut DaemonState, context: &str) {
-    match send_heartbeat(creds, &state.status, state.active_url.as_deref(), false).await {
+    match send_heartbeat(
+        creds,
+        &state.status,
+        state.active_url.as_deref(),
+        state.runtime_instance_id.as_deref(),
+        false,
+    )
+    .await
+    {
         Ok(_) => {
             state.last_d1_write = std::time::Instant::now();
         }
@@ -321,8 +341,18 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     let poll_interval = std::time::Duration::from_secs(30);
 
     loop {
-        let skip = !state.should_write(&state.status.clone(), state.active_url.as_deref());
-        let hb = match send_heartbeat(&creds, &state.status, state.active_url.as_deref(), skip)
+        let skip = !state.should_write(
+            &state.status.clone(),
+            state.active_url.as_deref(),
+            state.runtime_instance_id.as_deref(),
+        );
+        let hb = match send_heartbeat(
+            &creds,
+            &state.status,
+            state.active_url.as_deref(),
+            state.runtime_instance_id.as_deref(),
+            skip,
+        )
             .await
         {
             Ok(h) => {
@@ -456,6 +486,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         .to_string();
                         state.status = "running".to_string();
                         state.active_url = handle.zrok_url.clone();
+                        state.runtime_instance_id = Some(runtime_instance_id);
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
 
@@ -476,6 +507,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
 
                         state.status = "idle".to_string();
                         state.active_url = None;
+                        state.runtime_instance_id = None;
                         write_status_now(&creds, &mut state, "after terminal stop").await;
                     }
                 }
@@ -501,8 +533,18 @@ async fn wait_for_stop(
     tokio::pin!(server_done);
 
     loop {
-        let skip = !state.should_write(&state.status, state.active_url.as_deref());
-        let heartbeat = send_heartbeat(creds, &state.status, state.active_url.as_deref(), skip);
+        let skip = !state.should_write(
+            &state.status,
+            state.active_url.as_deref(),
+            state.runtime_instance_id.as_deref(),
+        );
+        let heartbeat = send_heartbeat(
+            creds,
+            &state.status,
+            state.active_url.as_deref(),
+            state.runtime_instance_id.as_deref(),
+            skip,
+        );
         let hb = tokio::select! {
             done = &mut server_done => {
                 if done.is_err() {
@@ -918,9 +960,9 @@ mod tests {
         state.last_d1_write = std::time::Instant::now(); // reset to recent
 
         // same status — should NOT write
-        assert!(!state.should_write("idle", None));
+        assert!(!state.should_write("idle", None, None));
         // status changed — SHOULD write
-        assert!(state.should_write("running", None));
+        assert!(state.should_write("running", None, None));
     }
 
     #[test]
@@ -930,8 +972,28 @@ mod tests {
         state.status = "running".to_string();
         state.active_url = Some("https://old.zrok.io".to_string());
 
-        assert!(!state.should_write("running", Some("https://old.zrok.io")));
-        assert!(state.should_write("running", Some("https://new.zrok.io")));
+        assert!(!state.should_write("running", Some("https://old.zrok.io"), None));
+        assert!(state.should_write("running", Some("https://new.zrok.io"), None));
+    }
+
+    #[test]
+    fn test_daemon_state_should_write_on_runtime_instance_change() {
+        let mut state = DaemonState::new();
+        state.last_d1_write = std::time::Instant::now();
+        state.status = "running".to_string();
+        state.active_url = Some("https://old.zrok.io".to_string());
+        state.runtime_instance_id = Some("instance-old".to_string());
+
+        assert!(!state.should_write(
+            "running",
+            Some("https://old.zrok.io"),
+            Some("instance-old")
+        ));
+        assert!(state.should_write(
+            "running",
+            Some("https://old.zrok.io"),
+            Some("instance-new")
+        ));
     }
 
     #[tokio::test]
@@ -972,7 +1034,9 @@ mod tests {
             .await;
 
         let creds = make_creds(&server.url());
-        let hb = send_heartbeat(&creds, "idle", None, false).await.unwrap();
+        let hb = send_heartbeat(&creds, "idle", None, None, false)
+            .await
+            .unwrap();
         assert!(!hb.has_command);
         assert!(hb.command.is_none());
         m.assert_async().await;
@@ -990,7 +1054,9 @@ mod tests {
             .await;
 
         let creds = make_creds(&server.url());
-        let hb = send_heartbeat(&creds, "idle", None, false).await.unwrap();
+        let hb = send_heartbeat(&creds, "idle", None, None, false)
+            .await
+            .unwrap();
         assert!(hb.has_command);
         let cmd = hb.command.unwrap();
         assert_eq!(cmd.kind, "run_codewebway");
@@ -1009,7 +1075,7 @@ mod tests {
             .await;
 
         let creds = make_creds(&server.url());
-        let result = send_heartbeat(&creds, "idle", None, false).await;
+        let result = send_heartbeat(&creds, "idle", None, None, false).await;
         assert!(result.is_err());
         assert!(is_unauthorized(&result.unwrap_err()));
     }
