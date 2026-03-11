@@ -108,6 +108,8 @@ Required payload fields:
 
 This is what the WebWayFleet dashboard uses for "Open Terminal". The ticket replaces the access token prompt, but the machine PIN is still required.
 
+Launch tickets are now also bound to the current runtime instance in fleet mode, so a stale launch URL from an older terminal run cannot be replayed against a newer run.
+
 ### Temporary Links
 
 Temporary links are created either:
@@ -122,6 +124,7 @@ Current behavior:
 - max uses: 1 to 100
 - optional binding to one terminal tab
 - max 2 active links at once
+- `interactive` links created on dashboard-enabled hosts redeem through owner approval before the guest session is minted
 
 Read-only temp sessions can still view output, but server-side input and file writes are dropped.
 
@@ -250,8 +253,9 @@ Once a machine is running, the dashboard supports three ways to reach it:
 
 2. `Reveal Token`
    - fetches the runtime access token stored in WebWayFleet KV
-   - useful as a fallback when launch URLs are not enough
+   - intended for recovery only when launch URLs are not enough
    - still requires the machine PIN
+   - the token is bound to the current runtime instance and is rejected after a new runtime replaces it
 
 3. Host page `Continue`
    - starts a WebWayFleet approval challenge from the CodeWebway login page itself

@@ -15,8 +15,19 @@ pub struct FleetCredentials {
     pub machine_token: String,
     pub machine_name: String,
     pub fleet_endpoint: String,
+    #[serde(default = "current_epoch_millis")]
+    pub machine_token_issued_at: u64,
     /// PIN stored during `enable`; used by the daemon so no flag is needed at runtime.
     pub pin: Option<String>,
+}
+
+const MACHINE_TOKEN_ROTATE_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+fn current_epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn credentials_path() -> PathBuf {
@@ -97,6 +108,7 @@ pub async fn enable_to_path(
         machine_token,
         machine_name: machine_name.clone(),
         fleet_endpoint: fleet_endpoint.to_string(),
+        machine_token_issued_at: current_epoch_millis(),
         pin: Some(pin.clone()),
     };
     save_credentials_to(&creds, path)?;
@@ -209,6 +221,53 @@ pub async fn report_result(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct RotateTokenResponse {
+    data: RotateTokenData,
+}
+
+#[derive(Debug, Deserialize)]
+struct RotateTokenData {
+    machine_token: String,
+}
+
+fn should_rotate_machine_token(creds: &FleetCredentials) -> bool {
+    current_epoch_millis().saturating_sub(creds.machine_token_issued_at)
+        >= MACHINE_TOKEN_ROTATE_INTERVAL_MS
+}
+
+async fn rotate_machine_token(creds: &mut FleetCredentials) -> Result<bool> {
+    if !should_rotate_machine_token(creds) {
+        return Ok(false);
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!(
+            "{}/api/v1/agent/token/rotate",
+            creds.fleet_endpoint
+        ))
+        .bearer_auth(&creds.machine_token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(false);
+    }
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
+    }
+    let payload = response
+        .error_for_status()?
+        .json::<RotateTokenResponse>()
+        .await?;
+    creds.machine_token = payload.data.machine_token;
+    creds.machine_token_issued_at = current_epoch_millis();
+    save_credentials(creds)?;
+    Ok(true)
+}
+
 // ─── Daemon state ──────────────────────────────────────────────────────────────
 
 struct DaemonState {
@@ -253,7 +312,7 @@ async fn write_status_now(creds: &FleetCredentials, state: &mut DaemonState, con
 // ─── Daemon loop ───────────────────────────────────────────────────────────────
 
 pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
-    let creds = load_credentials().context("Not enabled. Run: codewebway enable <token>")?;
+    let mut creds = load_credentials().context("Not enabled. Run: codewebway enable <token>")?;
 
     println!("  Fleet daemon starting for \"{}\"", creds.machine_name);
     println!("  Endpoint: {}", creds.fleet_endpoint);
@@ -263,25 +322,33 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
 
     loop {
         let skip = !state.should_write(&state.status.clone(), state.active_url.as_deref());
-        let hb =
-            match send_heartbeat(&creds, &state.status, state.active_url.as_deref(), skip).await {
-                Ok(h) => {
-                    if !skip {
-                        state.last_d1_write = std::time::Instant::now();
-                    }
-                    h
+        let hb = match send_heartbeat(&creds, &state.status, state.active_url.as_deref(), skip)
+            .await
+        {
+            Ok(h) => {
+                if !skip {
+                    state.last_d1_write = std::time::Instant::now();
                 }
-                Err(e) => {
-                    if is_unauthorized(&e) {
-                        eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                        eprintln!("  Run: codewebway disable");
-                        std::process::exit(1);
+                if state.status != "running" {
+                    match rotate_machine_token(&mut creds).await {
+                        Ok(true) => eprintln!("  Fleet: rotated machine token during idle window."),
+                        Ok(false) => {}
+                        Err(e) => eprintln!("  Fleet: token rotation skipped: {e}"),
                     }
-                    eprintln!("  Fleet: heartbeat error (will retry): {e}");
-                    tokio::time::sleep(poll_interval).await;
-                    continue;
                 }
-            };
+                h
+            }
+            Err(e) => {
+                if is_unauthorized(&e) {
+                    eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
+                    eprintln!("  Run: codewebway disable");
+                    std::process::exit(1);
+                }
+                eprintln!("  Fleet: heartbeat error (will retry): {e}");
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
+        };
 
         if !hb.has_command {
             tokio::time::sleep(poll_interval).await;
@@ -307,8 +374,18 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     .take(24)
                     .map(char::from)
                     .collect();
+                let runtime_instance_id = if exec_id.is_empty() {
+                    rand::thread_rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(16)
+                        .map(char::from)
+                        .collect::<String>()
+                } else {
+                    exec_id.clone()
+                };
                 fleet_cfg.password = Some(session_token);
                 fleet_cfg.sso_shared_secret = Some(sha256_hex(&creds.machine_token));
+                fleet_cfg.runtime_instance_id = Some(runtime_instance_id.clone());
                 if let Some(ref pin) = creds.pin {
                     fleet_cfg.pin = Some(pin.clone());
                 }
@@ -374,6 +451,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                             "url": url,
                             "access_token": handle.token,
                             "access_token_ttl_secs": 12 * 60 * 60,
+                            "runtime_instance_id": runtime_instance_id,
                         })
                         .to_string();
                         state.status = "running".to_string();
@@ -790,6 +868,7 @@ mod tests {
             machine_token: "mt_test".to_string(),
             machine_name: "pi-test".to_string(),
             fleet_endpoint: endpoint.to_string(),
+            machine_token_issued_at: 1_700_000_000_000,
             pin: Some("123456".to_string()),
         }
     }
@@ -808,6 +887,7 @@ mod tests {
         assert_eq!(loaded.machine_token, "mt_test");
         assert_eq!(loaded.machine_name, "pi-test");
         assert_eq!(loaded.fleet_endpoint, "https://webwayfleet.dev");
+        assert_eq!(loaded.machine_token_issued_at, 1_700_000_000_000);
     }
 
     #[test]

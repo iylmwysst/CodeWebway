@@ -35,7 +35,7 @@ Browser  ──HTTPS──▶  zrok edge  ──tunnel──▶  CodeWebway  ─
 - Works on any modern browser — desktop, tablet, or mobile (iOS and Android tested).
 - The server binds to `127.0.0.1` by default. Public access is opt-in via `--zrok` or a reverse proxy.
 
-With WebWayFleet, the same host can also be opened through dashboard-approved host login, signed launch URLs, and a short-lived runtime token fallback.
+With WebWayFleet, the same host can also be opened through dashboard-approved host login, signed launch URLs bound to the current runtime instance, and a short-lived runtime token fallback reserved for recovery.
 
 ## Quick Start
 

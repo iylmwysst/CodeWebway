@@ -35,6 +35,10 @@ pub struct Config {
     #[arg(long)]
     pub sso_shared_secret: Option<String>,
 
+    /// Runtime instance identifier for binding launch and recovery material to one live instance
+    #[arg(long, hide = true)]
+    pub runtime_instance_id: Option<String>,
+
     /// Shell to spawn (default: $SHELL on Unix, cmd.exe on Windows)
     #[arg(long)]
     pub shell: Option<String>,
@@ -173,6 +177,12 @@ mod tests {
     fn test_sso_shared_secret_stored() {
         let cfg = Config::parse_from(["codewebway", "--sso-shared-secret", "secret123"]);
         assert_eq!(cfg.sso_shared_secret, Some("secret123".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_instance_id_optional() {
+        let cfg = Config::parse_from(["codewebway"]);
+        assert!(cfg.runtime_instance_id.is_none());
     }
 
     #[test]

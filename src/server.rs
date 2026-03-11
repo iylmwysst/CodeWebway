@@ -65,6 +65,7 @@ pub struct AppState {
     pub temp_link_signing_key: String,
     pub auto_shutdown_disabled: bool,
     pub terminal_only: bool,
+    pub runtime_instance_id: Option<String>,
     pub sso_shared_secret: Option<String>,
     pub used_sso_nonces: Mutex<HashMap<String, u64>>,
     pub dashboard_auth: Option<DashboardAuthConfig>,
@@ -99,10 +100,50 @@ pub struct DashboardChallengeStatusResponse {
     pending_login_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct TempLinkChallengeQuery {
+    token: String,
+}
+
+#[derive(Serialize)]
+struct TempLinkChallengeStatusResponse {
+    status: String,
+    redirect_to: Option<String>,
+}
+
 #[derive(Serialize)]
 struct ApiErrorResponse {
     code: String,
     message: String,
+}
+
+async fn emit_dashboard_activity(
+    state: &Arc<AppState>,
+    event_type: &str,
+    event_name: &str,
+    status: &str,
+    detail: Option<String>,
+) {
+    let Some(cfg) = state.dashboard_auth.as_ref() else {
+        return;
+    };
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/v1/agent/activity",
+        cfg.api_base.trim_end_matches('/')
+    );
+    let _ = client
+        .post(url)
+        .bearer_auth(&cfg.machine_token)
+        .json(&serde_json::json!({
+            "event_type": event_type,
+            "event_name": event_name,
+            "status": status,
+            "detail": detail,
+        }))
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await;
 }
 
 #[derive(Deserialize)]
@@ -127,6 +168,7 @@ pub struct CreateTempLinkRequest {
     one_time: Option<bool>,
     max_uses: Option<u32>,
     bound_terminal_id: Option<String>,
+    pin: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -342,6 +384,13 @@ impl TempLinkScope {
             "read-only" => Some(Self::ReadOnly),
             "interactive" => Some(Self::Interactive),
             _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Interactive => "interactive",
         }
     }
 }
@@ -787,6 +836,28 @@ impl TempLinkStore {
         }
     }
 
+    fn inspect(
+        &mut self,
+        id: &str,
+        now_unix: u64,
+        token_expires_unix: u64,
+    ) -> Option<(TempLinkScope, Option<String>)> {
+        let record = self.by_id.get(id)?;
+        if record.revoked_at_unix.is_some() {
+            return None;
+        }
+        if record.expires_at_unix != token_expires_unix {
+            return None;
+        }
+        if now_unix > record.expires_at_unix.saturating_add(TEMP_LINK_GRACE_SECS) {
+            return None;
+        }
+        if record.used_count >= record.max_uses {
+            return None;
+        }
+        Some((record.scope, record.bound_terminal_id.clone()))
+    }
+
     fn redeem(
         &mut self,
         id: &str,
@@ -916,6 +987,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(list_temp_links).post(create_temp_link),
         )
         .route("/auth/temp-links/:id", delete(revoke_temp_link))
+        .route(
+            "/auth/temp-links/interactive/challenge/:id",
+            get(auth_temp_link_interactive_challenge_status),
+        )
         .route("/auth/public-status", get(auth_public_status))
         .route("/t/:token", get(redeem_temp_link))
         .route("/api/terminals", get(list_terminals).post(create_terminal))
@@ -1283,10 +1358,20 @@ async fn auth_login(
         }
 
         state.auth_attempts.lock().unwrap().clear_login(&client);
-        let mut sessions = state.sessions.lock().unwrap();
-        let session_token = sessions.create(now);
+        let session_token = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create(now)
+        };
         bump_shutdown_deadline_from_activity(&state, now);
-        let set_cookie = session_cookie_header(&session_token);
+        emit_dashboard_activity(
+            &state,
+            "machine.runtime.entry.dashboard_approval",
+            "Completed dashboard-approved runtime sign-in",
+            "success",
+            None,
+        )
+        .await;
+        let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
 
@@ -1321,10 +1406,40 @@ async fn auth_login(
 
     if auth_factor_ok && pin_ok {
         state.auth_attempts.lock().unwrap().clear_login(&client);
-        let mut sessions = state.sessions.lock().unwrap();
-        let session_token = sessions.create(now);
+        let session_token = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create(now)
+        };
         bump_shutdown_deadline_from_activity(&state, now);
-        let set_cookie = session_cookie_header(&session_token);
+        if sso_ok {
+            emit_dashboard_activity(
+                &state,
+                "machine.runtime.entry.launch_url",
+                "Opened runtime through launch URL",
+                "success",
+                None,
+            )
+            .await;
+        } else if dashboard_ok {
+            emit_dashboard_activity(
+                &state,
+                "machine.runtime.entry.dashboard_approval",
+                "Completed dashboard-approved runtime sign-in",
+                "success",
+                None,
+            )
+            .await;
+        } else if password_ok {
+            emit_dashboard_activity(
+                &state,
+                "machine.runtime.entry.recovery_token",
+                "Opened runtime with recovery token",
+                "success",
+                None,
+            )
+            .await;
+        }
+        let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
 
@@ -1391,12 +1506,8 @@ fn access_paused_response() -> Response {
 
 async fn auth_session(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
     if let Some(session_token) = has_valid_session_cookie(&headers, &state, false) {
-        return (
-            StatusCode::OK,
-            [(header::SET_COOKIE, session_cookie_header(&session_token))],
-            "OK",
-        )
-            .into_response();
+        let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
+        return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
@@ -1428,9 +1539,10 @@ async fn auth_session_status(headers: HeaderMap, State(state): State<Arc<AppStat
         bound_terminal_id: grant.as_ref().and_then(|g| g.bound_terminal_id.clone()),
         temp_link_id: grant.as_ref().map(|g| g.source_link_id.clone()),
     };
+    let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie_header(&session_token))],
+        [(header::SET_COOKIE, set_cookie)],
         Json(payload),
     )
         .into_response()
@@ -1457,12 +1569,8 @@ async fn auth_extend(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     bump_shutdown_deadline_from_activity(&state, now);
-    (
-        StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie_header(&session_token))],
-        "OK",
-    )
-        .into_response()
+    let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
+    (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response()
 }
 
 async fn auth_stop_terminal(
@@ -1495,7 +1603,7 @@ async fn auth_stop_terminal(
         StatusCode::OK,
         [(
             header::SET_COOKIE,
-            "codewebway_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0".to_string(),
+            clear_session_cookie_header(headers_use_secure_cookie(&headers)),
         )],
         "OK",
     )
@@ -1562,6 +1670,25 @@ async fn create_temp_link(
             .into_response();
     }
 
+    let requires_step_up = temp_link_requires_step_up(&scope, ttl_minutes, max_uses);
+    if requires_step_up {
+        let pin = req.pin.as_deref().map(str::trim).filter(|v| !v.is_empty());
+        if state.pin.is_some() && pin.is_none() {
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "pin_required",
+                "Machine PIN required for interactive or extended share links.",
+            );
+        }
+        if !verify_pin(pin, state.pin.as_deref()) {
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "pin_invalid",
+                "Incorrect machine PIN.",
+            );
+        }
+    }
+
     let bound_terminal_id = req.bound_terminal_id.and_then(|id| {
         let trimmed = id.trim().to_string();
         if trimmed.is_empty() {
@@ -1608,6 +1735,21 @@ async fn create_temp_link(
         scope: created.scope,
         bound_terminal_id: created.bound_terminal_id,
     };
+    let (event_type, event_name) = classify_temp_link_creation(&scope, ttl_minutes, max_uses);
+    emit_dashboard_activity(
+        &state,
+        event_type,
+        event_name,
+        "info",
+        Some(format!(
+            "scope={} ttl_minutes={} max_uses={} step_up={}",
+            scope.as_str(),
+            ttl_minutes,
+            max_uses,
+            requires_step_up
+        )),
+    )
+    .await;
     count_tx_json(&state, &payload);
     (StatusCode::CREATED, Json(payload)).into_response()
 }
@@ -1666,6 +1808,7 @@ async fn revoke_temp_link(
 }
 
 async fn redeem_temp_link(
+    headers: HeaderMap,
     AxumPath(token): AxumPath<String>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
@@ -1692,6 +1835,23 @@ async fn redeem_temp_link(
             "Temporary link expired",
             "This link has expired. If you still need access, please contact the sender for a new link.",
         );
+    }
+
+    let inspected =
+        state
+            .temp_links
+            .lock()
+            .unwrap()
+            .inspect(&parsed.id, now_unix, parsed.expires_at_unix);
+    let Some((scope, _)) = inspected else {
+        return temp_link_error_page(
+            "Temporary link unavailable",
+            "This link is no longer available (expired, revoked, or already used). Please request a new link.",
+        );
+    };
+
+    if scope == TempLinkScope::Interactive && state.dashboard_auth.is_some() {
+        return interactive_temp_link_approval_page(&token);
     }
 
     let redeemed =
@@ -1721,13 +1881,289 @@ async fn redeem_temp_link(
         },
     );
     bump_shutdown_deadline_from_activity(&state, now);
+    emit_dashboard_activity(
+        &state,
+        "machine.temp_link.redeem.read_only",
+        "Redeemed read-only share link",
+        "success",
+        None,
+    )
+    .await;
 
-    let set_cookie = session_cookie_header(&session_token);
+    let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
     let mut response = Redirect::to("/").into_response();
     if let Ok(value) = set_cookie.parse() {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
+}
+
+async fn auth_temp_link_interactive_challenge_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<TempLinkChallengeQuery>,
+) -> Response {
+    if *state.access_locked.lock().unwrap() {
+        return access_paused_response();
+    }
+    let Some(cfg) = state.dashboard_auth.as_ref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Dashboard login is not configured on this host",
+        )
+            .into_response();
+    };
+
+    let parsed = match parse_and_verify_temp_link_token(&state.temp_link_signing_key, &query.token)
+    {
+        Some(parsed) => parsed,
+        None => {
+            return Json(TempLinkChallengeStatusResponse {
+                status: "expired".to_string(),
+                redirect_to: None,
+            })
+            .into_response()
+        }
+    };
+
+    let now = Instant::now();
+    let now_unix = unix_now();
+    let inspected =
+        state
+            .temp_links
+            .lock()
+            .unwrap()
+            .inspect(&parsed.id, now_unix, parsed.expires_at_unix);
+    let Some((scope, _)) = inspected else {
+        return Json(TempLinkChallengeStatusResponse {
+            status: "expired".to_string(),
+            redirect_to: None,
+        })
+        .into_response();
+    };
+    if scope != TempLinkScope::Interactive {
+        return Json(TempLinkChallengeStatusResponse {
+            status: "denied".to_string(),
+            redirect_to: None,
+        })
+        .into_response();
+    }
+
+    let client = client_key_from_headers(&headers);
+    let poll_client = format!("{client}:{id}:interactive");
+    {
+        let mut attempts = state.auth_attempts.lock().unwrap();
+        if let Some(wait) =
+            attempts.retry_after(AuthAttemptBucket::ChallengePoll, &poll_client, now)
+        {
+            return too_many_attempts_response(
+                wait,
+                "Too many approval checks. Wait a moment and try again.",
+            );
+        }
+        attempts.record_attempt(AuthAttemptBucket::ChallengePoll, &poll_client, now);
+    }
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/v1/agent/host-auth/challenge/{}",
+        cfg.api_base.trim_end_matches('/'),
+        id
+    );
+    let result = client
+        .get(url)
+        .bearer_auth(&cfg.machine_token)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await;
+    let response = match result {
+        Ok(res) => res,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "Cannot reach dashboard API").into_response(),
+    };
+    if !response.status().is_success() {
+        let status = match response.status() {
+            StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND | StatusCode::GONE => "expired",
+            StatusCode::FORBIDDEN => "denied",
+            _ => "unavailable",
+        };
+        state
+            .auth_attempts
+            .lock()
+            .unwrap()
+            .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+        return Json(TempLinkChallengeStatusResponse {
+            status: status.to_string(),
+            redirect_to: None,
+        })
+        .into_response();
+    }
+    let payload = match response.json::<FleetChallengeStatusEnvelope>().await {
+        Ok(v) => v,
+        Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "Invalid challenge status response").into_response()
+        }
+    };
+    let upstream_status = payload.data.status.trim().to_ascii_lowercase();
+    match upstream_status.as_str() {
+        "approved" => {
+            let Some(ticket) = payload.data.ticket.as_deref() else {
+                return Json(TempLinkChallengeStatusResponse {
+                    status: "unavailable".to_string(),
+                    redirect_to: None,
+                })
+                .into_response();
+            };
+            match redeem_dashboard_ticket(&state, ticket).await {
+                DashboardTicketRedeemResult::Approved => {
+                    let redeemed = state.temp_links.lock().unwrap().redeem(
+                        &parsed.id,
+                        now_unix,
+                        parsed.expires_at_unix,
+                    );
+                    let Some((link_id, scope, bound_terminal_id)) = redeemed else {
+                        state
+                            .auth_attempts
+                            .lock()
+                            .unwrap()
+                            .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+                        return Json(TempLinkChallengeStatusResponse {
+                            status: "expired".to_string(),
+                            redirect_to: None,
+                        })
+                        .into_response();
+                    };
+                    if scope != TempLinkScope::Interactive {
+                        state
+                            .auth_attempts
+                            .lock()
+                            .unwrap()
+                            .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+                        return Json(TempLinkChallengeStatusResponse {
+                            status: "denied".to_string(),
+                            redirect_to: None,
+                        })
+                        .into_response();
+                    }
+
+                    let session_token = {
+                        let mut sessions = state.sessions.lock().unwrap();
+                        sessions.create(now)
+                    };
+                    state.temp_grants.lock().unwrap().insert(
+                        session_token.clone(),
+                        TempSessionGrant {
+                            read_only: false,
+                            bound_terminal_id,
+                            source_link_id: link_id,
+                        },
+                    );
+                    bump_shutdown_deadline_from_activity(&state, now);
+                    state
+                        .auth_attempts
+                        .lock()
+                        .unwrap()
+                        .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+                    emit_dashboard_activity(
+                        &state,
+                        "machine.temp_link.redeem.interactive_owner_approved",
+                        "Redeemed interactive share link after owner approval",
+                        "success",
+                        None,
+                    )
+                    .await;
+                    let set_cookie =
+                        session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
+                    (
+                        StatusCode::OK,
+                        [(header::SET_COOKIE, set_cookie)],
+                        Json(TempLinkChallengeStatusResponse {
+                            status: "approved".to_string(),
+                            redirect_to: Some("/".to_string()),
+                        }),
+                    )
+                        .into_response()
+                }
+                DashboardTicketRedeemResult::Expired => {
+                    state
+                        .auth_attempts
+                        .lock()
+                        .unwrap()
+                        .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+                    Json(TempLinkChallengeStatusResponse {
+                        status: "expired".to_string(),
+                        redirect_to: None,
+                    })
+                    .into_response()
+                }
+                DashboardTicketRedeemResult::Denied => {
+                    state
+                        .auth_attempts
+                        .lock()
+                        .unwrap()
+                        .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+                    Json(TempLinkChallengeStatusResponse {
+                        status: "denied".to_string(),
+                        redirect_to: None,
+                    })
+                    .into_response()
+                }
+                DashboardTicketRedeemResult::Unavailable => {
+                    state
+                        .auth_attempts
+                        .lock()
+                        .unwrap()
+                        .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+                    Json(TempLinkChallengeStatusResponse {
+                        status: "unavailable".to_string(),
+                        redirect_to: None,
+                    })
+                    .into_response()
+                }
+            }
+        }
+        "expired" => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+            Json(TempLinkChallengeStatusResponse {
+                status: "expired".to_string(),
+                redirect_to: None,
+            })
+            .into_response()
+        }
+        "denied" | "rejected" | "revoked" => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+            Json(TempLinkChallengeStatusResponse {
+                status: "denied".to_string(),
+                redirect_to: None,
+            })
+            .into_response()
+        }
+        "pending" | "waiting" | "created" => Json(TempLinkChallengeStatusResponse {
+            status: "pending".to_string(),
+            redirect_to: None,
+        })
+        .into_response(),
+        _ => {
+            state
+                .auth_attempts
+                .lock()
+                .unwrap()
+                .clear_bucket(AuthAttemptBucket::ChallengePoll, &poll_client);
+            Json(TempLinkChallengeStatusResponse {
+                status: "unavailable".to_string(),
+                redirect_to: None,
+            })
+            .into_response()
+        }
+    }
 }
 
 async fn auth_public_status(State(state): State<Arc<AppState>>) -> Response {
@@ -1774,7 +2210,7 @@ async fn auth_logout(
         StatusCode::OK,
         [(
             header::SET_COOKIE,
-            "codewebway_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0".to_string(),
+            clear_session_cookie_header(headers_use_secure_cookie(&headers)),
         )],
         "OK",
     )
@@ -2338,10 +2774,43 @@ pub fn check_token(token: &str, password: &str) -> bool {
         == 0
 }
 
-fn session_cookie_header(session_token: &str) -> String {
+fn headers_use_secure_cookie(headers: &HeaderMap) -> bool {
+    let forwarded_proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .map(|value| value.eq_ignore_ascii_case("https"))
+        .unwrap_or(false);
+    if forwarded_proto {
+        return true;
+    }
+    for header_name in [header::ORIGIN, header::REFERER] {
+        if headers
+            .get(header_name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.starts_with("https://"))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn session_cookie_header(session_token: &str, secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
-        "codewebway_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800",
-        session_token
+        "codewebway_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800{}",
+        session_token, secure_attr
+    )
+}
+
+fn clear_session_cookie_header(secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "codewebway_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{}",
+        secure_attr
     )
 }
 
@@ -2555,11 +3024,40 @@ fn verify_pin(input: Option<&str>, expected: Option<&str>) -> bool {
     }
 }
 
+fn temp_link_requires_step_up(scope: &TempLinkScope, ttl_minutes: u64, max_uses: u32) -> bool {
+    matches!(scope, TempLinkScope::Interactive) || ttl_minutes > 15 || max_uses > 1
+}
+
+fn classify_temp_link_creation(
+    scope: &TempLinkScope,
+    ttl_minutes: u64,
+    max_uses: u32,
+) -> (&'static str, &'static str) {
+    if *scope == TempLinkScope::ReadOnly && ttl_minutes == 5 && max_uses == 1 {
+        (
+            "machine.temp_link.create.view_once",
+            "Created View Once share link",
+        )
+    } else if *scope == TempLinkScope::Interactive && ttl_minutes == 15 && max_uses == 1 {
+        (
+            "machine.temp_link.create.collaborate_once",
+            "Created Collaborate Once share link",
+        )
+    } else {
+        (
+            "machine.temp_link.create.advanced",
+            "Created advanced share link",
+        )
+    }
+}
+
 #[derive(Deserialize)]
 struct SsoTicketPayload {
     sub: String,
     nonce: String,
     exp: u64,
+    #[serde(default)]
+    instance: Option<String>,
 }
 
 fn verify_sso_ticket(state: &Arc<AppState>, ticket: Option<&str>, now_unix: u64) -> bool {
@@ -2596,6 +3094,11 @@ fn verify_sso_ticket(state: &Arc<AppState>, ticket: Option<&str>, now_unix: u64)
     };
     if payload.sub.trim().is_empty() || payload.nonce.len() < 16 || payload.nonce.len() > 128 {
         return false;
+    }
+    if let Some(expected_instance) = state.runtime_instance_id.as_deref() {
+        if payload.instance.as_deref() != Some(expected_instance) {
+            return false;
+        }
     }
     if payload.exp < now_unix || payload.exp > now_unix.saturating_add(5 * 60) {
         return false;
@@ -2826,6 +3329,189 @@ fn temp_link_error_page(title: &str, message: &str) -> Response {
     (StatusCode::UNAUTHORIZED, Html(html)).into_response()
 }
 
+fn interactive_temp_link_approval_page(token: &str) -> Response {
+    let token_json = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
+    let html = format!(
+        r##"<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Interactive Share Approval</title>
+  <style>
+    body {{
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      background: #0f1115;
+      color: #e5e7eb;
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      margin: 0;
+    }}
+    .card {{
+      width: min(560px, 100%);
+      background: #171a20;
+      border: 1px solid #313642;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }}
+    h1 {{ margin: 0 0 10px; font-size: 22px; }}
+    p {{ margin: 0 0 14px; color: #b9c0cb; line-height: 1.6; }}
+    .status {{
+      margin: 16px 0;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid #313642;
+      background: #101319;
+      color: #dbe2ea;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-line;
+    }}
+    .actions {{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }}
+    a, button {{
+      appearance: none;
+      border: 1px solid #3d4654;
+      background: #202632;
+      color: #f3f4f6;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      text-decoration: none;
+      cursor: pointer;
+    }}
+    button.secondary, a.secondary {{
+      background: transparent;
+      color: #c6d0dc;
+    }}
+    .muted {{ color: #97a3b6; font-size: 13px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Interactive Access Needs Owner Approval</h1>
+    <p>This share link can open an interactive session only after the machine owner confirms it from the dashboard.</p>
+    <div id="status" class="status">Creating approval request…</div>
+    <div class="actions">
+      <a id="approve-link" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">Open Owner Approval</a>
+      <button id="copy-link" class="secondary" type="button" style="display:none;">Copy Approval Link</button>
+      <button id="retry" class="secondary" type="button" style="display:none;">Retry</button>
+    </div>
+    <p class="muted">Keep this page open. It will continue automatically after approval.</p>
+  </div>
+  <script>
+    const token = {token_json};
+    const statusEl = document.getElementById('status');
+    const approveLinkEl = document.getElementById('approve-link');
+    const copyLinkBtn = document.getElementById('copy-link');
+    const retryBtn = document.getElementById('retry');
+    let challengeId = null;
+
+    async function readProblem(res) {{
+      const type = res.headers.get('content-type') || '';
+      if (type.includes('application/json')) {{
+        try {{
+          return await res.json();
+        }} catch {{
+          return null;
+        }}
+      }}
+      try {{
+        const text = await res.text();
+        return text ? {{ message: text }} : null;
+      }} catch {{
+        return null;
+      }}
+    }}
+
+    async function startApproval() {{
+      retryBtn.style.display = 'none';
+      statusEl.textContent = 'Creating approval request…';
+      const res = await fetch('/auth/dashboard/challenge', {{ method: 'POST', credentials: 'same-origin' }});
+      if (!res.ok) {{
+        const problem = await readProblem(res);
+        statusEl.textContent = problem?.message || 'Cannot create approval request right now. Try again in a moment.';
+        retryBtn.style.display = 'inline-flex';
+        return;
+      }}
+      const challenge = await res.json();
+      challengeId = challenge.challenge_id;
+      approveLinkEl.href = challenge.approve_url;
+      approveLinkEl.style.display = 'inline-flex';
+      copyLinkBtn.style.display = 'inline-flex';
+      statusEl.textContent = 'Waiting for the machine owner to approve this interactive share.\nOpen the owner approval page in another tab or send it to the owner.';
+      void pollApproval();
+    }}
+
+    async function pollApproval() {{
+      while (challengeId) {{
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        const res = await fetch(`/auth/temp-links/interactive/challenge/${{encodeURIComponent(challengeId)}}?token=${{encodeURIComponent(token)}}`, {{
+          method: 'GET',
+          credentials: 'same-origin'
+        }});
+        if (res.status === 429) {{
+          statusEl.textContent = 'Checking too often. Waiting a moment before trying again…';
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
+        }}
+        if (!res.ok) {{
+          const problem = await readProblem(res);
+          statusEl.textContent = problem?.message || 'Cannot check approval right now. Try again in a moment.';
+          retryBtn.style.display = 'inline-flex';
+          return;
+        }}
+        const body = await res.json();
+        if (body.status === 'pending') {{
+          continue;
+        }}
+        if (body.status === 'approved') {{
+          statusEl.textContent = 'Approved. Opening interactive workspace…';
+          window.location.assign(body.redirect_to || '/');
+          return;
+        }}
+        if (body.status === 'denied') {{
+          statusEl.textContent = 'The machine owner denied this interactive access request.';
+          retryBtn.style.display = 'inline-flex';
+          return;
+        }}
+        if (body.status === 'expired') {{
+          statusEl.textContent = 'This share link or approval request expired. Ask the sender for a fresh link.';
+          retryBtn.style.display = 'inline-flex';
+          return;
+        }}
+        statusEl.textContent = 'Approval is temporarily unavailable. Try again in a moment.';
+        retryBtn.style.display = 'inline-flex';
+        return;
+      }}
+    }}
+
+    copyLinkBtn.addEventListener('click', async () => {{
+      if (!approveLinkEl.href || approveLinkEl.href === '#') return;
+      await navigator.clipboard?.writeText(approveLinkEl.href).catch(() => {{}});
+      statusEl.textContent = 'Approval link copied. Waiting for the machine owner to approve this interactive share.';
+    }});
+    retryBtn.addEventListener('click', () => {{
+      challengeId = null;
+      startApproval();
+    }});
+
+    startApproval();
+  </script>
+</body>
+</html>"##
+    );
+    Html(html).into_response()
+}
+
 fn count_rx(state: &Arc<AppState>, bytes: u64) {
     state.usage.lock().unwrap().add_rx(bytes);
 }
@@ -3038,6 +3724,19 @@ mod tests {
     }
 
     #[test]
+    fn test_headers_use_secure_cookie_when_forwarded_proto_is_https() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(headers_use_secure_cookie(&headers));
+    }
+
+    #[test]
+    fn test_headers_use_secure_cookie_false_for_plain_http() {
+        let headers = HeaderMap::new();
+        assert!(!headers_use_secure_cookie(&headers));
+    }
+
+    #[test]
     fn test_verify_pin_when_required() {
         assert!(verify_pin(Some("4321"), Some("4321")));
         assert!(!verify_pin(Some("1111"), Some("4321")));
@@ -3048,6 +3747,34 @@ mod tests {
     fn test_verify_pin_when_not_required() {
         assert!(verify_pin(None, None));
         assert!(verify_pin(Some("anything"), None));
+    }
+
+    #[test]
+    fn test_temp_link_requires_step_up_for_interactive_scope() {
+        assert!(temp_link_requires_step_up(
+            &TempLinkScope::Interactive,
+            DEFAULT_TEMP_LINK_TTL_MINUTES,
+            1
+        ));
+    }
+
+    #[test]
+    fn test_temp_link_requires_step_up_for_long_ttl() {
+        assert!(temp_link_requires_step_up(&TempLinkScope::ReadOnly, 60, 1));
+    }
+
+    #[test]
+    fn test_temp_link_requires_step_up_for_multi_use() {
+        assert!(temp_link_requires_step_up(&TempLinkScope::ReadOnly, 15, 5));
+    }
+
+    #[test]
+    fn test_temp_link_allows_low_risk_defaults_without_step_up() {
+        assert!(!temp_link_requires_step_up(
+            &TempLinkScope::ReadOnly,
+            DEFAULT_TEMP_LINK_TTL_MINUTES,
+            1
+        ));
     }
 
     #[test]
@@ -3069,6 +3796,35 @@ mod tests {
         let first = store.redeem(&record.id, now + 1, record.expires_at_unix);
         assert!(first.is_some());
         let second = store.redeem(&record.id, now + 2, record.expires_at_unix);
+        assert!(second.is_none());
+    }
+
+    #[test]
+    fn test_temp_link_inspect_does_not_consume_use() {
+        let mut store = TempLinkStore::new();
+        let now = 1_700_000_000u64;
+        let record = store
+            .create(
+                now,
+                15,
+                1,
+                TempLinkScope::Interactive,
+                Some("term-1".to_string()),
+                "session-main".to_string(),
+            )
+            .unwrap();
+
+        let inspected = store.inspect(&record.id, now + 1, record.expires_at_unix);
+        assert!(matches!(
+            inspected,
+            Some((TempLinkScope::Interactive, Some(bound_terminal_id)))
+                if bound_terminal_id == "term-1"
+        ));
+
+        let redeemed = store.redeem(&record.id, now + 2, record.expires_at_unix);
+        assert!(redeemed.is_some());
+
+        let second = store.redeem(&record.id, now + 3, record.expires_at_unix);
         assert!(second.is_none());
     }
 
@@ -3164,6 +3920,26 @@ mod tests {
         assert!(!verify_sso_ticket(&state, Some(&ticket), now));
     }
 
+    #[test]
+    fn test_verify_sso_ticket_rejects_wrong_runtime_instance() {
+        let state = make_state_with_sso_and_instance(
+            false,
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            "instance-current".to_string(),
+        );
+        let now = unix_now();
+        let payload = serde_json::json!({
+            "sub": "user_123",
+            "nonce": "nonce_runtime_instance",
+            "exp": now + 120,
+            "instance": "instance-old"
+        });
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let sig = sso_ticket_signature("0123456789abcdef0123456789abcdef", &payload_b64);
+        let ticket = format!("{payload_b64}.{sig}");
+        assert!(!verify_sso_ticket(&state, Some(&ticket), now));
+    }
+
     fn make_state(terminal_only: bool) -> Arc<AppState> {
         make_state_with_sso(terminal_only, None)
     }
@@ -3203,10 +3979,21 @@ mod tests {
             temp_link_signing_key: "signingkey123456789012345678901234567890123456".to_string(),
             auto_shutdown_disabled: false,
             terminal_only,
+            runtime_instance_id: None,
             sso_shared_secret,
             used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
             dashboard_auth: None,
         })
+    }
+
+    fn make_state_with_sso_and_instance(
+        terminal_only: bool,
+        sso_shared_secret: Option<String>,
+        runtime_instance_id: String,
+    ) -> Arc<AppState> {
+        let mut state = make_state_with_sso(terminal_only, sso_shared_secret);
+        Arc::get_mut(&mut state).unwrap().runtime_instance_id = Some(runtime_instance_id);
+        state
     }
 
     fn make_state_with_pin_and_shutdown(
@@ -3244,6 +4031,7 @@ mod tests {
             temp_link_signing_key: "signingkey123456789012345678901234567890123456".to_string(),
             auto_shutdown_disabled: false,
             terminal_only: false,
+            runtime_instance_id: None,
             sso_shared_secret: None,
             used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
             dashboard_auth: None,

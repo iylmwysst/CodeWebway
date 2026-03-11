@@ -500,6 +500,7 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         temp_link_signing_key: generate_token(48),
         auto_shutdown_disabled,
         terminal_only: cfg.terminal_only,
+        runtime_instance_id: cfg.runtime_instance_id.clone(),
         sso_shared_secret: cfg.sso_shared_secret.clone(),
         used_sso_nonces: Mutex::new(std::collections::HashMap::new()),
         dashboard_auth: match (

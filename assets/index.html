@@ -77,26 +77,198 @@
       overflow: hidden;
     }
     #login {
-      height: var(--app-height);
+      min-height: var(--app-height);
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 28px;
-      background: radial-gradient(circle at top, #2a2a2a, #111 70%);
+      padding: clamp(18px, 4vw, 36px);
+      background:
+        radial-gradient(circle at 16% 18%, rgba(92, 146, 255, 0.22), transparent 28%),
+        radial-gradient(circle at 82% 16%, rgba(78, 214, 168, 0.18), transparent 24%),
+        linear-gradient(145deg, #090c10, #11161b 46%, #0d0e12);
+      overflow: auto;
+    }
+    #login-shell {
+      width: min(1100px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 20px;
+      align-items: stretch;
+    }
+    #login-shell.auth-open {
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 460px);
     }
     .card {
       width: 100%;
       max-width: 520px;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid #3f3f3f;
-      border-radius: 14px;
+      background: rgba(7, 8, 10, 0.62);
+      border: 1px solid rgba(103, 113, 128, 0.24);
+      border-radius: 18px;
       padding: 26px;
-      box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
     }
     .card h1 { font-size: 24px; margin-bottom: 10px; letter-spacing: -0.01em; }
     .card p { color: #aaa; margin-bottom: 18px; font-size: 14px; line-height: 1.45; }
+    .eyebrow {
+      display: inline-block;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #92b6c9;
+      margin-bottom: 10px;
+    }
     .stack { display: flex; flex-direction: column; gap: 12px; }
     .row { display: flex; gap: 10px; }
+    .welcome-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 26px;
+      min-height: min(680px, calc(var(--app-height) - 64px));
+      max-width: none;
+      padding: clamp(26px, 4vw, 40px);
+      background:
+        linear-gradient(160deg, rgba(17, 22, 29, 0.96), rgba(12, 14, 18, 0.94)),
+        radial-gradient(circle at top right, rgba(104, 154, 255, 0.18), transparent 30%);
+      border-color: rgba(136, 166, 196, 0.18);
+      overflow: hidden;
+    }
+    .welcome-card::before {
+      content: '';
+      position: absolute;
+      inset: auto -8% -18% auto;
+      width: 280px;
+      height: 280px;
+      background: radial-gradient(circle, rgba(70, 161, 255, 0.22), transparent 68%);
+      pointer-events: none;
+    }
+    .welcome-card::after {
+      content: '';
+      position: absolute;
+      inset: 24px auto auto 24px;
+      width: 92px;
+      height: 92px;
+      border-radius: 28px;
+      border: 1px solid rgba(160, 195, 223, 0.14);
+      background: linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01));
+      transform: rotate(10deg);
+      pointer-events: none;
+    }
+    .welcome-copy,
+    .welcome-actions,
+    .welcome-grid {
+      position: relative;
+      z-index: 1;
+    }
+    .welcome-copy {
+      display: grid;
+      gap: 16px;
+      max-width: 620px;
+    }
+    .welcome-card h1 {
+      margin: 0;
+      max-width: 10ch;
+      font-size: clamp(34px, 6vw, 58px);
+      line-height: 0.94;
+      letter-spacing: -0.04em;
+    }
+    .welcome-lead {
+      margin: 0;
+      max-width: 48ch;
+      color: #b8c8d3;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    .welcome-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .welcome-actions button {
+      min-width: 200px;
+      padding: 12px 16px;
+      font-size: 14px;
+    }
+    .welcome-actions .ghost {
+      color: #d3e2eb;
+      border-color: rgba(150, 177, 196, 0.24);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .welcome-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(260px, 0.95fr);
+      gap: 16px;
+    }
+    .welcome-panel,
+    .welcome-status-card {
+      border: 1px solid rgba(131, 153, 176, 0.16);
+      border-radius: 16px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10px);
+    }
+    .welcome-list {
+      list-style: none;
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .welcome-list li {
+      position: relative;
+      padding-left: 18px;
+      color: #d5e0e8;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .welcome-list li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      top: 0;
+      color: #6fe0b1;
+    }
+    .welcome-status-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .welcome-status-card strong {
+      display: block;
+      margin: 4px 0 8px;
+      color: #f5fbff;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+    }
+    .welcome-status-card p,
+    .welcome-panel p {
+      margin: 0;
+      color: #aabdc9;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .auth-card {
+      display: none;
+      align-self: center;
+      max-width: none;
+      background: rgba(6, 8, 11, 0.82);
+      border-color: rgba(130, 143, 160, 0.25);
+      backdrop-filter: blur(12px);
+    }
+    .auth-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .auth-header h1 {
+      margin-bottom: 0;
+    }
+    .auth-back {
+      padding: 8px 10px;
+      flex-shrink: 0;
+    }
     .login-panel {
       border: 1px solid #3a3a3a;
       border-radius: 12px;
@@ -687,6 +859,19 @@
       font-weight: 600;
     }
     @media (max-width: 767px) {
+      #login-shell.auth-open,
+      #login-shell {
+        grid-template-columns: 1fr;
+      }
+      .welcome-card {
+        min-height: auto;
+      }
+      .welcome-grid {
+        grid-template-columns: 1fr;
+      }
+      .welcome-actions button {
+        width: 100%;
+      }
       #workspace { position: relative; overflow: hidden; }
       #files {
         position: absolute;
@@ -723,24 +908,109 @@
         font-size: 14px;
       }
     }
+    @media (max-width: 560px) {
+      .auth-card .row {
+        flex-wrap: wrap;
+      }
+      .auth-card .row > * {
+        flex: 1 1 100%;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="login">
-    <form class="card" id="login-form">
-      <h1>CodeWebway</h1>
-      <p id="login-subtitle">Unlock this machine</p>
-      <div id="login-primary" class="stack" style="display:none;">
-        <div id="dashboard-start-wrap" class="login-panel">
-          <h2 id="login-primary-title">Unlock this machine</h2>
-          <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
-          <button id="dashboard-login" class="primary-cta" type="button">Continue</button>
+    <div id="login-shell">
+      <section id="welcome-screen" class="card welcome-card">
+        <div class="welcome-copy">
+          <span class="eyebrow">Browser Workspace</span>
+          <h1>Welcome to CodeWebway</h1>
+          <p class="welcome-lead">
+            Open this machine in the browser, inspect files, and jump into a terminal when you are ready instead of landing on a bare login wall.
+          </p>
         </div>
-        <div id="dashboard-pin-wrap" class="login-panel" style="display:none;">
-          <h2>Enter machine PIN</h2>
-          <p>Account verified. Enter the PIN for this machine to continue.</p>
-          <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
-          <div class="pin-keypad" id="pin-keypad-primary">
+        <div class="welcome-actions">
+          <button id="welcome-start" class="primary-cta" type="button">Continue with account</button>
+          <button id="welcome-token" class="ghost" type="button">Use recovery access</button>
+        </div>
+        <div class="welcome-grid">
+          <div class="welcome-panel">
+            <span class="eyebrow">Inside This Workspace</span>
+            <p>Unlock once, then work from a single browser session with the tools below.</p>
+            <ul class="welcome-list">
+              <li>Live terminal access with reconnect support</li>
+              <li>File browser and editor beside the shell</li>
+              <li>Share preset links and session controls after sign-in</li>
+            </ul>
+          </div>
+          <div class="welcome-status-grid">
+            <div class="welcome-status-card">
+              <span class="eyebrow">Access</span>
+              <strong id="welcome-auth-title">Checking sign-in options...</strong>
+              <p id="welcome-auth-text">This host is loading its available unlock methods.</p>
+            </div>
+            <div class="welcome-status-card">
+              <span class="eyebrow">Host Policy</span>
+              <strong id="welcome-policy-title">Checking session policy...</strong>
+              <p id="welcome-policy-text">This host is loading its current idle and access rules.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <form class="card auth-card" id="login-form">
+        <div class="auth-header">
+          <div>
+            <span class="eyebrow">Secure Access</span>
+            <h1>Unlock This Machine</h1>
+          </div>
+          <button id="back-to-welcome" class="ghost auth-back" type="button">Back</button>
+        </div>
+        <p id="login-subtitle">Choose how you want to continue.</p>
+        <div id="login-primary" class="stack" style="display:none;">
+          <div id="dashboard-start-wrap" class="login-panel">
+            <h2 id="login-primary-title">Unlock this machine</h2>
+            <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
+            <button id="dashboard-login" class="primary-cta" type="button">Continue with account</button>
+          </div>
+          <div id="dashboard-pin-wrap" class="login-panel" style="display:none;">
+            <h2>Enter machine PIN</h2>
+            <p>Account verified. Enter the PIN for this machine to continue.</p>
+            <input id="pin-primary" type="password" autocomplete="one-time-code" placeholder="PIN" />
+            <div class="pin-keypad" id="pin-keypad-primary">
+              <button type="button" data-pin-key="1">1</button>
+              <button type="button" data-pin-key="2">2</button>
+              <button type="button" data-pin-key="3">3</button>
+              <button type="button" data-pin-key="4">4</button>
+              <button type="button" data-pin-key="5">5</button>
+              <button type="button" data-pin-key="6">6</button>
+              <button type="button" data-pin-key="7">7</button>
+              <button type="button" data-pin-key="8">8</button>
+              <button type="button" data-pin-key="9">9</button>
+              <button type="button" data-pin-key="clear">Clear</button>
+              <button type="button" data-pin-key="0">0</button>
+              <button type="button" data-pin-key="back">⌫</button>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <button id="dashboard-pin-back" class="ghost" type="button">Start over</button>
+              <button id="dashboard-continue" class="ghost" type="button">Unlock</button>
+            </div>
+          </div>
+          <div class="login-divider">Other options</div>
+          <button id="show-token-method" class="ghost" type="button">Use recovery access instead</button>
+        </div>
+        <div id="token-login-wrap" class="stack" style="display:none;">
+          <div class="login-panel">
+            <h2>Use recovery access</h2>
+            <p>Enter the recovery token and machine PIN only if account sign-in is unavailable.</p>
+            <input id="password" type="password" autocomplete="current-password" placeholder="Recovery token" required />
+            <div class="row" style="margin-top:10px;">
+              <input id="pin" type="password" autocomplete="one-time-code" placeholder="Machine PIN" />
+              <button id="submit" class="ghost" type="submit">Unlock</button>
+            </div>
+          </div>
+          <button id="hide-token-method" class="ghost" type="button" style="display:none;">Back to account sign-in</button>
+          <div class="pin-keypad" id="pin-keypad-token">
             <button type="button" data-pin-key="1">1</button>
             <button type="button" data-pin-key="2">2</button>
             <button type="button" data-pin-key="3">3</button>
@@ -754,50 +1024,18 @@
             <button type="button" data-pin-key="0">0</button>
             <button type="button" data-pin-key="back">⌫</button>
           </div>
-          <div class="row" style="margin-top:10px;">
-            <button id="dashboard-pin-back" class="ghost" type="button">Start over</button>
-            <button id="dashboard-continue" class="ghost" type="button">Unlock</button>
-          </div>
         </div>
-        <div class="login-divider">Other options</div>
-        <button id="show-token-method" class="ghost" type="button">Use access token instead</button>
-      </div>
-      <div id="token-login-wrap" class="stack" style="display:none;">
-        <div class="login-panel">
-          <h2>Use access token</h2>
-          <p>Enter the access token and machine PIN if you cannot continue with your account.</p>
-          <input id="password" type="password" autocomplete="current-password" placeholder="Access token" required />
-          <div class="row" style="margin-top:10px;">
-            <input id="pin" type="password" autocomplete="one-time-code" placeholder="Machine PIN" />
-            <button id="submit" class="ghost" type="submit">Unlock</button>
-          </div>
+        <div id="error"></div>
+        <div id="login-feedback" class="login-status-card" data-tone="warning">
+          <div id="login-feedback-title" class="eyebrow"></div>
+          <div id="login-feedback-text" class="copy"></div>
         </div>
-        <button id="hide-token-method" class="ghost" type="button" style="display:none;">Back to account sign-in</button>
-        <div class="pin-keypad" id="pin-keypad-token">
-          <button type="button" data-pin-key="1">1</button>
-          <button type="button" data-pin-key="2">2</button>
-          <button type="button" data-pin-key="3">3</button>
-          <button type="button" data-pin-key="4">4</button>
-          <button type="button" data-pin-key="5">5</button>
-          <button type="button" data-pin-key="6">6</button>
-          <button type="button" data-pin-key="7">7</button>
-          <button type="button" data-pin-key="8">8</button>
-          <button type="button" data-pin-key="9">9</button>
-          <button type="button" data-pin-key="clear">Clear</button>
-          <button type="button" data-pin-key="0">0</button>
-          <button type="button" data-pin-key="back">⌫</button>
+        <div id="login-meta" class="login-status-card" data-tone="neutral">
+          <div id="login-meta-title" class="eyebrow"></div>
+          <div id="login-meta-text" class="copy"></div>
         </div>
-      </div>
-      <div id="error"></div>
-      <div id="login-feedback" class="login-status-card" data-tone="warning">
-        <div id="login-feedback-title" class="eyebrow"></div>
-        <div id="login-feedback-text" class="copy"></div>
-      </div>
-      <div id="login-meta" class="login-status-card" data-tone="neutral">
-        <div id="login-meta-title" class="eyebrow"></div>
-        <div id="login-meta-text" class="copy"></div>
-      </div>
-    </form>
+      </form>
+    </div>
   </div>
 
   <div id="app">
@@ -871,9 +1109,19 @@
 
   <div id="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title">
     <div class="modal-card">
-      <h3 id="share-title">Temporary Link</h3>
-      <p>Create short-lived link without sharing your main Token/PIN.</p>
+      <h3 id="share-title">Share Access</h3>
+      <p>Create a short-lived link without sharing your main token or PIN.</p>
       <div id="share-form">
+        <div class="row">
+          <select id="temp-preset">
+            <option value="view-once" selected>View Once</option>
+            <option value="collaborate-once">Collaborate Once</option>
+            <option value="advanced">Advanced</option>
+          </select>
+        </div>
+        <p id="share-preset-copy" style="margin:0 0 6px;color:#a1a1a1;font-size:12px;">
+          Read-only, one-time access for 5 minutes. Best for quick viewing without broad access.
+        </p>
         <div class="row">
           <select id="temp-ttl">
             <option value="5">5 min</option>
@@ -891,7 +1139,7 @@
         </div>
         <div class="row">
           <label><input id="temp-bind-terminal" type="checkbox"> Bind active tab</label>
-          <button id="create-temp-link" type="button">Create Temporary Link</button>
+          <button id="create-temp-link" type="button">Create Share Link</button>
         </div>
       </div>
       <div id="share-link-output"></div>
@@ -934,7 +1182,16 @@
   <script>
     const app = document.getElementById('app');
     const login = document.getElementById('login');
+    const loginShell = document.getElementById('login-shell');
+    const welcomeScreen = document.getElementById('welcome-screen');
+    const welcomeStartBtn = document.getElementById('welcome-start');
+    const welcomeTokenBtn = document.getElementById('welcome-token');
+    const welcomeAuthTitleEl = document.getElementById('welcome-auth-title');
+    const welcomeAuthTextEl = document.getElementById('welcome-auth-text');
+    const welcomePolicyTitleEl = document.getElementById('welcome-policy-title');
+    const welcomePolicyTextEl = document.getElementById('welcome-policy-text');
     const form = document.getElementById('login-form');
+    const backToWelcomeBtn = document.getElementById('back-to-welcome');
     const passwordInput = document.getElementById('password');
     const loginSubtitle = document.getElementById('login-subtitle');
     const loginPrimary = document.getElementById('login-primary');
@@ -998,12 +1255,14 @@
     const pinModalKeypad = document.getElementById('pin-keypad-modal');
     const pinModalCancelBtn = document.getElementById('pin-modal-cancel');
     const pinModalConfirmBtn = document.getElementById('pin-modal-confirm');
+    const tempPresetEl = document.getElementById('temp-preset');
     const tempTtlEl = document.getElementById('temp-ttl');
     const tempScopeEl = document.getElementById('temp-scope');
     const tempOneTimeEl = document.getElementById('temp-one-time');
     const tempMaxUsesEl = document.getElementById('temp-max-uses');
     const tempBindTerminalEl = document.getElementById('temp-bind-terminal');
     const createTempLinkBtn = document.getElementById('create-temp-link');
+    const sharePresetCopyEl = document.getElementById('share-preset-copy');
     const shareLinkOutputEl = document.getElementById('share-link-output');
     const tempLinksListEl = document.getElementById('temp-links-list');
 
@@ -1029,6 +1288,7 @@
     let publicTimer = null;
     let tempLinksRefreshTimer = null;
     let viewportTimer = null;
+    let publicStatusLoaded = false;
     const fileMeta = new Map();
     const FILE_WARN_BYTES = 128 * 1024;
     const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
@@ -1064,6 +1324,7 @@
     let ssoEnabled = false;
     const ssoTicket = new URLSearchParams(window.location.search).get('sso_ticket');
     let dashboardLoginEnabled = false;
+    let hostAccessLocked = false;
     let dashboardFlowBusy = false;
     let tokenMethodVisible = false;
     const DASHBOARD_FLOW_CHALLENGE_KEY = 'cw:dashboard-flow:challenge';
@@ -1111,6 +1372,85 @@
       loginMetaEl.style.display = (title || text) ? 'block' : 'none';
     }
 
+    function setWelcomeAuthState(title, text) {
+      welcomeAuthTitleEl.textContent = title || '';
+      welcomeAuthTextEl.textContent = text || '';
+    }
+
+    function setWelcomePolicyState(title, text) {
+      welcomePolicyTitleEl.textContent = title || '';
+      welcomePolicyTextEl.textContent = text || '';
+    }
+
+    function renderWelcomeState() {
+      if (hostAccessLocked) {
+        setWelcomeAuthState(
+          'Sign-in paused',
+          'New sign-ins are paused on this host until CodeWebway is restarted.'
+        );
+        welcomeStartBtn.textContent = 'Sign-in paused';
+        welcomeStartBtn.disabled = true;
+        welcomeTokenBtn.style.display = dashboardLoginEnabled ? 'inline-flex' : 'none';
+        welcomeTokenBtn.disabled = true;
+        return;
+      }
+
+      if (dashboardLoginEnabled) {
+        setWelcomeAuthState(
+          'Account approval + machine PIN',
+          'Recommended path for this host. You can still switch to recovery access if needed.'
+        );
+        welcomeStartBtn.textContent = 'Continue with account';
+        welcomeStartBtn.disabled = false;
+        welcomeTokenBtn.textContent = 'Use recovery access';
+        welcomeTokenBtn.style.display = 'inline-flex';
+        welcomeTokenBtn.disabled = false;
+        return;
+      }
+
+      if (ssoEnabled) {
+        setWelcomeAuthState(
+          'Signed link or access token + machine PIN',
+          'Use a signed system link when available, or unlock directly with the access token and machine PIN.'
+        );
+      } else {
+        setWelcomeAuthState(
+          'Access token + machine PIN',
+          'Unlock directly with the host access token and machine PIN.'
+        );
+      }
+      welcomeStartBtn.textContent = 'Unlock with access token';
+      welcomeStartBtn.disabled = false;
+      welcomeTokenBtn.style.display = 'none';
+      welcomeTokenBtn.disabled = false;
+    }
+
+    function setAuthCardVisible(visible, options = {}) {
+      loginShell.classList.toggle('auth-open', visible);
+      form.style.display = visible ? 'block' : 'none';
+      if (backToWelcomeBtn) {
+        backToWelcomeBtn.style.display = visible && options.allowBack !== false
+          ? 'inline-flex'
+          : 'none';
+      }
+    }
+
+    function focusLoginEntry() {
+      if (dashboardPinWrap.style.display !== 'none') {
+        primaryPinInput.focus();
+        return;
+      }
+      if (dashboardLoginBtn.style.display !== 'none' && tokenLoginWrap.style.display === 'none') {
+        dashboardLoginBtn.focus();
+        return;
+      }
+      if (passwordInput.style.display === 'none' || passwordInput.required === false) {
+        pinInput.focus();
+        return;
+      }
+      passwordInput.focus();
+    }
+
     function showInlineError(message) {
       clearLoginFeedback();
       errorEl.textContent = message || '';
@@ -1144,7 +1484,7 @@
       showLoginFeedback(
         'error',
         'This account does not have access',
-        message || 'Try another account or switch to access token login.'
+        message || 'Try another account or switch to recovery access.'
       );
     }
 
@@ -1490,36 +1830,58 @@
       }
     }
 
-    async function refreshLoginMeta() {
-      const status = await fetchPublicStatus();
+    function applyPublicStatus(status) {
       if (!status) return;
+      publicStatusLoaded = true;
       ssoEnabled = status.sso_enabled === true;
       dashboardLoginEnabled = status.dashboard_login_enabled === true;
+      hostAccessLocked = status.access_locked === true;
+      renderWelcomeState();
       updateLoginFormMode();
-      if (status.access_locked === true) {
+      if (hostAccessLocked) {
         setLoginMeta(
           'warning',
           'Host status',
           'New sign-ins are paused on this host until CodeWebway is restarted.'
         );
-        return;
-      }
-      if (status.auto_shutdown_disabled === true) {
+      } else if (status.auto_shutdown_disabled === true) {
         setLoginMeta(
           'neutral',
           'Idle policy',
           'This host stays online until you close it manually.'
         );
+      } else {
+        setLoginMeta(
+          'neutral',
+          'Idle policy',
+          `This host stops after ${formatSeconds(status.shutdown_remaining_secs)} without sign-in activity.`
+        );
+      }
+
+      if (status.auto_shutdown_disabled === true) {
+        setWelcomePolicyState(
+          'Always on until closed',
+          'This host stays online until you close it manually.'
+        );
         return;
       }
-      setLoginMeta(
-        'neutral',
-        'Idle policy',
-        `This host stops after ${formatSeconds(status.shutdown_remaining_secs)} without sign-in activity.`
+
+      const remaining = formatSeconds(status.shutdown_remaining_secs);
+      setWelcomePolicyState(
+        `Idle timeout ${remaining}`,
+        `This host stops after ${remaining} without sign-in activity.`
       );
     }
 
+    async function refreshLoginMeta() {
+      const status = await fetchPublicStatus();
+      if (!status) return null;
+      applyPublicStatus(status);
+      return status;
+    }
+
     function updateLoginFormMode() {
+      renderWelcomeState();
       const dashboardAvailable = dashboardLoginEnabled;
       const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
 
@@ -1540,16 +1902,18 @@
         } else {
           passwordInput.style.display = 'block';
           passwordInput.required = true;
+          passwordInput.placeholder = dashboardAvailable ? 'Recovery token' : 'Access token';
           loginSubtitle.textContent = dashboardAvailable
-            ? 'Continue with your account, or use an access token.'
+            ? 'Continue with your account, or use recovery access.'
             : 'Enter the access token and machine PIN to continue.';
           pinInput.placeholder = 'Machine PIN';
         }
       } else {
         passwordInput.style.display = 'block';
         passwordInput.required = true;
+        passwordInput.placeholder = dashboardAvailable ? 'Recovery token' : 'Access token';
         loginSubtitle.textContent = dashboardAvailable
-          ? 'Continue with your account, or use an access token.'
+          ? 'Continue with your account, or use recovery access.'
           : 'Enter the access token and machine PIN to continue.';
         pinInput.placeholder = 'Machine PIN';
       }
@@ -1571,17 +1935,63 @@
       }
     }
 
+    function showWelcomePage() {
+      app.style.display = 'none';
+      login.style.display = 'flex';
+      if (welcomeScreen) {
+        welcomeScreen.style.display = 'flex';
+      }
+      setAuthCardVisible(false);
+      renderWelcomeState();
+    }
+
+    function showAuthForm(options = {}) {
+      const {
+        allowBack = true,
+        preferToken = false,
+        preserveDashboardState = false
+      } = options;
+
+      app.style.display = 'none';
+      login.style.display = 'flex';
+      if (welcomeScreen) {
+        welcomeScreen.style.display = 'flex';
+      }
+      setAuthCardVisible(true, { allowBack });
+      submitBtn.disabled = false;
+      errorEl.textContent = '';
+      clearLoginFeedback();
+      passwordInput.value = '';
+      pinInput.value = '';
+      if (!preserveDashboardState) {
+        clearDashboardFlowState();
+        resetPrimaryLoginState();
+      }
+      setTokenMethodVisible(preferToken);
+      updateLoginFormMode();
+      focusLoginEntry();
+    }
+
+    function hasStoredDashboardChallenge() {
+      try {
+        return Boolean(sessionStorage.getItem(DASHBOARD_FLOW_CHALLENGE_KEY));
+      } catch {
+        return false;
+      }
+    }
+
     function setTokenMethodVisible(visible) {
       tokenMethodVisible = visible;
       tokenLoginWrap.style.display = visible ? 'flex' : 'none';
       if (hideTokenMethodBtn) {
         hideTokenMethodBtn.style.display = visible && dashboardLoginEnabled && !ssoTicket ? 'block' : 'none';
       }
+      const tokenMethodLabel = dashboardLoginEnabled ? 'Use recovery access instead' : 'Use access token instead';
       if (pendingDashboardLoginId || dashboardFlowBusy) {
-        showTokenMethodBtn.textContent = 'Use access token instead';
+        showTokenMethodBtn.textContent = tokenMethodLabel;
         return;
       }
-      showTokenMethodBtn.textContent = visible ? 'Use account sign-in instead' : 'Use access token instead';
+      showTokenMethodBtn.textContent = visible ? 'Use account sign-in instead' : tokenMethodLabel;
     }
 
     function clearPendingDashboardLoginState() {
@@ -1610,7 +2020,7 @@
       primaryPinInput.value = '';
       loginPrimaryTitle.textContent = 'Unlock this machine';
       loginPrimaryNote.textContent = 'Continue with your account first. You will enter the machine PIN in the next step.';
-      dashboardLoginBtn.textContent = 'Continue';
+      dashboardLoginBtn.textContent = 'Continue with account';
       dashboardLoginBtn.disabled = false;
       showTokenMethodBtn.style.display = 'block';
     }
@@ -1641,13 +2051,16 @@
       primaryPinInput.focus();
     }
 
-    function setLoginPolling(enabled) {
+    function setLoginPolling(enabled, options = {}) {
+      const { refreshNow = true } = options;
       if (publicTimer) {
         clearInterval(publicTimer);
         publicTimer = null;
       }
       if (enabled) {
-        refreshLoginMeta();
+        if (refreshNow) {
+          refreshLoginMeta();
+        }
         publicTimer = setInterval(refreshLoginMeta, 15000);
       } else {
         setLoginMeta('', '', '');
@@ -1687,7 +2100,7 @@
         return;
       }
       if (result.expired) {
-        showLogin('Session expired. Please login again.');
+        await showLogin('Session expired. Please login again.');
         return;
       }
       if (result.error) {
@@ -1721,19 +2134,12 @@
       }
     }
 
-    function showLogin(message) {
-      app.style.display = 'none';
-      login.style.display = 'flex';
-      submitBtn.disabled = false;
-      passwordInput.value = '';
-      pinInput.value = '';
-      primaryPinInput.value = '';
-      errorEl.textContent = '';
-      clearLoginFeedback();
-      clearDashboardFlowState();
-      resetPrimaryLoginState();
-      setTokenMethodVisible(false);
-      updateLoginFormMode();
+    async function showLogin(message, options = {}) {
+      showAuthForm({
+        allowBack: options.allowBack !== false,
+        preferToken: options.preferToken === true,
+        preserveDashboardState: false
+      });
       if (message) {
         showInlineError(message);
       }
@@ -1745,7 +2151,8 @@
       shareLinkOutputEl.textContent = '';
       sessionAccess = { readOnly: false, boundTerminalId: null, tempLinkId: null };
       setSessionPolling(false);
-      setLoginPolling(true);
+      await refreshLoginMeta();
+      setLoginPolling(true, { refreshNow: false });
       updateEditorActionState();
     }
 
@@ -1845,13 +2252,13 @@
           const notice = logoutNotice || 'Signed out.';
           loggingOut = false;
           logoutNotice = '';
-          showLogin(notice);
+          await showLogin(notice);
           return;
         }
 
         const activeSession = await hasActiveSession();
         if (activeSession === false) {
-          showLogin('Session expired. Please login again.');
+          await showLogin('Session expired. Please login again.');
           return;
         }
 
@@ -2085,6 +2492,51 @@
       }
     }
 
+    function syncTempLinkControls() {
+      const preset = tempPresetEl ? tempPresetEl.value : 'advanced';
+      const advanced = preset === 'advanced';
+      tempTtlEl.disabled = !advanced;
+      tempScopeEl.disabled = !advanced;
+      tempOneTimeEl.disabled = !advanced;
+      tempBindTerminalEl.disabled = !advanced;
+      tempMaxUsesEl.disabled = !advanced || tempOneTimeEl.checked;
+    }
+
+    function applyTempLinkPreset(preset) {
+      if (!tempPresetEl) return;
+      if (preset === 'view-once') {
+        tempTtlEl.value = '5';
+        tempScopeEl.value = 'read-only';
+        tempOneTimeEl.checked = true;
+        tempMaxUsesEl.value = '1';
+        tempBindTerminalEl.checked = Boolean(activeTerminalId);
+        if (sharePresetCopyEl) {
+          sharePresetCopyEl.textContent = 'Read-only, one-time access for 5 minutes. Best for quick viewing without broad access.';
+        }
+        createTempLinkBtn.textContent = 'Create View Link';
+      } else if (preset === 'collaborate-once') {
+        tempTtlEl.value = '15';
+        tempScopeEl.value = 'interactive';
+        tempOneTimeEl.checked = true;
+        tempMaxUsesEl.value = '1';
+        tempBindTerminalEl.checked = Boolean(activeTerminalId);
+        if (sharePresetCopyEl) {
+          sharePresetCopyEl.textContent = 'Interactive, one-time access for 15 minutes. This asks for the machine PIN before the link is created.';
+        }
+        createTempLinkBtn.textContent = 'Create Collaboration Link';
+      } else {
+        if (sharePresetCopyEl) {
+          sharePresetCopyEl.textContent = 'Advanced mode lets you choose custom TTL, scope, and usage. Broader links may ask for the machine PIN before creation.';
+        }
+        createTempLinkBtn.textContent = 'Create Custom Link';
+      }
+      syncTempLinkControls();
+    }
+
+    function tempLinkNeedsPin(payload) {
+      return payload.scope === 'interactive' || payload.ttl_minutes > 15 || payload.max_uses > 1;
+    }
+
     async function refreshTempLinks() {
       const res = await api('/auth/temp-links');
       if (!res.ok) {
@@ -2098,27 +2550,54 @@
 
     async function createTempLink() {
       const oneTime = tempOneTimeEl.checked;
-      const payload = {
+      const basePayload = {
         ttl_minutes: Number(tempTtlEl.value || 15),
         scope: tempScopeEl.value,
         one_time: oneTime,
         max_uses: oneTime ? 1 : Number(tempMaxUsesEl.value || 5),
         bound_terminal_id: tempBindTerminalEl.checked ? activeTerminalId : null
       };
-      const res = await api('/auth/temp-links', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        const msg = await res.text();
-        alert(msg || 'Failed to create temporary link');
+
+      let pinError = '';
+      while (true) {
+        const payload = { ...basePayload };
+        if (tempLinkNeedsPin(payload)) {
+          const pin = await requestPinWithKeypad({
+            title: 'Confirm Share Access',
+            message: 'Enter the machine PIN to create an interactive or extended share link.',
+            confirmLabel: 'Create Link',
+            errorText: pinError
+          });
+          if (pin === null) return;
+          if (!pin) {
+            pinError = 'Machine PIN required for interactive or extended share links.';
+            continue;
+          }
+          payload.pin = pin;
+        }
+
+        const res = await api('/auth/temp-links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const problem = await readApiError(res);
+          if (problem?.code === 'pin_required' || problem?.code === 'pin_invalid') {
+            pinError = problem.message || 'Incorrect machine PIN.';
+            continue;
+          }
+          const msg = problem?.message || await res.text();
+          alert(msg || 'Failed to create share link');
+          return;
+        }
+        const created = await res.json();
+        const fullUrl = `${location.origin}${created.url}`;
+        shareLinkOutputEl.textContent = `Copied share link: ${fullUrl}`;
+        await navigator.clipboard?.writeText(fullUrl).catch(() => {});
+        await refreshTempLinks();
         return;
       }
-      const created = await res.json();
-      shareLinkOutputEl.textContent = `${location.origin}${created.url}`;
-      await navigator.clipboard?.writeText(`${location.origin}${created.url}`).catch(() => {});
-      await refreshTempLinks();
     }
 
     async function loadTerminals() {
@@ -2535,6 +3014,43 @@
       if (fitAddon) fitAddon.fit();
     }
 
+    welcomeStartBtn.addEventListener('click', async () => {
+      if (!publicStatusLoaded) {
+        await refreshLoginMeta();
+      }
+      showAuthForm({
+        allowBack: true,
+        preferToken: !dashboardLoginEnabled
+      });
+      if (hostAccessLocked) {
+        showAccessPausedState();
+      }
+    });
+
+    welcomeTokenBtn.addEventListener('click', async () => {
+      if (!publicStatusLoaded) {
+        await refreshLoginMeta();
+      }
+      showAuthForm({
+        allowBack: true,
+        preferToken: true
+      });
+      if (hostAccessLocked) {
+        showAccessPausedState();
+      }
+    });
+
+    if (backToWelcomeBtn) {
+      backToWelcomeBtn.addEventListener('click', () => {
+        clearDashboardFlowState();
+        resetPrimaryLoginState();
+        setTokenMethodVisible(false);
+        errorEl.textContent = '';
+        clearLoginFeedback();
+        showWelcomePage();
+      });
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (dashboardPinWrap.style.display !== 'none') {
@@ -2858,7 +3374,7 @@
         }
       });
       terminalCache.clear();
-      showLogin(logoutNotice);
+      await showLogin(logoutNotice);
       loggingOut = false;
       logoutNotice = '';
       if (usageTimer) {
@@ -2866,13 +3382,16 @@
         usageTimer = null;
       }
       setSessionPolling(false);
-      setLoginPolling(true);
     });
 
     if (shareBtn) {
       shareBtn.addEventListener('click', async () => {
         if (shareBtn.disabled) return;
         shareLinkOutputEl.textContent = '';
+        if (tempPresetEl) {
+          tempPresetEl.value = 'view-once';
+          applyTempLinkPreset(tempPresetEl.value);
+        }
         await refreshTempLinks();
         setTempLinksModal(true);
       });
@@ -2884,10 +3403,15 @@
     });
 
     createTempLinkBtn.addEventListener('click', () => createTempLink());
+    if (tempPresetEl) {
+      tempPresetEl.addEventListener('change', () => applyTempLinkPreset(tempPresetEl.value));
+      applyTempLinkPreset(tempPresetEl.value);
+    } else {
+      syncTempLinkControls();
+    }
     tempOneTimeEl.addEventListener('change', () => {
-      tempMaxUsesEl.disabled = tempOneTimeEl.checked;
+      syncTempLinkControls();
     });
-    tempMaxUsesEl.disabled = tempOneTimeEl.checked;
 
     staySignedInBtn.addEventListener('click', async () => {
       const pin = await requestPinWithKeypad();
@@ -2951,10 +3475,49 @@
       if (document.hidden) stopKeyStripRepeat();
     });
 
-    updateEditorActionState();
-    syncMobileViewport();
-    setLoginPolling(true);
-    resumeDashboardRedirectFlow();
+    async function initializeEntryView() {
+      updateEditorActionState();
+      syncMobileViewport();
+
+      const activeSession = await hasActiveSession();
+      if (activeSession === true) {
+        await bootstrapWorkspace();
+        return;
+      }
+
+      await refreshLoginMeta();
+      setLoginPolling(true, { refreshNow: false });
+
+      if (ssoTicket) {
+        await showLogin('', { allowBack: false, preferToken: true });
+        return;
+      }
+
+      if (pendingDashboardLoginId || hasStoredDashboardChallenge()) {
+        showAuthForm({
+          allowBack: false,
+          preferToken: false,
+          preserveDashboardState: true
+        });
+        await resumeDashboardRedirectFlow();
+        return;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('dashboard_returned') === '1' || params.get('dashboard_challenge')) {
+        showAuthForm({
+          allowBack: false,
+          preferToken: false,
+          preserveDashboardState: true
+        });
+        await resumeDashboardRedirectFlow();
+        return;
+      }
+
+      showWelcomePage();
+    }
+
+    initializeEntryView();
   </script>
 </body>
 </html>

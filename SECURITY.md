@@ -22,7 +22,7 @@ CodeWebway supports four access paths:
 1. Direct login: access token plus machine PIN.
 2. Fleet host-login challenge: dashboard account approval plus machine PIN.
 3. Fleet launch URL: short-lived signed `sso_ticket` plus machine PIN.
-4. Temporary links: delegated session cookies minted from a signed link. These do not ask for the machine PIN again.
+4. Temporary links: delegated access minted from a signed link. Read-only links can redeem directly; interactive links on dashboard-enabled hosts require owner approval before the guest session is issued.
 
 The default bind is `127.0.0.1:8080`, so nothing is reachable off-host unless you explicitly opt into public exposure.
 
@@ -73,6 +73,7 @@ Flow:
 3. The browser opens `https://host/?sso_ticket=...`.
 4. CodeWebway verifies the signature with `--sso-shared-secret`.
 5. The user still enters the machine PIN locally.
+6. In fleet mode, the ticket is also bound to the current runtime instance so stale launch material cannot be replayed against a newer run.
 
 Current runtime behavior:
 
@@ -97,7 +98,8 @@ Implementation details:
 - The URL token is signed with a random per-process signing key and SHA-256 over `key:id.expires.nonce`.
 - Tokens include a nonce and expiry timestamp.
 - Links are enforced server-side. Read-only sessions silently drop PTY input and file writes.
-- Redeemed links mint normal session cookies plus an in-memory grant describing read-only or terminal-bound restrictions.
+- Read-only links mint a narrow session cookie plus an in-memory grant describing read-only or terminal-bound restrictions.
+- Interactive links on dashboard-enabled hosts show an owner-approval page first and only mint the guest session after approval succeeds.
 
 ## Rate Limiting
 
@@ -143,12 +145,13 @@ Current session behavior:
 Current cookie attributes:
 
 ```text
-codewebway_session=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800
+codewebway_session=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800[; Secure when request arrives over HTTPS]
 ```
 
-Important limitation:
+Current behavior:
 
-- The cookie is not marked `Secure` today because the same binary still supports plain local HTTP.
+- CodeWebway now adds `Secure` when the request arrives through `X-Forwarded-Proto: https` or an HTTPS `Origin`/`Referer`.
+- Plain local HTTP still works without `Secure` so localhost development is not broken.
 - If you expose the service publicly, terminate TLS externally and do not serve the same public hostname over plain HTTP.
 
 ## Shutdown and Session Revocation
@@ -244,6 +247,16 @@ Current pipeline:
    - `access_token_ttl_secs`
 3. WebWayFleet stores the public URL in D1.
 4. WebWayFleet stores the runtime access token only in KV `terminal_access:<machineId>` with a TTL capped at 12 hours.
+5. The token record is tied to the current runtime instance. Once a new runtime instance is reported, older recovery material is rejected.
+
+## Fleet Activity And Rotation
+
+- CodeWebway now emits runtime access events back to WebWayFleet for secure launch entries, dashboard-approved sign-ins, recovery-token sign-ins, and temp-link creation/redemption.
+- WebWayFleet aggregates these into machine access insights so token-heavy paths can be measured and reduced over time.
+- Machine-plane trust is narrowed with token rotation support:
+  - the active machine token can be rotated through the API
+  - the previous token remains valid only during a grace window
+  - fleet daemons rotate tokens only while idle so live terminal runs are not interrupted
 5. Execution logs in D1 receive sanitized output with the secret removed.
 
 This limits secret persistence compared with storing runtime tokens in execution history.
