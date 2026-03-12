@@ -96,7 +96,8 @@
       align-items: stretch;
     }
     #login-shell.auth-open {
-      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 460px);
+      width: min(640px, 100%);
+      grid-template-columns: minmax(0, 1fr);
     }
     .card {
       width: 100%;
@@ -251,8 +252,11 @@
       display: none;
       align-self: center;
       max-width: none;
-      background: rgba(6, 8, 11, 0.82);
-      border-color: rgba(130, 143, 160, 0.25);
+      padding: clamp(24px, 4vw, 34px);
+      background:
+        linear-gradient(160deg, rgba(17, 22, 29, 0.96), rgba(12, 14, 18, 0.94)),
+        radial-gradient(circle at top right, rgba(104, 154, 255, 0.14), transparent 32%);
+      border-color: rgba(136, 166, 196, 0.18);
       backdrop-filter: blur(12px);
     }
     .auth-header {
@@ -270,23 +274,26 @@
       flex-shrink: 0;
     }
     .login-panel {
-      border: 1px solid #3a3a3a;
+      border: 1px solid rgba(131, 153, 176, 0.16);
       border-radius: 12px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
-      padding: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+      padding: 18px;
     }
     .login-panel h2 {
-      font-size: 14px;
+      font-size: 15px;
       letter-spacing: 0.02em;
-      color: #f0f0f0;
+      color: #f5fbff;
       margin: 0 0 8px 0;
       font-weight: 600;
     }
     .login-panel p {
       margin: 0 0 12px 0;
-      color: #b1b1b1;
+      color: #b8c8d3;
       font-size: 13px;
-      line-height: 1.4;
+      line-height: 1.5;
+    }
+    .login-panel .eyebrow {
+      margin-bottom: 8px;
     }
     .login-divider {
       position: relative;
@@ -335,6 +342,30 @@
     .primary-cta:hover:not(:disabled) {
       background: #fff;
       border-color: #d1d1d1;
+    }
+    .inline-cta {
+      width: auto;
+      min-width: 160px;
+      flex-shrink: 0;
+    }
+    .login-alt-panel {
+      background: rgba(255, 255, 255, 0.025);
+    }
+    .switch-method-btn {
+      width: 100%;
+      border-color: rgba(150, 177, 196, 0.24);
+      background: rgba(255, 255, 255, 0.03);
+      color: #d9e8ef;
+      font-weight: 600;
+      padding: 11px 14px;
+    }
+    .switch-method-btn:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(180, 202, 221, 0.36);
+      color: #f5fbff;
+    }
+    .method-back-btn {
+      margin-top: 2px;
     }
     input, select {
       width: 100%;
@@ -931,7 +962,7 @@
         </div>
         <div class="welcome-actions">
           <button id="welcome-start" class="primary-cta" type="button">Continue with account</button>
-          <button id="welcome-token" class="ghost" type="button">Use recovery access</button>
+          <button id="welcome-token" class="ghost" type="button">Use recovery token</button>
         </div>
         <div class="welcome-grid">
           <div class="welcome-panel">
@@ -966,7 +997,7 @@
           </div>
           <button id="back-to-welcome" class="ghost auth-back" type="button">Back</button>
         </div>
-        <p id="login-subtitle">Choose how you want to continue.</p>
+        <p id="login-subtitle">Use your account first. Recovery access stays available if you need it later.</p>
         <div id="login-primary" class="stack" style="display:none;">
           <div id="dashboard-start-wrap" class="login-panel">
             <h2 id="login-primary-title">Unlock this machine</h2>
@@ -993,23 +1024,28 @@
             </div>
             <div class="row" style="margin-top:10px;">
               <button id="dashboard-pin-back" class="ghost" type="button">Start over</button>
-              <button id="dashboard-continue" class="ghost" type="button">Unlock</button>
+              <button id="dashboard-continue" class="primary-cta inline-cta" type="button">Unlock workspace</button>
             </div>
           </div>
-          <div class="login-divider">Other options</div>
-          <button id="show-token-method" class="ghost" type="button">Use recovery access instead</button>
+          <div class="login-panel login-alt-panel">
+            <span class="eyebrow">Recovery</span>
+            <h2>Need a recovery token?</h2>
+            <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+            <button id="show-token-method" class="ghost switch-method-btn" type="button">Use recovery token</button>
+          </div>
         </div>
         <div id="token-login-wrap" class="stack" style="display:none;">
-          <div class="login-panel">
-            <h2>Use recovery access</h2>
-            <p>Enter the recovery token and machine PIN only if account sign-in is unavailable.</p>
+          <div class="login-panel login-alt-panel">
+            <span class="eyebrow">Recovery Access</span>
+            <h2>Unlock with recovery token</h2>
+            <p>Use this fallback only when account sign-in is unavailable. You still need the machine PIN.</p>
             <input id="password" type="password" autocomplete="current-password" placeholder="Recovery token" required />
             <div class="row" style="margin-top:10px;">
               <input id="pin" type="password" autocomplete="one-time-code" placeholder="Machine PIN" />
-              <button id="submit" class="ghost" type="submit">Unlock</button>
+              <button id="submit" class="primary-cta inline-cta" type="submit">Unlock workspace</button>
             </div>
           </div>
-          <button id="hide-token-method" class="ghost" type="button" style="display:none;">Back to account sign-in</button>
+          <button id="hide-token-method" class="ghost switch-method-btn method-back-btn" type="button" style="display:none;">Back to account sign-in</button>
           <div class="pin-keypad" id="pin-keypad-token">
             <button type="button" data-pin-key="1">1</button>
             <button type="button" data-pin-key="2">2</button>
@@ -1384,6 +1420,37 @@
       welcomePolicyTextEl.textContent = text || '';
     }
 
+    function updateLoginSubtitle() {
+      if (dashboardLoginEnabled && !ssoTicket) {
+        if (dashboardFlowBusy) {
+          loginSubtitle.textContent = 'Approve this sign-in from your account to continue.';
+          return;
+        }
+        if (dashboardPinWrap.style.display !== 'none') {
+          loginSubtitle.textContent = 'Account approved. Enter the machine PIN to open the workspace.';
+          return;
+        }
+        if (tokenMethodVisible) {
+          loginSubtitle.textContent = 'Recovery access is only for cases where account sign-in is unavailable.';
+          return;
+        }
+        loginSubtitle.textContent = 'Use your account first. Recovery access stays available if you need it later.';
+        return;
+      }
+
+      if (ssoTicket) {
+        loginSubtitle.textContent = 'Signed link verified. Enter the machine PIN to open the workspace.';
+        return;
+      }
+
+      if (ssoEnabled) {
+        loginSubtitle.textContent = 'Use a signed link when available, or enter the access token and machine PIN.';
+        return;
+      }
+
+      loginSubtitle.textContent = 'Enter the access token and machine PIN to continue.';
+    }
+
     function renderWelcomeState() {
       if (hostAccessLocked) {
         setWelcomeAuthState(
@@ -1400,11 +1467,11 @@
       if (dashboardLoginEnabled) {
         setWelcomeAuthState(
           'Account approval + machine PIN',
-          'Recommended path for this host. You can still switch to recovery access if needed.'
+          'Recommended path for this host. You can still switch to a recovery token if needed.'
         );
         welcomeStartBtn.textContent = 'Continue with account';
         welcomeStartBtn.disabled = false;
-        welcomeTokenBtn.textContent = 'Use recovery access';
+        welcomeTokenBtn.textContent = 'Use recovery token';
         welcomeTokenBtn.style.display = 'inline-flex';
         welcomeTokenBtn.disabled = false;
         return;
@@ -1486,7 +1553,7 @@
       showLoginFeedback(
         'error',
         'This account does not have access',
-        message || 'Try another account or switch to recovery access.'
+        message || 'Try another account or use a recovery token instead.'
       );
     }
 
@@ -1887,7 +1954,7 @@
       const dashboardAvailable = dashboardLoginEnabled;
       const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
 
-      loginPrimary.style.display = (dashboardAvailable && !signedTicketMode) ? 'flex' : 'none';
+      loginPrimary.style.display = (dashboardAvailable && !signedTicketMode && !tokenMethodVisible) ? 'flex' : 'none';
       tokenMethodVisible = signedTicketMode || !dashboardAvailable || tokenMethodVisible;
       tokenLoginWrap.style.display = tokenMethodVisible ? 'flex' : 'none';
       if (hideTokenMethodBtn) {
@@ -1899,24 +1966,17 @@
           passwordInput.style.display = 'none';
           passwordInput.required = false;
           passwordInput.value = '';
-          loginSubtitle.textContent = 'Signed in with your system account. Enter PIN to open workspace.';
           pinInput.placeholder = 'Machine PIN';
         } else {
           passwordInput.style.display = 'block';
           passwordInput.required = true;
           passwordInput.placeholder = dashboardAvailable ? 'Recovery token' : 'Access token';
-          loginSubtitle.textContent = dashboardAvailable
-            ? 'Continue with your account, or use recovery access.'
-            : 'Enter the access token and machine PIN to continue.';
           pinInput.placeholder = 'Machine PIN';
         }
       } else {
         passwordInput.style.display = 'block';
         passwordInput.required = true;
         passwordInput.placeholder = dashboardAvailable ? 'Recovery token' : 'Access token';
-        loginSubtitle.textContent = dashboardAvailable
-          ? 'Continue with your account, or use recovery access.'
-          : 'Enter the access token and machine PIN to continue.';
         pinInput.placeholder = 'Machine PIN';
       }
 
@@ -1935,6 +1995,8 @@
         dashboardLoginBtn.style.display = 'none';
         showTokenMethodBtn.style.display = 'none';
       }
+
+      updateLoginSubtitle();
     }
 
     function showWelcomePage() {
@@ -1957,7 +2019,7 @@
       app.style.display = 'none';
       login.style.display = 'flex';
       if (welcomeScreen) {
-        welcomeScreen.style.display = 'flex';
+        welcomeScreen.style.display = 'none';
       }
       setAuthCardVisible(true, { allowBack });
       submitBtn.disabled = false;
@@ -1988,12 +2050,8 @@
       if (hideTokenMethodBtn) {
         hideTokenMethodBtn.style.display = visible && dashboardLoginEnabled && !ssoTicket ? 'block' : 'none';
       }
-      const tokenMethodLabel = dashboardLoginEnabled ? 'Use recovery access instead' : 'Use access token instead';
-      if (pendingDashboardLoginId || dashboardFlowBusy) {
-        showTokenMethodBtn.textContent = tokenMethodLabel;
-        return;
-      }
-      showTokenMethodBtn.textContent = visible ? 'Use account sign-in instead' : tokenMethodLabel;
+      showTokenMethodBtn.textContent = dashboardLoginEnabled ? 'Use recovery token' : 'Use access token';
+      updateLoginSubtitle();
     }
 
     function clearPendingDashboardLoginState() {
@@ -2033,25 +2091,30 @@
       dashboardLoginBtn.textContent = 'Continue with account';
       dashboardLoginBtn.disabled = false;
       showTokenMethodBtn.style.display = 'block';
+      updateLoginSubtitle();
     }
 
     function showDashboardProgressState() {
       dashboardFlowBusy = true;
+      setTokenMethodVisible(false);
       dashboardStartWrap.style.display = 'block';
       dashboardPinWrap.style.display = 'none';
-      loginPrimaryTitle.textContent = 'Finishing sign-in';
-      loginPrimaryNote.textContent = 'Checking approval from your account...';
+      loginPrimaryTitle.textContent = 'Waiting for account approval';
+      loginPrimaryNote.textContent = 'Approve this sign-in from your dashboard. The machine PIN comes next.';
       dashboardLoginBtn.textContent = 'Please wait';
       dashboardLoginBtn.disabled = true;
       showTokenMethodBtn.style.display = 'none';
+      updateLoginSubtitle();
     }
 
     function restoreDashboardPinStep() {
       dashboardFlowBusy = false;
+      setTokenMethodVisible(false);
       dashboardStartWrap.style.display = 'none';
       dashboardPinWrap.style.display = 'block';
       showTokenMethodBtn.style.display = 'none';
       dashboardLoginBtn.disabled = false;
+      updateLoginSubtitle();
     }
 
     function showDashboardPinStep(pendingLoginId) {
