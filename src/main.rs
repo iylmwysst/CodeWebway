@@ -550,32 +550,63 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
     let state = Arc::new(state);
     let app = server::router(Arc::clone(&state));
     let addr = format!("{}:{}", cfg.host, cfg.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
+    let zrok_child = Arc::new(Mutex::new(None));
+    let port = cfg.port;
+    let zrok_child_inner = Arc::clone(&zrok_child);
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.recv().await;
+            })
+            .await
+            .ok();
+        let mut child = zrok_child_inner.lock().unwrap();
+        let _ = stop_zrok_child(&mut child, port, "stopped");
+        clear_owned_zrok_pid(port);
+        let _ = server_done_tx.send(());
+    });
 
     let zrok_url_state = Arc::new(Mutex::new(None));
-    let (zrok_child, zrok_url, zrok_log_path) = if cfg.zrok {
-        check_zrok_ready()?;
-        release_stale_owned_zrok_share(cfg.port);
-        let mut child = spawn_zrok(cfg.port)?;
-        write_owned_zrok_pid(cfg.port, child.id());
-        let (url_tx, url_rx) = std::sync::mpsc::channel::<String>();
-        let log_path = if let Some(stderr) = child.stderr.take() {
-            log_zrok_stderr(
-                cfg.port,
-                stderr,
-                Arc::clone(&zrok_url_state),
-                url_tx.clone(),
-            )
-        } else {
-            PathBuf::new()
-        };
-        if let Some(stdout) = child.stdout.take() {
-            scan_zrok_stream_for_url(cfg.port, stdout, Arc::clone(&zrok_url_state), url_tx);
+    let (zrok_url, zrok_log_path) = if cfg.zrok {
+        let setup = (|| -> anyhow::Result<(Option<String>, Option<PathBuf>, Child)> {
+            check_zrok_ready()?;
+            release_stale_owned_zrok_share(cfg.port);
+            let mut child = spawn_zrok(cfg.port)?;
+            write_owned_zrok_pid(cfg.port, child.id());
+            let (url_tx, url_rx) = std::sync::mpsc::channel::<String>();
+            let log_path = if let Some(stderr) = child.stderr.take() {
+                log_zrok_stderr(
+                    cfg.port,
+                    stderr,
+                    Arc::clone(&zrok_url_state),
+                    url_tx.clone(),
+                )
+            } else {
+                PathBuf::new()
+            };
+            if let Some(stdout) = child.stdout.take() {
+                scan_zrok_stream_for_url(cfg.port, stdout, Arc::clone(&zrok_url_state), url_tx);
+            }
+            // Wait up to 15 s — zrok usually assigns a URL in 3–10 s.
+            let url = url_rx.recv_timeout(Duration::from_secs(15)).ok();
+            Ok((url, Some(log_path), child))
+        })();
+
+        match setup {
+            Ok((url, log_path, child)) => {
+                *zrok_child.lock().unwrap() = Some(child);
+                (url, log_path)
+            }
+            Err(err) => {
+                let _ = shutdown_tx.send(());
+                let _ = server_done_rx.await;
+                return Err(err);
+            }
         }
-        // Wait up to 15 s — zrok usually assigns a URL in 3–10 s.
-        let url = url_rx.recv_timeout(Duration::from_secs(15)).ok();
-        (Some(child), url, Some(log_path))
     } else {
-        (None, None, None)
+        (None, None)
     };
 
     if let Some(url) = zrok_url.clone() {
@@ -584,7 +615,6 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         }
     }
 
-    let zrok_child = Arc::new(Mutex::new(zrok_child));
     if cfg.zrok {
         monitor_zrok_child(Arc::clone(&zrok_child), cfg.port);
     }
@@ -617,23 +647,6 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
             }
         });
     }
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
-    let port = cfg.port;
-    let zrok_child_inner = Arc::clone(&zrok_child);
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.recv().await;
-            })
-            .await
-            .ok();
-        let mut child = zrok_child_inner.lock().unwrap();
-        let _ = stop_zrok_child(&mut child, port, "stopped");
-        clear_owned_zrok_pid(port);
-        let _ = server_done_tx.send(());
-    });
 
     Ok(ServerHandle {
         token,
