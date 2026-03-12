@@ -367,6 +367,24 @@
     .method-back-btn {
       margin-top: 2px;
     }
+    .token-disclosure {
+      display: grid;
+      gap: 10px;
+    }
+    .disclosure-toggle {
+      width: 100%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-style: dashed;
+      color: #c8d8e0;
+      padding: 10px 14px;
+    }
+    .disclosure-toggle .chevron {
+      font-size: 14px;
+      line-height: 1;
+    }
     input, select {
       width: 100%;
       background: #111;
@@ -997,12 +1015,24 @@
           </div>
           <button id="back-to-welcome" class="ghost auth-back" type="button">Back</button>
         </div>
-        <p id="login-subtitle">Use your account first. Recovery access stays available if you need it later.</p>
+        <p id="login-subtitle">Use your account first. A recovery token stays available if you need it later.</p>
         <div id="login-primary" class="stack" style="display:none;">
           <div id="dashboard-start-wrap" class="login-panel">
             <h2 id="login-primary-title">Unlock this machine</h2>
             <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
             <button id="dashboard-login" class="primary-cta" type="button">Continue with account</button>
+          </div>
+          <div id="token-disclosure-wrap" class="token-disclosure" style="display:none;">
+            <button id="toggle-token-method" class="ghost disclosure-toggle" type="button" aria-expanded="false">
+              <span>More sign-in options</span>
+              <span class="chevron" aria-hidden="true">▾</span>
+            </button>
+            <div id="token-disclosure-panel" class="login-panel login-alt-panel" style="display:none;">
+              <span class="eyebrow">Recovery</span>
+              <h2>Need a recovery token?</h2>
+              <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+              <button id="show-token-method" class="primary-cta" type="button">Use recovery token</button>
+            </div>
           </div>
           <div id="dashboard-pin-wrap" class="login-panel" style="display:none;">
             <h2>Enter machine PIN</h2>
@@ -1026,12 +1056,6 @@
               <button id="dashboard-pin-back" class="ghost" type="button">Start over</button>
               <button id="dashboard-continue" class="primary-cta inline-cta" type="button">Unlock workspace</button>
             </div>
-          </div>
-          <div class="login-panel login-alt-panel">
-            <span class="eyebrow">Recovery</span>
-            <h2>Need a recovery token?</h2>
-            <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
-            <button id="show-token-method" class="ghost switch-method-btn" type="button">Use recovery token</button>
           </div>
         </div>
         <div id="token-login-wrap" class="stack" style="display:none;">
@@ -1234,6 +1258,9 @@
     const loginPrimaryTitle = document.getElementById('login-primary-title');
     const loginPrimaryNote = document.getElementById('login-primary-note');
     const dashboardStartWrap = document.getElementById('dashboard-start-wrap');
+    const tokenDisclosureWrap = document.getElementById('token-disclosure-wrap');
+    const toggleTokenMethodBtn = document.getElementById('toggle-token-method');
+    const tokenDisclosurePanel = document.getElementById('token-disclosure-panel');
     const dashboardPinWrap = document.getElementById('dashboard-pin-wrap');
     const showTokenMethodBtn = document.getElementById('show-token-method');
     const hideTokenMethodBtn = document.getElementById('hide-token-method');
@@ -1365,6 +1392,7 @@
     let hostAccessLocked = false;
     let dashboardFlowBusy = false;
     let tokenMethodVisible = false;
+    let primaryPinMode = null;
     const DASHBOARD_FLOW_CHALLENGE_KEY = 'cw:dashboard-flow:challenge';
     const DASHBOARD_PENDING_LOGIN_KEY = 'cw:dashboard-flow:pending-login';
     let pendingDashboardLoginId = (() => {
@@ -1431,10 +1459,10 @@
           return;
         }
         if (tokenMethodVisible) {
-          loginSubtitle.textContent = 'Recovery access is only for cases where account sign-in is unavailable.';
+          loginSubtitle.textContent = 'Recovery token access is only for cases where account sign-in is unavailable.';
           return;
         }
-        loginSubtitle.textContent = 'Use your account first. Recovery access stays available if you need it later.';
+        loginSubtitle.textContent = 'Use your account first. A recovery token stays available if you need it later.';
         return;
       }
 
@@ -1449,6 +1477,36 @@
       }
 
       loginSubtitle.textContent = 'Enter the access token and machine PIN to continue.';
+    }
+
+    function setTokenDisclosureOpen(open) {
+      if (!toggleTokenMethodBtn || !tokenDisclosurePanel) return;
+      toggleTokenMethodBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      const chevron = toggleTokenMethodBtn.querySelector('.chevron');
+      if (chevron) chevron.textContent = open ? '▴' : '▾';
+      tokenDisclosurePanel.style.display = open ? 'block' : 'none';
+    }
+
+    function configurePrimaryPinStep(mode) {
+      primaryPinMode = mode;
+      dashboardStartWrap.style.display = 'none';
+      dashboardPinWrap.style.display = 'block';
+      tokenDisclosureWrap.style.display = 'none';
+      setTokenDisclosureOpen(false);
+      showTokenMethodBtn.style.display = 'none';
+      dashboardContinueBtn.textContent = 'Unlock workspace';
+
+      if (mode === 'signed_ticket') {
+        loginPrimaryTitle.textContent = 'Enter machine PIN';
+        loginPrimaryNote.textContent = 'Signed link verified. Enter the PIN for this machine to continue.';
+        dashboardPinBackBtn.style.display = 'none';
+      } else {
+        loginPrimaryTitle.textContent = 'Enter machine PIN';
+        loginPrimaryNote.textContent = 'Account approved. Enter the PIN for this machine to continue.';
+        dashboardPinBackBtn.style.display = 'inline-flex';
+      }
+
+      updateLoginSubtitle();
     }
 
     function renderWelcomeState() {
@@ -1953,9 +2011,11 @@
       renderWelcomeState();
       const dashboardAvailable = dashboardLoginEnabled;
       const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
+      const primaryFlowAvailable = dashboardAvailable || signedTicketMode;
+      const directTokenMode = !dashboardAvailable && !signedTicketMode;
 
-      loginPrimary.style.display = (dashboardAvailable && !signedTicketMode && !tokenMethodVisible) ? 'flex' : 'none';
-      tokenMethodVisible = signedTicketMode || !dashboardAvailable || tokenMethodVisible;
+      tokenMethodVisible = directTokenMode || tokenMethodVisible;
+      loginPrimary.style.display = primaryFlowAvailable && !tokenMethodVisible ? 'flex' : 'none';
       tokenLoginWrap.style.display = tokenMethodVisible ? 'flex' : 'none';
       if (hideTokenMethodBtn) {
         hideTokenMethodBtn.style.display = tokenMethodVisible && dashboardAvailable && !signedTicketMode ? 'block' : 'none';
@@ -1982,8 +2042,8 @@
 
       if (dashboardAvailable && !signedTicketMode) {
         dashboardLoginBtn.style.display = 'block';
-        showTokenMethodBtn.style.display = (pendingDashboardLoginId || dashboardFlowBusy) ? 'none' : 'block';
         if (dashboardFlowBusy) {
+          tokenDisclosureWrap.style.display = 'none';
           return;
         }
         if (pendingDashboardLoginId) {
@@ -1991,9 +2051,14 @@
         } else {
           resetPrimaryLoginState();
         }
+      } else if (signedTicketMode) {
+        dashboardLoginBtn.style.display = 'none';
+        showTokenMethodBtn.style.display = 'none';
+        configurePrimaryPinStep('signed_ticket');
       } else {
         dashboardLoginBtn.style.display = 'none';
         showTokenMethodBtn.style.display = 'none';
+        tokenDisclosureWrap.style.display = 'none';
       }
 
       updateLoginSubtitle();
@@ -2045,12 +2110,20 @@
     }
 
     function setTokenMethodVisible(visible) {
+      const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
+      const primaryFlowAvailable = dashboardLoginEnabled || signedTicketMode;
       tokenMethodVisible = visible;
+      loginPrimary.style.display = primaryFlowAvailable && !visible ? 'flex' : 'none';
       tokenLoginWrap.style.display = visible ? 'flex' : 'none';
       if (hideTokenMethodBtn) {
         hideTokenMethodBtn.style.display = visible && dashboardLoginEnabled && !ssoTicket ? 'block' : 'none';
       }
       showTokenMethodBtn.textContent = dashboardLoginEnabled ? 'Use recovery token' : 'Use access token';
+      if (!visible) {
+        setTokenDisclosureOpen(false);
+      } else {
+        tokenDisclosureWrap.style.display = 'none';
+      }
       updateLoginSubtitle();
     }
 
@@ -2082,7 +2155,11 @@
 
     function resetPrimaryLoginState() {
       dashboardFlowBusy = false;
+      primaryPinMode = null;
+      tokenMethodVisible = false;
       clearPendingDashboardLoginState();
+      loginPrimary.style.display = 'flex';
+      tokenLoginWrap.style.display = 'none';
       dashboardStartWrap.style.display = 'block';
       dashboardPinWrap.style.display = 'none';
       primaryPinInput.value = '';
@@ -2090,6 +2167,9 @@
       loginPrimaryNote.textContent = 'Continue with your account first. You will enter the machine PIN in the next step.';
       dashboardLoginBtn.textContent = 'Continue with account';
       dashboardLoginBtn.disabled = false;
+      dashboardPinBackBtn.style.display = 'inline-flex';
+      tokenDisclosureWrap.style.display = 'block';
+      setTokenDisclosureOpen(false);
       showTokenMethodBtn.style.display = 'block';
       updateLoginSubtitle();
     }
@@ -2097,8 +2177,10 @@
     function showDashboardProgressState() {
       dashboardFlowBusy = true;
       setTokenMethodVisible(false);
+      primaryPinMode = null;
       dashboardStartWrap.style.display = 'block';
       dashboardPinWrap.style.display = 'none';
+      tokenDisclosureWrap.style.display = 'none';
       loginPrimaryTitle.textContent = 'Waiting for account approval';
       loginPrimaryNote.textContent = 'Approve this sign-in from your dashboard. The machine PIN comes next.';
       dashboardLoginBtn.textContent = 'Please wait';
@@ -2110,15 +2192,13 @@
     function restoreDashboardPinStep() {
       dashboardFlowBusy = false;
       setTokenMethodVisible(false);
-      dashboardStartWrap.style.display = 'none';
-      dashboardPinWrap.style.display = 'block';
-      showTokenMethodBtn.style.display = 'none';
       dashboardLoginBtn.disabled = false;
-      updateLoginSubtitle();
+      configurePrimaryPinStep(primaryPinMode === 'signed_ticket' ? 'signed_ticket' : 'dashboard_pending');
     }
 
     function showDashboardPinStep(pendingLoginId) {
       storePendingDashboardLoginState(pendingLoginId);
+      primaryPinMode = 'dashboard_pending';
       restoreDashboardPinStep();
       primaryPinInput.value = '';
       primaryPinInput.focus();
@@ -3223,16 +3303,24 @@
       await bootstrapWorkspace();
     });
 
+    toggleTokenMethodBtn.addEventListener('click', () => {
+      errorEl.textContent = '';
+      clearLoginFeedback();
+      const expanded = toggleTokenMethodBtn.getAttribute('aria-expanded') === 'true';
+      setTokenDisclosureOpen(!expanded);
+    });
+
     showTokenMethodBtn.addEventListener('click', () => {
       errorEl.textContent = '';
       clearLoginFeedback();
-      setTokenMethodVisible(!tokenMethodVisible);
+      setTokenMethodVisible(true);
     });
     if (hideTokenMethodBtn) {
       hideTokenMethodBtn.addEventListener('click', () => {
         errorEl.textContent = '';
         clearLoginFeedback();
         setTokenMethodVisible(false);
+        focusLoginEntry();
       });
     }
 
@@ -3267,7 +3355,7 @@
     dashboardContinueBtn.addEventListener('click', async () => {
       errorEl.textContent = '';
       clearLoginFeedback();
-      if (!pendingDashboardLoginId) {
+      if (primaryPinMode !== 'signed_ticket' && !pendingDashboardLoginId) {
         const resumed = await resumeDashboardRedirectFlow();
         if (!resumed || !pendingDashboardLoginId) {
           showInlineError('Continue with your account first.');
@@ -3282,13 +3370,17 @@
       dashboardContinueBtn.disabled = true;
       submitBtn.disabled = true;
       try {
-        const res = await authorizeDashboardPending(pendingDashboardLoginId, pin);
+        const res = primaryPinMode === 'signed_ticket'
+          ? await authorize('', pin)
+          : await authorizeDashboardPending(pendingDashboardLoginId, pin);
         if (!res.ok) {
           const problem = await readApiError(res);
           if (res.status === 423) {
             showAccessPausedState(problem?.message);
           } else if (res.status === 429) {
             showTooManyAttemptsState(problem?.message);
+          } else if (primaryPinMode === 'signed_ticket') {
+            showInlineError(problem?.message || 'Invalid sign-in link or machine PIN.');
           } else if (problem?.code === 'approval_expired') {
             resetPrimaryLoginState();
             showApprovalExpiredState(problem.message);
@@ -3637,17 +3729,11 @@
       if (ssoTicket) {
         clearDashboardFlowState();
         clearPendingDashboardLoginState();
-        await showLogin('', { allowBack: false, preferToken: true });
-        return;
-      }
-
-      if (pendingDashboardLoginId || hasStoredDashboardChallenge()) {
         showAuthForm({
           allowBack: false,
           preferToken: false,
           preserveDashboardState: true
         });
-        await resumeDashboardRedirectFlow();
         return;
       }
 
@@ -3660,6 +3746,11 @@
         });
         await resumeDashboardRedirectFlow();
         return;
+      }
+
+      if (pendingDashboardLoginId || hasStoredDashboardChallenge()) {
+        clearPendingDashboardLoginState();
+        clearDashboardFlowState();
       }
 
       showWelcomePage();
