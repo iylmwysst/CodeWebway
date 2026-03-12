@@ -253,6 +253,7 @@ fn release_owned_zrok_token(port: u16) {
 fn scan_zrok_stream_for_url<R: std::io::Read + Send + 'static>(
     port: u16,
     stream: R,
+    shared_url: Arc<Mutex<Option<String>>>,
     tx: std::sync::mpsc::Sender<String>,
 ) {
     use std::io::{BufRead, BufReader};
@@ -262,7 +263,11 @@ fn scan_zrok_stream_for_url<R: std::io::Read + Send + 'static>(
             let Ok(line) = line else { break };
             if let Some(tok) = extract_zrok_token(&line) {
                 write_owned_zrok_token(port, &tok);
-                let _ = tx.send(format!("https://{tok}.share.zrok.io"));
+                let url = format!("https://{tok}.share.zrok.io");
+                if let Ok(mut current) = shared_url.lock() {
+                    *current = Some(url.clone());
+                }
+                let _ = tx.send(url);
             }
         }
     });
@@ -273,6 +278,7 @@ fn scan_zrok_stream_for_url<R: std::io::Read + Send + 'static>(
 fn log_zrok_stderr(
     port: u16,
     stderr: std::process::ChildStderr,
+    shared_url: Arc<Mutex<Option<String>>>,
     url_tx: std::sync::mpsc::Sender<String>,
 ) -> PathBuf {
     use std::io::{BufRead, BufReader, Write};
@@ -292,7 +298,11 @@ fn log_zrok_stderr(
             let Ok(line) = line else { break };
             if let Some(tok) = extract_zrok_token(&line) {
                 write_owned_zrok_token(port, &tok);
-                let _ = url_tx.send(format!("https://{tok}.share.zrok.io"));
+                let url = format!("https://{tok}.share.zrok.io");
+                if let Ok(mut current) = shared_url.lock() {
+                    *current = Some(url.clone());
+                }
+                let _ = url_tx.send(url);
             }
             let _ = writeln!(file, "{line}");
         }
@@ -438,11 +448,22 @@ pub struct ServerHandle {
     pub token: String,
     pub pin: String,
     pub zrok_url: Option<String>,
+    pub zrok_url_state: Arc<Mutex<Option<String>>>,
     pub zrok_log_path: Option<PathBuf>,
     pub working_dir: PathBuf,
     pub shutdown_tx: mpsc::UnboundedSender<()>,
     pub server_done: tokio::sync::oneshot::Receiver<()>,
     pub state: Arc<AppState>,
+}
+
+impl ServerHandle {
+    pub fn current_zrok_url(&self) -> Option<String> {
+        self.zrok_url_state
+            .lock()
+            .ok()
+            .and_then(|current| current.clone())
+            .or_else(|| self.zrok_url.clone())
+    }
 }
 
 pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
@@ -530,6 +551,7 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
     let app = server::router(Arc::clone(&state));
     let addr = format!("{}:{}", cfg.host, cfg.port);
 
+    let zrok_url_state = Arc::new(Mutex::new(None));
     let (zrok_child, zrok_url, zrok_log_path) = if cfg.zrok {
         check_zrok_ready()?;
         release_stale_owned_zrok_share(cfg.port);
@@ -537,12 +559,17 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         write_owned_zrok_pid(cfg.port, child.id());
         let (url_tx, url_rx) = std::sync::mpsc::channel::<String>();
         let log_path = if let Some(stderr) = child.stderr.take() {
-            log_zrok_stderr(cfg.port, stderr, url_tx.clone())
+            log_zrok_stderr(
+                cfg.port,
+                stderr,
+                Arc::clone(&zrok_url_state),
+                url_tx.clone(),
+            )
         } else {
             PathBuf::new()
         };
         if let Some(stdout) = child.stdout.take() {
-            scan_zrok_stream_for_url(cfg.port, stdout, url_tx);
+            scan_zrok_stream_for_url(cfg.port, stdout, Arc::clone(&zrok_url_state), url_tx);
         }
         // Wait up to 15 s — zrok usually assigns a URL in 3–10 s.
         let url = url_rx.recv_timeout(Duration::from_secs(15)).ok();
@@ -550,6 +577,12 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
     } else {
         (None, None, None)
     };
+
+    if let Some(url) = zrok_url.clone() {
+        if let Ok(mut current) = zrok_url_state.lock() {
+            *current = Some(url);
+        }
+    }
 
     let zrok_child = Arc::new(Mutex::new(zrok_child));
     if cfg.zrok {
@@ -606,6 +639,7 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
         token,
         pin,
         zrok_url,
+        zrok_url_state,
         zrok_log_path,
         working_dir,
         shutdown_tx,

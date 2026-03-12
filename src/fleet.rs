@@ -225,6 +225,17 @@ pub async fn report_result(
     Ok(())
 }
 
+fn build_runtime_output(url: &str, access_token: &str, runtime_instance_id: &str) -> String {
+    serde_json::json!({
+        "kind": "codewebway_runtime",
+        "url": url,
+        "access_token": access_token,
+        "access_token_ttl_secs": 12 * 60 * 60,
+        "runtime_instance_id": runtime_instance_id,
+    })
+    .to_string()
+}
+
 #[derive(Debug, Deserialize)]
 struct RotateTokenResponse {
     data: RotateTokenData,
@@ -302,6 +313,69 @@ impl DaemonState {
             || new_url != self.active_url.as_deref()
             || new_runtime_instance_id != self.runtime_instance_id.as_deref()
             || self.last_d1_write.elapsed() > std::time::Duration::from_secs(300)
+    }
+}
+
+struct RunningRuntime {
+    execution_id: String,
+    access_token: String,
+    runtime_instance_id: String,
+    zrok_url_state: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    ready_reported: bool,
+}
+
+impl RunningRuntime {
+    fn current_url(&self) -> Option<String> {
+        self.zrok_url_state
+            .lock()
+            .ok()
+            .and_then(|current| current.clone())
+    }
+}
+
+async fn sync_runtime_ready(
+    creds: &FleetCredentials,
+    state: &mut DaemonState,
+    runtime: &mut RunningRuntime,
+) {
+    let latest_url = runtime.current_url();
+    if latest_url != state.active_url {
+        state.active_url = latest_url.clone();
+        if latest_url.is_some() {
+            state.last_d1_write = std::time::Instant::now() - std::time::Duration::from_secs(400);
+        }
+    }
+
+    if runtime.ready_reported {
+        return;
+    }
+
+    let Some(url) = latest_url.as_deref() else {
+        return;
+    };
+
+    if runtime.execution_id.is_empty() {
+        runtime.ready_reported = true;
+        return;
+    }
+
+    let output = build_runtime_output(url, &runtime.access_token, &runtime.runtime_instance_id);
+    match report_result(creds, &runtime.execution_id, &output, true).await {
+        Ok(_) => runtime.ready_reported = true,
+        Err(e) => eprintln!("  Fleet: report failed: {e}"),
+    }
+}
+
+async fn report_runtime_start_failed_if_needed(
+    creds: &FleetCredentials,
+    runtime: &RunningRuntime,
+    reason: &str,
+) {
+    if runtime.ready_reported || runtime.execution_id.is_empty() {
+        return;
+    }
+    if let Err(e) = report_result(creds, &runtime.execution_id, reason, false).await {
+        eprintln!("  Fleet: failed to report runtime start failure: {e}");
     }
 }
 
@@ -473,32 +547,25 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         }
                     }
                     Ok(handle) => {
-                        let url = handle.zrok_url.as_deref().unwrap_or("no-url");
-                        // Report the runtime token via structured payload so the dashboard
-                        // can expose fallback token login without writing secrets to logs.
-                        let output = serde_json::json!({
-                            "kind": "codewebway_runtime",
-                            "url": url,
-                            "access_token": handle.token,
-                            "access_token_ttl_secs": 12 * 60 * 60,
-                            "runtime_instance_id": runtime_instance_id,
-                        })
-                        .to_string();
                         state.status = "running".to_string();
-                        state.active_url = handle.zrok_url.clone();
-                        state.runtime_instance_id = Some(runtime_instance_id);
+                        state.active_url = handle.current_zrok_url();
+                        state.runtime_instance_id = Some(runtime_instance_id.clone());
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
 
-                        if !exec_id.is_empty() {
-                            if let Err(e) = report_result(&creds, &exec_id, &output, true).await {
-                                eprintln!("  Fleet: report failed: {e}");
-                            }
-                        }
+                        let mut runtime = RunningRuntime {
+                            execution_id: exec_id,
+                            access_token: handle.token.clone(),
+                            runtime_instance_id,
+                            zrok_url_state: handle.zrok_url_state.clone(),
+                            ready_reported: false,
+                        };
+                        sync_runtime_ready(&creds, &mut state, &mut runtime).await;
 
                         wait_for_stop(
                             &creds,
                             &mut state,
+                            &mut runtime,
                             handle.shutdown_tx,
                             handle.server_done,
                             poll_interval,
@@ -526,6 +593,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
 async fn wait_for_stop(
     creds: &FleetCredentials,
     state: &mut DaemonState,
+    runtime: &mut RunningRuntime,
     shutdown_tx: tokio::sync::mpsc::UnboundedSender<()>,
     server_done: tokio::sync::oneshot::Receiver<()>,
     interval: std::time::Duration,
@@ -533,6 +601,7 @@ async fn wait_for_stop(
     tokio::pin!(server_done);
 
     loop {
+        sync_runtime_ready(creds, state, runtime).await;
         let skip = !state.should_write(
             &state.status,
             state.active_url.as_deref(),
@@ -550,6 +619,12 @@ async fn wait_for_stop(
                 if done.is_err() {
                     eprintln!("  Fleet: server stop signal dropped unexpectedly.");
                 }
+                report_runtime_start_failed_if_needed(
+                    creds,
+                    runtime,
+                    "Terminal stopped before public URL was ready",
+                )
+                .await;
                 return;
             }
             hb = heartbeat => hb,
@@ -564,6 +639,12 @@ async fn wait_for_stop(
                     if cmd.kind == "stop_codewebway" {
                         let exec_id = cmd.execution_id.unwrap_or_default();
                         let _ = shutdown_tx.send(());
+                        report_runtime_start_failed_if_needed(
+                            creds,
+                            runtime,
+                            "Terminal stopped before public URL was ready",
+                        )
+                        .await;
                         if !exec_id.is_empty() {
                             let _ = report_result(creds, &exec_id, "stopped", true).await;
                         }
@@ -586,6 +667,12 @@ async fn wait_for_stop(
                 if done.is_err() {
                     eprintln!("  Fleet: server stop signal dropped unexpectedly.");
                 }
+                report_runtime_start_failed_if_needed(
+                    creds,
+                    runtime,
+                    "Terminal stopped before public URL was ready",
+                )
+                .await;
                 return;
             }
             _ = tokio::time::sleep(interval) => {}
@@ -1091,6 +1178,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sync_runtime_ready_reports_late_zrok_url() {
+        let mut server = mockito::Server::new_async().await;
+        let report = server
+            .mock("POST", "/api/v1/agent/report")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"ok":true}}"#)
+            .create_async()
+            .await;
+
+        let creds = make_creds(&server.url());
+        let mut state = DaemonState::new();
+        state.status = "running".to_string();
+        state.runtime_instance_id = Some("runtime-1".to_string());
+        let shared_url = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut runtime = RunningRuntime {
+            execution_id: "ex-late".to_string(),
+            access_token: "token-123".to_string(),
+            runtime_instance_id: "runtime-1".to_string(),
+            zrok_url_state: shared_url.clone(),
+            ready_reported: false,
+        };
+
+        sync_runtime_ready(&creds, &mut state, &mut runtime).await;
+        assert!(state.active_url.is_none());
+        assert!(!runtime.ready_reported);
+
+        *shared_url.lock().unwrap() = Some("https://late.share.zrok.io".to_string());
+        sync_runtime_ready(&creds, &mut state, &mut runtime).await;
+
+        assert_eq!(
+            state.active_url.as_deref(),
+            Some("https://late.share.zrok.io")
+        );
+        assert!(runtime.ready_reported);
+        report.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_wait_for_stop_returns_when_server_stops_locally() {
         let mut server = mockito::Server::new_async().await;
         let heartbeat = server
@@ -1110,10 +1237,21 @@ mod tests {
             let mut state = DaemonState::new();
             state.status = "running".to_string();
             state.active_url = Some("https://live.zrok.io".to_string());
+            state.runtime_instance_id = Some("runtime-live".to_string());
             state.last_d1_write = std::time::Instant::now();
+            let mut runtime = RunningRuntime {
+                execution_id: "ex-live".to_string(),
+                access_token: "token-live".to_string(),
+                runtime_instance_id: "runtime-live".to_string(),
+                zrok_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    "https://live.zrok.io".to_string(),
+                ))),
+                ready_reported: true,
+            };
             wait_for_stop(
                 &creds,
                 &mut state,
+                &mut runtime,
                 shutdown_tx,
                 server_done_rx,
                 std::time::Duration::from_secs(5),
