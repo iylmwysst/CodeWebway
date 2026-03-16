@@ -401,9 +401,14 @@
       max-width: 580px;
     }
     .auth-back {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       min-height: 42px;
+      min-width: 76px;
       padding: 0 14px;
       flex-shrink: 0;
+      line-height: 1;
     }
     .auth-supporting {
       display: flex;
@@ -491,10 +496,13 @@
     }
     .token-form-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 12px;
+      grid-template-columns: minmax(0, 1fr);
       margin-top: 14px;
-      align-items: end;
+      align-items: start;
+    }
+    .token-form-actions {
+      display: grid;
+      margin-top: 14px;
     }
     .auth-keypad-shell {
       display: grid;
@@ -538,12 +546,17 @@
     .login-divider::before { left: 0; }
     .login-divider::after { right: 0; }
     .primary-cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       width: 100%;
       border-color: rgba(186, 212, 226, 0.22);
       background: linear-gradient(180deg, #f2f7fb, #dae8f1);
       color: #0d1820;
       font-weight: 600;
       box-shadow: 0 10px 24px rgba(7, 10, 14, 0.18);
+      line-height: 1.1;
+      text-align: center;
     }
     .primary-cta:hover:not(:disabled) {
       background: linear-gradient(180deg, #ffffff, #e5eef4);
@@ -551,10 +564,8 @@
       transform: translateY(-1px);
     }
     .inline-cta {
-      width: auto;
-      min-width: 160px;
-      flex-shrink: 0;
-      min-height: 46px;
+      width: 100%;
+      min-height: 48px;
     }
     .login-alt-panel {
       background:
@@ -1633,7 +1644,9 @@
                 />
                 <span class="auth-field-note">Required before the workspace opens.</span>
               </label>
-              <button id="submit" class="primary-cta inline-cta" type="submit">Unlock workspace</button>
+            </div>
+            <div class="token-form-actions">
+              <button id="submit" class="primary-cta inline-cta" type="submit">Unlock</button>
             </div>
           </div>
           <button id="hide-token-method" class="ghost switch-method-btn method-back-btn" type="button" style="display:none;">Back to account sign-in</button>
@@ -1682,7 +1695,7 @@
           <div class="file-head-copy">
             <span class="toolbar-eyebrow">File Workspace</span>
             <span id="nav-path">.</span>
-            <span class="toolbar-support">Browse the current directory, preview a file beside the shell, or open a terminal directly in this location.</span>
+            <span class="toolbar-support">Browse files or open a shell here.</span>
           </div>
           <div class="file-toolbar" role="toolbar" aria-label="File browser controls">
             <button id="nav-back" class="toolbar-button" type="button" title="Go up one directory" aria-label="Go up one directory">
@@ -1707,8 +1720,8 @@
         <div id="preview-tabs"></div>
         <div id="editor-actions">
           <div class="editor-actions-copy">
-            <span id="editor-mode-label" class="toolbar-eyebrow">Preview Mode</span>
-            <span id="editor-mode-note" class="toolbar-support">Open a file from the list to inspect it beside the shell, then switch into edit mode only when you need to change it.</span>
+            <span id="editor-mode-label" class="toolbar-eyebrow">Preview</span>
+            <span id="editor-mode-note" class="toolbar-support">Open a file to preview it here.</span>
           </div>
           <div class="editor-action-buttons" role="toolbar" aria-label="File editor controls">
             <button id="edit-file" class="ghost" type="button" title="Edit file" aria-label="Edit the current file">
@@ -2466,42 +2479,42 @@
 
       if (!current) {
         setEditorModeCopy(
-          'Preview Mode',
-          'Open a file from the list to inspect it beside the shell, then switch into edit mode only when you need to change it.'
+          'Preview',
+          'Open a file to preview it here.'
         );
         return;
       }
 
       if (editing) {
         setEditorModeCopy(
-          'Edit Mode',
-          `Editing ${currentLabel}. Save to write changes back to this machine, or cancel to return to preview.`
+          'Edit',
+          `Editing ${currentLabel}. Save changes or cancel to return to preview.`
         );
         return;
       }
 
       if (readOnly) {
         setEditorModeCopy(
-          'Preview Mode',
-          `${currentLabel} is open in a read-only session. You can inspect the file here, but saving changes is disabled.`
+          'Preview',
+          `${currentLabel} is open in read-only mode. Saving is disabled.`
         );
         return;
       }
 
       if (!canEdit) {
         const reason = current.truncated
-          ? 'The browser opened a truncated preview, so editing stays disabled.'
-          : 'This file is too large for in-browser editing.';
+          ? 'This preview is truncated, so editing is disabled.'
+          : 'This file is too large to edit here.';
         setEditorModeCopy(
-          'Preview Mode',
-          `${currentLabel} is open in preview only. ${reason}`
+          'Preview',
+          `${currentLabel} is preview only. ${reason}`
         );
         return;
       }
 
       setEditorModeCopy(
-        'Preview Mode',
-        `Previewing ${currentLabel}. Switch to edit when you are ready to make a change.`
+        'Preview',
+        `Previewing ${currentLabel}. Select Edit to make changes.`
       );
     }
 
