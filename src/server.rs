@@ -4092,6 +4092,46 @@ mod tests {
         assert!(inspect_sso_ticket(&state, Some(&ticket), now).is_none());
     }
 
+    #[test]
+    fn sso_ticket_accepts_within_clock_skew() {
+        // exp = now - 25s should pass (within 30s leeway)
+        let state =
+            make_state_with_sso(false, Some("0123456789abcdef0123456789abcdef".to_string()));
+        let now = unix_now();
+        let payload = serde_json::json!({
+            "sub": "user_clock_skew_ok",
+            "nonce": "nonce_clock_skew_ok_12345",
+            "exp": now - 25
+        });
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let sig = sso_ticket_signature(state.sso_shared_secret.as_deref().unwrap(), &payload_b64);
+        let ticket = format!("{payload_b64}.{sig}");
+        assert!(
+            inspect_sso_ticket(&state, Some(&ticket), now).is_some(),
+            "ticket expired 25s ago should be accepted within 30s clock skew"
+        );
+    }
+
+    #[test]
+    fn sso_ticket_rejects_outside_clock_skew() {
+        // exp = now - 35s should reject (beyond 30s leeway)
+        let state =
+            make_state_with_sso(false, Some("0123456789abcdef0123456789abcdef".to_string()));
+        let now = unix_now();
+        let payload = serde_json::json!({
+            "sub": "user_clock_skew_fail",
+            "nonce": "nonce_clock_skew_fail_1234",
+            "exp": now - 35
+        });
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let sig = sso_ticket_signature(state.sso_shared_secret.as_deref().unwrap(), &payload_b64);
+        let ticket = format!("{payload_b64}.{sig}");
+        assert!(
+            inspect_sso_ticket(&state, Some(&ticket), now).is_none(),
+            "ticket expired 35s ago should be rejected beyond 30s clock skew"
+        );
+    }
+
     fn make_state(terminal_only: bool) -> Arc<AppState> {
         make_state_with_sso(terminal_only, None)
     }

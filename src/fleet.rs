@@ -1027,6 +1027,12 @@ mod tests {
         assert_eq!(loaded.machine_name, "pi-test");
         assert_eq!(loaded.fleet_endpoint, "https://webwayfleet.dev");
         assert_eq!(loaded.machine_token_issued_at, 1_700_000_000_000);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "fleet.toml must be owner-only (0o600)");
+        }
     }
 
     #[test]
