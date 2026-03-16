@@ -981,6 +981,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let mut r = Router::new()
         .route("/", get(serve_index))
         .route("/favicon.svg", get(serve_favicon))
+        .route("/assets/*path", get(serve_asset))
         .route("/api/capabilities", get(capabilities))
         .route("/auth/login", post(auth_login))
         .route("/auth/dashboard/challenge", post(auth_dashboard_challenge))
@@ -1040,6 +1041,54 @@ async fn serve_favicon() -> Response {
         icon.data.into_owned(),
     )
         .into_response()
+}
+
+async fn serve_asset(AxumPath(path): AxumPath<String>) -> Response {
+    let embedded_path = sanitize_embedded_asset_path(&path).unwrap_or_default();
+    if embedded_path.is_empty() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let Some(asset) = Assets::get(&embedded_path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    (
+        [(
+            header::CONTENT_TYPE,
+            embedded_asset_content_type(&embedded_path),
+        )],
+        asset.data.into_owned(),
+    )
+        .into_response()
+}
+
+fn sanitize_embedded_asset_path(path: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(segment) => parts.push(segment.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+fn embedded_asset_content_type(path: &str) -> &'static str {
+    match Path::new(path).extension().and_then(|ext| ext.to_str()) {
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("svg") => "image/svg+xml; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 #[derive(Serialize)]
@@ -3737,6 +3786,32 @@ mod tests {
     fn test_cookie_value_missing() {
         let value = cookie_value("foo=1; bar=2", "codewebway_session");
         assert_eq!(value, None);
+    }
+
+    #[test]
+    fn test_sanitize_embedded_asset_path_accepts_nested_vendor_asset() {
+        assert_eq!(
+            sanitize_embedded_asset_path("vendor/xterm.min.js").as_deref(),
+            Some("vendor/xterm.min.js")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_embedded_asset_path_rejects_parent_segments() {
+        assert_eq!(sanitize_embedded_asset_path("../index.html"), None);
+        assert_eq!(sanitize_embedded_asset_path("vendor/../../secret"), None);
+    }
+
+    #[test]
+    fn test_embedded_asset_content_type_for_vendor_assets() {
+        assert_eq!(
+            embedded_asset_content_type("vendor/xterm.min.css"),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(
+            embedded_asset_content_type("vendor/xterm.min.js"),
+            "application/javascript; charset=utf-8"
+        );
     }
 
     #[test]

@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CodeWebway</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600&family=Noto+Sans+Mono:wght@400;600&family=Noto+Sans+Thai:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <link rel="stylesheet" href="/assets/vendor/xterm.min.css" />
   <style>
     /* Latin glyphs */
     @font-face {
@@ -82,78 +79,109 @@
       align-items: center;
       justify-content: center;
       padding: clamp(18px, 4vw, 36px);
+      position: relative;
+      isolation: isolate;
       background:
-        radial-gradient(circle at 16% 18%, rgba(92, 146, 255, 0.22), transparent 28%),
-        radial-gradient(circle at 82% 16%, rgba(78, 214, 168, 0.18), transparent 24%),
-        linear-gradient(145deg, #090c10, #11161b 46%, #0d0e12);
+        radial-gradient(circle at 14% 16%, rgba(104, 162, 255, 0.22), transparent 28%),
+        radial-gradient(circle at 82% 14%, rgba(93, 207, 180, 0.16), transparent 24%),
+        linear-gradient(145deg, #071017, #0c151d 48%, #0b1015);
       overflow: auto;
     }
+    #login::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.025), transparent 20%),
+        linear-gradient(90deg, rgba(255,255,255,0.016) 0, rgba(255,255,255,0.016) 1px, transparent 1px, transparent 96px),
+        linear-gradient(rgba(255,255,255,0.016) 0, rgba(255,255,255,0.016) 1px, transparent 1px, transparent 96px);
+      background-size: auto, 96px 96px, 96px 96px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.82), transparent 88%);
+      pointer-events: none;
+      z-index: -2;
+    }
+    #login::after {
+      content: '';
+      position: absolute;
+      inset: auto 6% 8% auto;
+      width: min(32vw, 320px);
+      height: min(32vw, 320px);
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(88, 167, 255, 0.18), transparent 68%);
+      filter: blur(18px);
+      pointer-events: none;
+      z-index: -1;
+    }
     #login-shell {
-      width: min(1100px, 100%);
+      width: min(1160px, 100%);
       display: grid;
       grid-template-columns: minmax(0, 1fr);
-      gap: 20px;
+      gap: 24px;
       align-items: stretch;
     }
     #login-shell.auth-open {
-      width: min(640px, 100%);
+      width: min(760px, 100%);
       grid-template-columns: minmax(0, 1fr);
     }
     .card {
       width: 100%;
-      max-width: 520px;
-      background: rgba(7, 8, 10, 0.62);
-      border: 1px solid rgba(103, 113, 128, 0.24);
-      border-radius: 18px;
-      padding: 26px;
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
+      max-width: 540px;
+      background:
+        linear-gradient(180deg, rgba(14, 19, 25, 0.92), rgba(10, 14, 18, 0.92)),
+        radial-gradient(circle at top right, rgba(103, 169, 255, 0.08), transparent 32%);
+      border: 1px solid rgba(126, 154, 176, 0.2);
+      border-radius: 24px;
+      padding: clamp(24px, 4vw, 34px);
+      box-shadow:
+        0 26px 80px rgba(0, 0, 0, 0.34),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
-    .card h1 { font-size: 24px; margin-bottom: 10px; letter-spacing: -0.01em; }
-    .card p { color: #aaa; margin-bottom: 18px; font-size: 14px; line-height: 1.45; }
+    .card h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; }
+    .card p { color: #aebdca; margin: 0; font-size: 14px; line-height: 1.55; }
     .eyebrow {
       display: inline-block;
       font-size: 11px;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
-      color: #92b6c9;
-      margin-bottom: 10px;
+      color: #8ab5c8;
+      margin-bottom: 0;
     }
-    .stack { display: flex; flex-direction: column; gap: 12px; }
+    .stack { display: flex; flex-direction: column; gap: 14px; }
     .row { display: flex; gap: 10px; }
     .welcome-card {
       position: relative;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      gap: 26px;
-      min-height: min(680px, calc(var(--app-height) - 64px));
+      gap: 30px;
+      min-height: min(700px, calc(var(--app-height) - 64px));
       max-width: none;
-      padding: clamp(26px, 4vw, 40px);
+      padding: clamp(28px, 4vw, 42px);
       background:
-        linear-gradient(160deg, rgba(17, 22, 29, 0.96), rgba(12, 14, 18, 0.94)),
-        radial-gradient(circle at top right, rgba(104, 154, 255, 0.18), transparent 30%);
-      border-color: rgba(136, 166, 196, 0.18);
+        linear-gradient(160deg, rgba(15, 22, 29, 0.96), rgba(9, 13, 17, 0.94)),
+        radial-gradient(circle at top right, rgba(105, 161, 255, 0.16), transparent 30%);
+      border-color: rgba(136, 170, 194, 0.2);
       overflow: hidden;
     }
     .welcome-card::before {
       content: '';
       position: absolute;
-      inset: auto -8% -18% auto;
-      width: 280px;
-      height: 280px;
-      background: radial-gradient(circle, rgba(70, 161, 255, 0.22), transparent 68%);
+      inset: auto -7% -16% auto;
+      width: 320px;
+      height: 320px;
+      background: radial-gradient(circle, rgba(70, 161, 255, 0.18), transparent 68%);
       pointer-events: none;
     }
     .welcome-card::after {
       content: '';
       position: absolute;
-      inset: 24px auto auto 24px;
-      width: 92px;
-      height: 92px;
-      border-radius: 28px;
-      border: 1px solid rgba(160, 195, 223, 0.14);
+      inset: 26px auto auto 26px;
+      width: 108px;
+      height: 108px;
+      border-radius: 30px;
+      border: 1px solid rgba(160, 195, 223, 0.12);
       background: linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01));
-      transform: rotate(10deg);
+      transform: rotate(12deg);
       pointer-events: none;
     }
     .welcome-copy,
@@ -164,57 +192,148 @@
     }
     .welcome-copy {
       display: grid;
-      gap: 16px;
-      max-width: 620px;
+      gap: 18px;
+      max-width: 700px;
     }
     .welcome-card h1 {
-      margin: 0;
-      max-width: 10ch;
-      font-size: clamp(34px, 6vw, 58px);
-      line-height: 0.94;
-      letter-spacing: -0.04em;
+      max-width: 11ch;
+      font-size: clamp(38px, 6vw, 62px);
+      line-height: 0.92;
+      letter-spacing: -0.045em;
     }
     .welcome-lead {
-      margin: 0;
-      max-width: 48ch;
-      color: #b8c8d3;
-      font-size: 16px;
-      line-height: 1.6;
+      max-width: 54ch;
+      color: #b8cad5;
+      font-size: 17px;
+      line-height: 1.65;
+    }
+    .welcome-highlights {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .welcome-chip,
+    .auth-chip,
+    .login-step,
+    .login-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      padding: 0 12px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .welcome-chip,
+    .auth-chip {
+      border: 1px solid rgba(146, 179, 201, 0.18);
+      background: rgba(255, 255, 255, 0.04);
+      color: #d6e5ee;
     }
     .welcome-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
-      align-items: center;
+      align-items: flex-start;
     }
     .welcome-actions button {
-      min-width: 200px;
-      padding: 12px 16px;
+      min-width: 220px;
+      padding: 13px 18px;
       font-size: 14px;
     }
     .welcome-actions .ghost {
-      color: #d3e2eb;
-      border-color: rgba(150, 177, 196, 0.24);
-      background: rgba(255, 255, 255, 0.03);
+      color: #dbe8ef;
+      border-color: rgba(150, 177, 196, 0.22);
+      background: rgba(255, 255, 255, 0.035);
     }
     .welcome-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.05fr) minmax(260px, 0.95fr);
-      gap: 16px;
+      grid-template-columns: minmax(0, 1.12fr) minmax(280px, 0.88fr);
+      gap: 18px;
     }
     .welcome-panel,
     .welcome-status-card {
-      border: 1px solid rgba(131, 153, 176, 0.16);
-      border-radius: 16px;
-      padding: 18px;
-      background: rgba(255, 255, 255, 0.03);
-      backdrop-filter: blur(10px);
+      border: 1px solid rgba(131, 153, 176, 0.18);
+      border-radius: 18px;
+      padding: 20px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.025)),
+        rgba(255, 255, 255, 0.02);
+      backdrop-filter: blur(8px);
+    }
+    .welcome-panel {
+      display: grid;
+      gap: 16px;
+    }
+    .welcome-panel-title {
+      display: block;
+      color: #f3f9fc;
+      font-size: 20px;
+      letter-spacing: -0.02em;
+      font-weight: 600;
+      margin-top: 6px;
+    }
+    .welcome-panel-lead {
+      color: #aabdc9;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .welcome-route {
+      display: grid;
+      gap: 12px;
+    }
+    .welcome-route-step {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .welcome-route-step:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .welcome-step-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 42px;
+      height: 28px;
+      border-radius: 999px;
+      background: rgba(89, 150, 255, 0.14);
+      border: 1px solid rgba(89, 150, 255, 0.2);
+      color: #dbe8ff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+    .welcome-step-copy strong {
+      display: block;
+      color: #f4fbff;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+    }
+    .welcome-step-copy p {
+      margin-top: 4px;
+      color: #a6bbc7;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .welcome-divider {
+      height: 1px;
+      background: linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
     }
     .welcome-list {
       list-style: none;
       display: grid;
       gap: 10px;
-      margin-top: 14px;
+      margin-top: 0;
     }
     .welcome-list li {
       position: relative;
@@ -232,18 +351,29 @@
     }
     .welcome-status-grid {
       display: grid;
-      gap: 12px;
+      gap: 14px;
+      align-content: start;
+    }
+    .welcome-status-card {
+      position: relative;
+      overflow: hidden;
+    }
+    .welcome-status-card::before {
+      content: '';
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 3px;
+      background: linear-gradient(180deg, rgba(97, 169, 255, 0.95), rgba(97, 169, 255, 0.15));
     }
     .welcome-status-card strong {
       display: block;
-      margin: 4px 0 8px;
+      margin: 6px 0 8px;
       color: #f5fbff;
       font-size: 15px;
       letter-spacing: -0.01em;
     }
     .welcome-status-card p,
     .welcome-panel p {
-      margin: 0;
       color: #aabdc9;
       font-size: 13px;
       line-height: 1.5;
@@ -252,75 +382,150 @@
       display: none;
       align-self: center;
       max-width: none;
-      padding: clamp(24px, 4vw, 34px);
       background:
-        linear-gradient(160deg, rgba(17, 22, 29, 0.96), rgba(12, 14, 18, 0.94)),
-        radial-gradient(circle at top right, rgba(104, 154, 255, 0.14), transparent 32%);
-      border-color: rgba(136, 166, 196, 0.18);
+        linear-gradient(160deg, rgba(15, 22, 29, 0.96), rgba(9, 13, 17, 0.94)),
+        radial-gradient(circle at top right, rgba(104, 154, 255, 0.12), transparent 32%);
+      border-color: rgba(136, 166, 196, 0.2);
       backdrop-filter: blur(12px);
     }
     .auth-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
+      gap: 18px;
+      margin-bottom: 18px;
     }
-    .auth-header h1 {
-      margin-bottom: 0;
+    .auth-header-copy {
+      display: grid;
+      gap: 12px;
+      max-width: 580px;
     }
     .auth-back {
-      padding: 8px 10px;
+      min-height: 42px;
+      padding: 0 14px;
       flex-shrink: 0;
     }
+    .auth-supporting {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    #login-subtitle {
+      color: #b4c6d2;
+      font-size: 15px;
+      line-height: 1.65;
+      margin-bottom: 18px;
+      max-width: 54ch;
+    }
     .login-panel {
-      border: 1px solid rgba(131, 153, 176, 0.16);
-      border-radius: 12px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
-      padding: 18px;
+      border: 1px solid rgba(131, 153, 176, 0.18);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018)),
+        rgba(255,255,255,0.02);
+      padding: 20px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
+    }
+    .login-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .login-step {
+      border: 1px solid rgba(104, 161, 255, 0.24);
+      background: rgba(104, 161, 255, 0.14);
+      color: #dbe8ff;
+    }
+    .login-tag {
+      border: 1px solid rgba(150, 177, 196, 0.18);
+      background: rgba(255, 255, 255, 0.03);
+      color: #adc0cb;
+    }
+    .login-panel-copy {
+      display: grid;
+      gap: 10px;
     }
     .login-panel h2 {
-      font-size: 15px;
-      letter-spacing: 0.02em;
+      font-size: 18px;
+      letter-spacing: -0.02em;
       color: #f5fbff;
-      margin: 0 0 8px 0;
+      margin: 0;
       font-weight: 600;
     }
     .login-panel p {
-      margin: 0 0 12px 0;
       color: #b8c8d3;
       font-size: 13px;
-      line-height: 1.5;
+      line-height: 1.6;
     }
     .login-panel .eyebrow {
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
     .login-divider {
       position: relative;
       text-align: center;
-      margin: 2px 0;
-      color: #7f7f7f;
+      margin: 4px 0;
+      color: #7e95a4;
       font-size: 11px;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
     }
+    .auth-field {
+      display: grid;
+      gap: 7px;
+    }
+    .auth-field-label {
+      color: #d5e1e9;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .auth-field-note,
+    .auth-keypad-note {
+      color: #90a8b6;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .token-form-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      margin-top: 14px;
+      align-items: end;
+    }
+    .auth-keypad-shell {
+      display: grid;
+      gap: 10px;
+      border: 1px solid rgba(131, 153, 176, 0.16);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+    .auth-keypad-head {
+      display: grid;
+      gap: 4px;
+    }
     .pin-keypad {
-      margin-top: 8px;
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 8px;
+      gap: 10px;
     }
     .pin-keypad button {
-      padding: 9px 0;
-      font-size: 15px;
+      min-height: 50px;
+      padding: 10px 0;
+      font-size: 16px;
       font-weight: 600;
-      background: #141414;
-      color: #e5e5e5;
-      border: 1px solid #383838;
+      background: rgba(9, 13, 17, 0.88);
+      color: #ebf3f7;
+      border: 1px solid rgba(120, 146, 166, 0.18);
+      border-radius: 15px;
     }
     .pin-keypad button:hover:not(:disabled) {
-      background: #202020;
-      border-color: #5b5b5b;
+      background: rgba(14, 21, 27, 0.94);
+      border-color: rgba(143, 182, 207, 0.28);
     }
     .login-divider::before,
     .login-divider::after {
@@ -328,40 +533,45 @@
       position: absolute;
       top: 50%;
       width: 35%;
-      border-top: 1px solid #303030;
+      border-top: 1px solid rgba(123, 143, 159, 0.2);
     }
     .login-divider::before { left: 0; }
     .login-divider::after { right: 0; }
     .primary-cta {
       width: 100%;
-      border-color: #8f8f8f;
-      background: #f3f3f3;
-      color: #111;
+      border-color: rgba(186, 212, 226, 0.22);
+      background: linear-gradient(180deg, #f2f7fb, #dae8f1);
+      color: #0d1820;
       font-weight: 600;
+      box-shadow: 0 10px 24px rgba(7, 10, 14, 0.18);
     }
     .primary-cta:hover:not(:disabled) {
-      background: #fff;
-      border-color: #d1d1d1;
+      background: linear-gradient(180deg, #ffffff, #e5eef4);
+      border-color: rgba(216, 231, 239, 0.72);
+      transform: translateY(-1px);
     }
     .inline-cta {
       width: auto;
       min-width: 160px;
       flex-shrink: 0;
+      min-height: 46px;
     }
     .login-alt-panel {
-      background: rgba(255, 255, 255, 0.025);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.018)),
+        rgba(255, 255, 255, 0.018);
     }
     .switch-method-btn {
       width: 100%;
-      border-color: rgba(150, 177, 196, 0.24);
+      border-color: rgba(150, 177, 196, 0.2);
       background: rgba(255, 255, 255, 0.03);
       color: #d9e8ef;
       font-weight: 600;
-      padding: 11px 14px;
+      padding: 12px 15px;
     }
     .switch-method-btn:hover:not(:disabled) {
       background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(180, 202, 221, 0.36);
+      border-color: rgba(180, 202, 221, 0.34);
       color: #f5fbff;
     }
     .method-back-btn {
@@ -369,7 +579,7 @@
     }
     .token-disclosure {
       display: grid;
-      gap: 10px;
+      gap: 12px;
     }
     .disclosure-toggle {
       width: 100%;
@@ -378,76 +588,110 @@
       justify-content: center;
       gap: 8px;
       border-style: dashed;
-      color: #c8d8e0;
-      padding: 10px 14px;
+      color: #d3e2ea;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.025);
     }
     .disclosure-toggle .chevron {
       font-size: 14px;
       line-height: 1;
+      transition: transform 0.18s ease;
+    }
+    .disclosure-toggle[aria-expanded="true"] {
+      border-color: rgba(180, 202, 221, 0.34);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .disclosure-toggle[aria-expanded="true"] .chevron {
+      transform: rotate(180deg);
     }
     input, select {
       width: 100%;
-      background: #111;
-      border: 1px solid #444;
-      color: #eee;
-      border-radius: 8px;
-      padding: 11px 13px;
+      background: rgba(8, 12, 16, 0.82);
+      border: 1px solid rgba(120, 146, 166, 0.18);
+      color: #eef5f8;
+      border-radius: 14px;
+      padding: 12px 13px;
       font-size: 14px;
       outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    input::placeholder,
+    select::placeholder {
+      color: #7e95a4;
     }
     button {
-      border: 1px solid #666;
-      border-radius: 8px;
-      background: #dedede;
-      color: #111;
+      border: 1px solid rgba(158, 181, 197, 0.18);
+      border-radius: 14px;
+      background: rgba(236, 242, 246, 0.92);
+      color: #0e1820;
       padding: 10px 12px;
       font-size: 13px;
       cursor: pointer;
+      transition:
+        border-color 0.18s ease,
+        background 0.18s ease,
+        color 0.18s ease,
+        transform 0.18s ease,
+        box-shadow 0.18s ease;
     }
-    button:hover:not(:disabled) { background: #f0f0f0; border-color: #bbb; }
+    button:hover:not(:disabled) {
+      background: rgba(248, 251, 253, 0.98);
+      border-color: rgba(216, 231, 239, 0.68);
+    }
     button:disabled { opacity: 0.6; cursor: wait; }
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+    }
     .ghost {
       background: transparent;
-      border-color: #3a3a3a;
-      color: #999;
+      border-color: rgba(120, 146, 166, 0.16);
+      color: #9eb3bf;
     }
     .ghost:hover:not(:disabled) {
-      background: rgba(255,255,255,0.07);
-      border-color: #4f4f4f;
-      color: #ddd;
+      background: rgba(255,255,255,0.06);
+      border-color: rgba(143, 168, 185, 0.26);
+      color: #e1edf3;
     }
     #error {
-      color: #ff8a80;
-      margin-top: 10px;
-      min-height: 20px;
+      color: #ffb4a8;
+      margin-top: 4px;
+      min-height: 18px;
       font-size: 13px;
+      line-height: 1.5;
     }
     .login-status-card {
       display: none;
       margin-top: 12px;
-      border: 1px solid #343434;
-      border-radius: 10px;
-      padding: 12px 13px;
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      border-radius: 16px;
+      padding: 14px 15px;
       background: rgba(255, 255, 255, 0.03);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
     }
     .login-status-card[data-tone="neutral"] {
-      border-color: #31414a;
-      background: rgba(72, 107, 126, 0.12);
+      border-color: rgba(77, 118, 140, 0.36);
+      background: rgba(72, 107, 126, 0.14);
     }
     .login-status-card[data-tone="warning"] {
-      border-color: #70551b;
+      border-color: rgba(163, 126, 48, 0.44);
       background: rgba(121, 92, 18, 0.18);
     }
     .login-status-card[data-tone="error"] {
-      border-color: #6f2f3b;
+      border-color: rgba(169, 86, 100, 0.38);
       background: rgba(112, 36, 48, 0.2);
     }
     .login-status-card .eyebrow {
       font-size: 11px;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
       color: #aab6c2;
-      margin-bottom: 5px;
+      margin-bottom: 6px;
     }
     .login-status-card[data-tone="warning"] .eyebrow {
       color: #f1c976;
@@ -458,7 +702,7 @@
     .login-status-card .copy {
       color: #d6d6d6;
       font-size: 12px;
-      line-height: 1.45;
+      line-height: 1.55;
     }
 
     #app { display: none; height: var(--app-height); flex-direction: column; }
@@ -479,85 +723,182 @@
       border-radius: 6px;
     }
     #tab-info {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
+      display: grid;
+      gap: 3px;
+      align-content: center;
       font-family: monospace;
       line-height: 1.3;
-      padding: 0 10px;
-      border-left: 1px solid #2f2f2f;
+      padding: 0 14px 0 16px;
+      min-width: 118px;
+      border-left: 1px solid rgba(120, 146, 166, 0.14);
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0));
     }
     #status {
-      font-size: 11px;
-      color: #c8c8c8;
+      font-size: 12px;
+      font-weight: 600;
+      color: #e8f1f5;
     }
     #usage {
-      font-size: 10px;
-      color: #666;
+      font-size: 11px;
+      color: #86a0af;
     }
-    #workspace { flex: 1; display: flex; min-height: 0; }
+    #workspace {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+      background: linear-gradient(180deg, #0d1318, #0a1014);
+    }
     #files {
       width: 34%;
-      min-width: 260px;
-      border-right: 1px solid #2f2f2f;
+      min-width: 280px;
+      border-right: 1px solid rgba(120, 146, 166, 0.12);
       display: flex;
       flex-direction: column;
       min-height: 0;
-      background: #171717;
+      background: linear-gradient(180deg, #11191f, #0c1217);
+      box-shadow: inset -1px 0 0 rgba(255,255,255,0.015);
     }
     #file-head {
       display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 12px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
+    }
+    .file-head-copy,
+    .editor-actions-copy {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    }
+    .toolbar-eyebrow {
+      color: #718a99;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .toolbar-support {
+      color: #8ca3b1;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .file-toolbar,
+    .editor-action-buttons {
+      display: flex;
       gap: 8px;
       align-items: center;
-      justify-content: space-between;
-      padding: 8px;
-      border-bottom: 1px solid #2f2f2f;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      flex-shrink: 0;
     }
-    #tree { flex: 1; overflow: auto; padding: 8px; border-bottom: 1px solid #2f2f2f; }
+    .toolbar-button,
+    #new-tab,
+    #logout {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 0 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(120, 146, 166, 0.16);
+      color: #d4e1e9;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .toolbar-button .toolbar-icon,
+    #new-tab .toolbar-icon,
+    #logout .toolbar-icon {
+      font-size: 14px;
+      line-height: 1;
+      color: #eff6f9;
+    }
+    .toolbar-button:hover:not(:disabled),
+    #new-tab:hover:not(:disabled),
+    #logout:hover:not(:disabled) {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(150, 177, 196, 0.3);
+      color: #f2f8fb;
+      transform: translateY(-1px);
+    }
+    .toolbar-button:focus-visible,
+    #new-tab:focus-visible,
+    #logout:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+    }
+    #tree {
+      flex: 1;
+      overflow: auto;
+      padding: 10px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.1);
+      display: grid;
+      gap: 6px;
+    }
     #preview-tabs {
       display: flex;
-      gap: 6px;
+      gap: 8px;
       overflow-x: auto;
-      padding: 8px;
-      border-bottom: 1px solid #2f2f2f;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.1);
+      background: rgba(255, 255, 255, 0.018);
     }
     #preview {
       flex: 1;
       overflow: auto;
-      padding: 10px;
+      padding: 14px;
       font-family: ui-monospace, Menlo, monospace;
       white-space: pre;
       font-size: 12px;
-      color: #ddd;
+      color: #dbe6ed;
+      line-height: 1.55;
+      background: #0e151b;
     }
     #editor-actions {
       display: flex;
-      gap: 8px;
-      padding: 8px;
-      border-bottom: 1px solid #2f2f2f;
-      background: #151515;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.1);
+      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
     }
     #editor-actions button {
-      background: transparent;
-      border: 1px solid #383838;
-      border-radius: 5px;
-      color: #777;
-      font-size: 16px;
-      padding: 4px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 0 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(120, 146, 166, 0.16);
+      border-radius: 12px;
+      color: #d4e1e9;
+      font-size: 12px;
+      font-weight: 600;
     }
     #editor-actions button:hover:not(:disabled) {
-      background: rgba(255,255,255,0.07);
-      border-color: #555;
-      color: #ddd;
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(150, 177, 196, 0.3);
+      color: #f2f8fb;
+      transform: translateY(-1px);
     }
     #editor-actions button.primary {
-      background: transparent;
-      border: 1px solid #999;
-      color: #e8e8e8;
+      border-color: rgba(186, 212, 226, 0.24);
+      background: linear-gradient(180deg, #f2f7fb, #dae8f1);
+      color: #0d1820;
+      box-shadow: 0 10px 24px rgba(7, 10, 14, 0.18);
     }
     #editor-actions button.primary:hover:not(:disabled) {
-      background: rgba(255,255,255,0.1);
-      border-color: #bbb;
+      background: linear-gradient(180deg, #ffffff, #e5eef4);
+      border-color: rgba(216, 231, 239, 0.72);
     }
     #editor-actions button:disabled {
       opacity: 0.5;
@@ -573,22 +914,71 @@
       color: #e5e5e5;
       border: 0;
       border-top: 1px solid #2f2f2f;
-      padding: 10px;
+      padding: 14px;
       font-family: ui-monospace, Menlo, monospace;
       font-size: 12px;
-      line-height: 1.4;
+      line-height: 1.55;
       outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+    #editor:focus-visible {
+      border-top-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        inset 0 1px 0 rgba(133, 194, 226, 0.55),
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.16);
     }
     .tree-item {
-      padding: 4px 6px;
-      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid transparent;
       cursor: pointer;
       font-size: 13px;
       font-family: ui-monospace, Menlo, monospace;
-      white-space: pre;
+      color: #d5e3ea;
+      transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
     }
-    .tree-item:hover { background: #222; }
-    .tree-item.active { background: #2b2b2b; }
+    .tree-item:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(120, 146, 166, 0.14);
+      transform: translateX(1px);
+    }
+    .tree-item.active {
+      background: rgba(77, 118, 140, 0.18);
+      border-color: rgba(133, 194, 226, 0.24);
+      color: #eef5f8;
+    }
+    .tree-item:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
+    }
+    .tree-item-icon {
+      width: 16px;
+      text-align: center;
+      color: #90abc1;
+      flex-shrink: 0;
+    }
+    .tree-item-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tree-item-meta {
+      color: #718a99;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
     .indent { margin-left: 8px; }
 
     #terms { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
@@ -596,18 +986,20 @@
     #workspace:not(:has(#files)) #terms { flex: 1; }
     #term-tabs {
       display: flex;
-      align-items: stretch;
-      border-bottom: 1px solid #2f2f2f;
-      background: #161616;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
+      padding: 10px 12px;
     }
     #tab-scroll {
       display: flex;
-      gap: 8px;
+      gap: 10px;
       align-items: center;
       flex: 1;
       min-width: 0;
       overflow-x: auto;
-      padding: 8px;
+      padding: 0;
       scrollbar-width: thin;
       scrollbar-color: #3a3a3a transparent;
     }
@@ -617,103 +1009,172 @@
     #tab-fixed {
       display: flex;
       align-items: center;
+      gap: 10px;
       flex-shrink: 0;
     }
     .tab {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 8px;
-      border-radius: 7px;
-      border: 1px solid #383838;
-      background: #232323;
+      gap: 8px;
+      padding: 4px;
+      min-height: 42px;
+      border-radius: 16px;
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      background: rgba(255,255,255,0.025);
       cursor: pointer;
       font-size: 12px;
       white-space: nowrap;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
     }
-    .tab.active { border-color: #888; }
+    .tab:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(120, 146, 166, 0.22);
+      transform: translateY(-1px);
+    }
+    .tab.active {
+      border-color: rgba(133, 194, 226, 0.26);
+      background: rgba(77, 118, 140, 0.2);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
+    }
+    .tab:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
+    }
     .tab button {
-      padding: 2px 7px;
-      background: transparent;
-      border: 1px solid #383838;
-      border-radius: 5px;
-      color: #666;
-      font-size: 16px;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      border-radius: 10px;
+      color: #93aab8;
+      font-size: 14px;
       line-height: 1;
     }
     .tab button:hover:not(:disabled) {
-      background: rgba(255,255,255,0.07);
-      border-color: #555;
-      color: #ccc;
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(150, 177, 196, 0.28);
+      color: #edf5f9;
+    }
+    .tab button:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
     }
     .tab .title {
-      max-width: 160px;
+      max-width: 180px;
       overflow: hidden;
       text-overflow: ellipsis;
+      color: #dce8ee;
+      font-weight: 600;
+    }
+    .tab .tab-title {
+      width: auto;
+      height: auto;
+      padding: 8px 6px;
+      background: transparent;
+      border: 0;
+      text-align: left;
+      border-radius: 10px;
+      color: inherit;
+      flex: 1;
+      min-width: 0;
+    }
+    .tab .tab-title:hover:not(:disabled) {
+      background: rgba(255,255,255,0.05);
+      border-color: transparent;
+      color: #f5fbff;
+      transform: none;
+    }
+    .tab .tab-title:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
     }
     .tab .icon-btn {
-      padding: 2px 6px;
       min-width: 24px;
       text-align: center;
     }
     .tab .icon-btn:disabled { cursor: default; opacity: 0.3; }
     #new-tab {
-      background: transparent;
-      border: 1px solid #3a3a3a;
-      border-radius: 7px;
-      color: #777;
-      padding: 3px 10px;
-      font-size: 16px;
-      line-height: 1;
       flex-shrink: 0;
     }
-    #new-tab:hover:not(:disabled) { border-color: #555; color: #ccc; }
     #logout {
-      align-self: stretch;
-      border: 0;
-      border-left: 1px solid #2f2f2f;
-      border-radius: 0;
-      background: transparent;
-      color: #666;
-      padding: 0 12px;
-      font-size: 15px;
+      flex-shrink: 0;
     }
-    #logout:hover { color: #ccc; background: rgba(255,255,255,0.05); }
     .preview-tab {
-      display: flex;
+      display: inline-flex;
       align-items: center;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 14px;
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      background: rgba(255,255,255,0.025);
       font-size: 12px;
       white-space: nowrap;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
     }
     .preview-tab + .preview-tab {
-      border-left: 1px solid #2f2f2f;
-      margin-left: 4px;
-      padding-left: 8px;
+      margin-left: 0;
+    }
+    .preview-tab:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(120, 146, 166, 0.22);
+      transform: translateY(-1px);
+    }
+    .preview-tab.active {
+      border-color: rgba(133, 194, 226, 0.24);
+      background: rgba(77, 118, 140, 0.18);
     }
     .preview-tab .label {
       background: transparent;
       border: 0;
-      color: #999;
-      padding: 2px 4px;
+      color: #9eb4c1;
+      padding: 8px 10px;
       font-size: 12px;
+      font-weight: 600;
       cursor: pointer;
+      border-radius: 10px;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .preview-tab.active .label { color: #e8e8e8; }
+    .preview-tab.active .label {
+      color: #eef5f8;
+      background: rgba(255,255,255,0.04);
+    }
     .preview-tab .label:hover { color: #fff; }
+    .preview-tab .label:focus-visible,
+    .preview-tab .close:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
+    }
     .preview-tab .close {
-      background: transparent;
-      border: 1px solid #383838;
-      border-radius: 5px;
-      color: #666;
-      padding: 2px 6px;
-      font-size: 16px;
+      width: 28px;
+      height: 28px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      border-radius: 10px;
+      color: #93aab8;
+      padding: 0;
+      font-size: 14px;
       line-height: 1;
       cursor: pointer;
     }
     .preview-tab .close:hover:not(:disabled) {
-      background: rgba(255,255,255,0.07);
-      border-color: #555;
-      color: #ccc;
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(150, 177, 196, 0.28);
+      color: #edf5f9;
     }
     .preview-tab .close:disabled { opacity: 0.3; cursor: default; }
     #terminal { flex: 1; min-height: 0; padding: 6px; }
@@ -823,46 +1284,27 @@
       justify-content: flex-end;
       gap: 8px;
     }
-    .nav-row {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
+    .temp-link-item button:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
     }
-    #nav-back {
-      background: transparent;
-      border: 1px solid #383838;
-      border-radius: 5px;
-      color: #666;
-      padding: 2px 7px;
-      font-size: 16px;
-      line-height: 1;
-      flex-shrink: 0;
-      cursor: pointer;
-    }
-    #nav-back:hover:not(:disabled) { background: rgba(255,255,255,0.07); border-color: #555; color: #ccc; }
-    #nav-back:disabled { opacity: 0.3; cursor: default; }
     #nav-path {
       font-family: ui-monospace, Menlo, monospace;
-      font-size: 11px;
-      color: #777;
+      font-size: 14px;
+      line-height: 1.45;
+      color: #eff5f8;
+      font-weight: 600;
+      letter-spacing: -0.01em;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     #toggle-files {
-      align-self: stretch;
-      border: 0;
-      border-right: 1px solid #2f2f2f;
-      border-radius: 0;
-      background: transparent;
-      color: #666;
-      padding: 0 12px;
-      font-size: 15px;
+      flex-shrink: 0;
     }
-    #toggle-files:hover { color: #ccc; background: rgba(255,255,255,0.05); }
     #mobile-back { display: none; }
     #workspace.files-hidden #files { display: none; }
     #key-strip {
@@ -901,6 +1343,13 @@
       border-color: #666;
       color: #f1f1f1;
     }
+    #key-strip button:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
+    }
     #key-strip button.cursor-key {
       min-width: 42px;
       color: #d0d0d0;
@@ -915,6 +1364,9 @@
       .welcome-card {
         min-height: auto;
       }
+      .welcome-highlights {
+        gap: 8px;
+      }
       .welcome-grid {
         grid-template-columns: 1fr;
       }
@@ -922,6 +1374,22 @@
         width: 100%;
       }
       #workspace { position: relative; overflow: hidden; }
+      #file-head,
+      #editor-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .file-toolbar,
+      .editor-action-buttons {
+        justify-content: flex-start;
+      }
+      #term-tabs {
+        flex-wrap: wrap;
+      }
+      #tab-fixed {
+        width: 100%;
+        justify-content: space-between;
+      }
       #files {
         position: absolute;
         inset: 0;
@@ -958,11 +1426,22 @@
       }
     }
     @media (max-width: 560px) {
-      .auth-card .row {
-        flex-wrap: wrap;
+      .auth-header {
+        flex-direction: column;
       }
-      .auth-card .row > * {
-        flex: 1 1 100%;
+      .auth-back {
+        width: 100%;
+      }
+      .token-form-row {
+        grid-template-columns: 1fr;
+      }
+      .inline-cta {
+        width: 100%;
+      }
+      #toggle-files .toolbar-label,
+      #new-tab .toolbar-label,
+      #logout .toolbar-label {
+        display: none;
       }
     }
   </style>
@@ -973,43 +1452,92 @@
       <section id="welcome-screen" class="card welcome-card">
         <div class="welcome-copy">
           <span class="eyebrow">Browser Workspace</span>
-          <h1>Welcome to CodeWebway</h1>
+          <h1>Open this machine in the browser, with the important checks up front.</h1>
           <p class="welcome-lead">
-            Open this machine in the browser, inspect files, and jump into a terminal when you are ready instead of landing on a bare login wall.
+            Start with account access when the host allows it, keep recovery as a fallback, and enter the machine PIN only when the runtime is ready.
           </p>
+          <div class="welcome-highlights" aria-label="Access summary">
+            <span class="welcome-chip">Account first</span>
+            <span class="welcome-chip">Recovery only if needed</span>
+            <span class="welcome-chip">Machine PIN stays required</span>
+          </div>
         </div>
         <div class="welcome-actions">
           <button id="welcome-start" class="primary-cta" type="button">Continue with account</button>
           <div id="welcome-token-disclosure" class="token-disclosure" style="display:none; width:100%;">
-            <button id="welcome-toggle-token" class="ghost disclosure-toggle" type="button" aria-expanded="false">
+            <button
+              id="welcome-toggle-token"
+              class="ghost disclosure-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="welcome-token-panel"
+            >
               <span>More sign-in options</span>
               <span class="chevron" aria-hidden="true">▾</span>
             </button>
             <div id="welcome-token-panel" class="login-panel login-alt-panel" style="display:none;">
-              <span class="eyebrow">Recovery</span>
-              <h2>Need a recovery token?</h2>
-              <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+              <div class="login-panel-header">
+                <span class="login-step">Fallback</span>
+                <span class="login-tag">Use only if needed</span>
+              </div>
+              <div class="login-panel-copy">
+                <span class="eyebrow">Recovery</span>
+                <h2>Need a recovery token?</h2>
+                <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+              </div>
               <button id="welcome-token" class="primary-cta" type="button">Use recovery token</button>
             </div>
           </div>
         </div>
         <div class="welcome-grid">
           <div class="welcome-panel">
-            <span class="eyebrow">Inside This Workspace</span>
-            <p>Unlock once, then work from a single browser session with the tools below.</p>
-            <ul class="welcome-list">
-              <li>Live terminal access with reconnect support</li>
-              <li>File browser and editor beside the shell</li>
-              <li>Share preset links and session controls after sign-in</li>
-            </ul>
+            <div>
+              <span class="eyebrow">Access Route</span>
+              <strong class="welcome-panel-title">What happens next</strong>
+              <p class="welcome-panel-lead">
+                CodeWebway keeps the unlock path short and explicit so you know when identity, fallback, and PIN checks appear.
+              </p>
+            </div>
+            <div class="welcome-route">
+              <div class="welcome-route-step">
+                <span class="welcome-step-index">01</span>
+                <div class="welcome-step-copy">
+                  <strong>Use account access first</strong>
+                  <p>Preferred when this host allows dashboard-backed sign-in.</p>
+                </div>
+              </div>
+              <div class="welcome-route-step">
+                <span class="welcome-step-index">02</span>
+                <div class="welcome-step-copy">
+                  <strong>Reveal recovery only if needed</strong>
+                  <p>Fallback stays available without crowding the main unlock path.</p>
+                </div>
+              </div>
+              <div class="welcome-route-step">
+                <span class="welcome-step-index">03</span>
+                <div class="welcome-step-copy">
+                  <strong>Enter the machine PIN</strong>
+                  <p>The workspace opens only after the host-specific PIN check succeeds.</p>
+                </div>
+              </div>
+            </div>
+            <div class="welcome-divider" aria-hidden="true"></div>
+            <div>
+              <span class="eyebrow">Inside This Workspace</span>
+              <ul class="welcome-list">
+                <li>Live terminal access with reconnect support</li>
+                <li>File browser and editor beside the shell</li>
+                <li>Share preset links and session controls after sign-in</li>
+              </ul>
+            </div>
           </div>
           <div class="welcome-status-grid">
-            <div class="welcome-status-card">
+            <div class="welcome-status-card" aria-live="polite">
               <span class="eyebrow">Access</span>
               <strong id="welcome-auth-title">Checking sign-in options...</strong>
               <p id="welcome-auth-text">This host is loading its available unlock methods.</p>
             </div>
-            <div class="welcome-status-card">
+            <div class="welcome-status-card" aria-live="polite">
               <span class="eyebrow">Host Policy</span>
               <strong id="welcome-policy-title">Checking session policy...</strong>
               <p id="welcome-policy-text">This host is loading its current idle and access rules.</p>
@@ -1020,65 +1548,122 @@
 
       <form class="card auth-card" id="login-form">
         <div class="auth-header">
-          <div>
+          <div class="auth-header-copy">
             <span class="eyebrow">Secure Access</span>
             <h1>Unlock This Machine</h1>
+            <div class="auth-supporting" aria-label="Auth summary">
+              <span class="auth-chip">Preferred: account</span>
+              <span class="auth-chip">Fallback: recovery token</span>
+              <span class="auth-chip">PIN still required</span>
+            </div>
           </div>
           <button id="back-to-welcome" class="ghost auth-back" type="button">Back</button>
         </div>
         <p id="login-subtitle">Use your account first. A recovery token stays available if you need it later.</p>
         <div id="login-primary" class="stack" style="display:none;">
           <div id="dashboard-start-wrap" class="login-panel">
-            <h2 id="login-primary-title">Unlock this machine</h2>
-            <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
+            <div class="login-panel-header">
+              <span class="login-step">Step 1</span>
+              <span class="login-tag">Recommended path</span>
+            </div>
+            <div class="login-panel-copy">
+              <h2 id="login-primary-title">Unlock this machine</h2>
+              <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
+            </div>
             <button id="dashboard-login" class="primary-cta" type="button">Continue with account</button>
           </div>
           <div id="token-disclosure-wrap" class="token-disclosure" style="display:none;">
-            <button id="toggle-token-method" class="ghost disclosure-toggle" type="button" aria-expanded="false">
+            <button
+              id="toggle-token-method"
+              class="ghost disclosure-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="token-disclosure-panel"
+            >
               <span>More sign-in options</span>
               <span class="chevron" aria-hidden="true">▾</span>
             </button>
             <div id="token-disclosure-panel" class="login-panel login-alt-panel" style="display:none;">
-              <span class="eyebrow">Recovery</span>
-              <h2>Need a recovery token?</h2>
-              <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+              <div class="login-panel-header">
+                <span class="login-step">Fallback</span>
+                <span class="login-tag">Use only if needed</span>
+              </div>
+              <div class="login-panel-copy">
+                <span class="eyebrow">Recovery</span>
+                <h2>Need a recovery token?</h2>
+                <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+              </div>
               <button id="show-token-method" class="primary-cta" type="button">Use recovery token</button>
             </div>
           </div>
         </div>
         <div id="token-login-wrap" class="stack" style="display:none;">
           <div class="login-panel">
-            <span id="token-login-eyebrow" class="eyebrow">Recovery Access</span>
-            <h2 id="token-login-title">Unlock with recovery token</h2>
-            <p id="token-login-note">Use this fallback only when account sign-in is unavailable. You still need the machine PIN.</p>
-            <input id="password" type="password" autocomplete="current-password" placeholder="Recovery token" required />
-            <div class="row" style="margin-top:10px;">
-              <input id="pin" type="password" autocomplete="one-time-code" placeholder="Machine PIN" />
+            <div class="login-panel-header">
+              <span class="login-step">Step 2</span>
+              <span class="login-tag">Fallback path</span>
+            </div>
+            <div class="login-panel-copy">
+              <span id="token-login-eyebrow" class="eyebrow">Recovery Access</span>
+              <h2 id="token-login-title">Unlock with recovery token</h2>
+              <p id="token-login-note">Use this fallback only when account sign-in is unavailable. You still need the machine PIN.</p>
+            </div>
+            <label class="auth-field" for="password">
+              <span class="auth-field-label">Recovery token</span>
+              <input
+                id="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Recovery token"
+                required
+                autocapitalize="none"
+                spellcheck="false"
+              />
+              <span class="auth-field-note">Use the one-time or current token issued for this machine.</span>
+            </label>
+            <div class="token-form-row">
+              <label class="auth-field" for="pin">
+                <span class="auth-field-label">Machine PIN</span>
+                <input
+                  id="pin"
+                  type="password"
+                  autocomplete="one-time-code"
+                  placeholder="Machine PIN"
+                  inputmode="numeric"
+                />
+                <span class="auth-field-note">Required before the workspace opens.</span>
+              </label>
               <button id="submit" class="primary-cta inline-cta" type="submit">Unlock workspace</button>
             </div>
           </div>
           <button id="hide-token-method" class="ghost switch-method-btn method-back-btn" type="button" style="display:none;">Back to account sign-in</button>
-          <div class="pin-keypad" id="pin-keypad-token">
-            <button type="button" data-pin-key="1">1</button>
-            <button type="button" data-pin-key="2">2</button>
-            <button type="button" data-pin-key="3">3</button>
-            <button type="button" data-pin-key="4">4</button>
-            <button type="button" data-pin-key="5">5</button>
-            <button type="button" data-pin-key="6">6</button>
-            <button type="button" data-pin-key="7">7</button>
-            <button type="button" data-pin-key="8">8</button>
-            <button type="button" data-pin-key="9">9</button>
-            <button type="button" data-pin-key="clear">Clear</button>
-            <button type="button" data-pin-key="0">0</button>
-            <button type="button" data-pin-key="back">⌫</button>
+          <div class="auth-keypad-shell">
+            <div class="auth-keypad-head">
+              <span class="auth-field-label">PIN keypad</span>
+              <span class="auth-keypad-note">Useful on touch devices or when the browser keyboard is unreliable.</span>
+            </div>
+            <div class="pin-keypad" id="pin-keypad-token">
+              <button type="button" data-pin-key="1">1</button>
+              <button type="button" data-pin-key="2">2</button>
+              <button type="button" data-pin-key="3">3</button>
+              <button type="button" data-pin-key="4">4</button>
+              <button type="button" data-pin-key="5">5</button>
+              <button type="button" data-pin-key="6">6</button>
+              <button type="button" data-pin-key="7">7</button>
+              <button type="button" data-pin-key="8">8</button>
+              <button type="button" data-pin-key="9">9</button>
+              <button type="button" data-pin-key="clear">Clear</button>
+              <button type="button" data-pin-key="0">0</button>
+              <button type="button" data-pin-key="back">⌫</button>
+            </div>
           </div>
         </div>
-        <div id="error"></div>
-        <div id="login-feedback" class="login-status-card" data-tone="warning">
+        <div id="error" role="status" aria-live="polite"></div>
+        <div id="login-feedback" class="login-status-card" data-tone="warning" role="status" aria-live="polite">
           <div id="login-feedback-title" class="eyebrow"></div>
           <div id="login-feedback-text" class="copy"></div>
         </div>
-        <div id="login-meta" class="login-status-card" data-tone="neutral">
+        <div id="login-meta" class="login-status-card" data-tone="neutral" role="status" aria-live="polite">
           <div id="login-meta-title" class="eyebrow"></div>
           <div id="login-meta-text" class="copy"></div>
         </div>
@@ -1094,38 +1679,76 @@
     <div id="workspace">
       <section id="files">
         <div id="file-head">
-          <div class="nav-row">
-            <button id="nav-back" type="button" title="Go up">‹</button>
+          <div class="file-head-copy">
+            <span class="toolbar-eyebrow">File Workspace</span>
             <span id="nav-path">.</span>
+            <span class="toolbar-support">Browse the current directory, preview a file beside the shell, or open a terminal directly in this location.</span>
           </div>
-          <div class="row">
-            <button id="refresh-tree" class="ghost" type="button" title="Refresh">↺</button>
-            <button id="open-shell-here" class="ghost" type="button" title="Open shell here">⌨</button>
-            <button id="mobile-back" class="ghost" type="button" title="Close files panel">✕</button>
+          <div class="file-toolbar" role="toolbar" aria-label="File browser controls">
+            <button id="nav-back" class="toolbar-button" type="button" title="Go up one directory" aria-label="Go up one directory">
+              <span class="toolbar-icon" aria-hidden="true">‹</span>
+              <span class="toolbar-label">Up</span>
+            </button>
+            <button id="refresh-tree" class="toolbar-button" type="button" title="Refresh directory" aria-label="Refresh directory">
+              <span class="toolbar-icon" aria-hidden="true">↺</span>
+              <span class="toolbar-label">Refresh</span>
+            </button>
+            <button id="open-shell-here" class="toolbar-button" type="button" title="Open a shell in this directory" aria-label="Open a shell in this directory">
+              <span class="toolbar-icon" aria-hidden="true">⌨</span>
+              <span class="toolbar-label">Shell Here</span>
+            </button>
+            <button id="mobile-back" class="toolbar-button" type="button" title="Hide files panel" aria-label="Hide files panel">
+              <span class="toolbar-icon" aria-hidden="true">✕</span>
+              <span class="toolbar-label">Hide</span>
+            </button>
           </div>
         </div>
         <div id="tree"></div>
         <div id="preview-tabs"></div>
         <div id="editor-actions">
-          <button id="edit-file" class="ghost" type="button" title="Edit file">✎</button>
-          <button id="save-file" type="button" title="Save file">✓</button>
-          <button id="cancel-edit" class="ghost" type="button" title="Cancel editing">✕</button>
+          <div class="editor-actions-copy">
+            <span id="editor-mode-label" class="toolbar-eyebrow">Preview Mode</span>
+            <span id="editor-mode-note" class="toolbar-support">Open a file from the list to inspect it beside the shell, then switch into edit mode only when you need to change it.</span>
+          </div>
+          <div class="editor-action-buttons" role="toolbar" aria-label="File editor controls">
+            <button id="edit-file" class="ghost" type="button" title="Edit file" aria-label="Edit the current file">
+              <span class="toolbar-icon" aria-hidden="true">✎</span>
+              <span class="toolbar-label">Edit</span>
+            </button>
+            <button id="save-file" type="button" title="Save file" aria-label="Save the current file">
+              <span class="toolbar-icon" aria-hidden="true">✓</span>
+              <span class="toolbar-label">Save</span>
+            </button>
+            <button id="cancel-edit" class="ghost" type="button" title="Cancel editing" aria-label="Cancel editing">
+              <span class="toolbar-icon" aria-hidden="true">✕</span>
+              <span class="toolbar-label">Cancel</span>
+            </button>
+          </div>
         </div>
         <pre id="preview">Select a file to preview</pre>
         <textarea id="editor" spellcheck="false"></textarea>
       </section>
       <section id="terms">
         <div id="term-tabs">
-          <button id="toggle-files" type="button" title="Toggle files panel">≡</button>
+          <button id="toggle-files" class="toolbar-button" type="button" title="Toggle files panel" aria-label="Toggle files panel">
+            <span class="toolbar-icon" aria-hidden="true">≡</span>
+            <span class="toolbar-label">Files</span>
+          </button>
           <div id="tab-scroll">
-            <button id="new-tab" type="button" title="New terminal tab">+</button>
+            <button id="new-tab" type="button" title="New terminal tab" aria-label="Create a new terminal tab">
+              <span class="toolbar-icon" aria-hidden="true">+</span>
+              <span class="toolbar-label">New Tab</span>
+            </button>
           </div>
           <div id="tab-fixed">
             <div id="tab-info">
               <span id="status">Connected</span>
               <span id="usage">0 B</span>
             </div>
-            <button id="logout" type="button" title="Logout">⏻</button>
+            <button id="logout" type="button" title="Leave this session" aria-label="Leave this session">
+              <span class="toolbar-icon" aria-hidden="true">⏻</span>
+              <span class="toolbar-label">Leave</span>
+            </button>
           </div>
         </div>
         <div id="terminal"></div>
@@ -1161,7 +1784,7 @@
       <p>Create a short-lived link without sharing your main token or PIN.</p>
       <div id="share-form">
         <div class="row">
-          <select id="temp-preset">
+          <select id="temp-preset" aria-label="Share preset" aria-describedby="share-preset-copy">
             <option value="view-once" selected>View Once</option>
             <option value="collaborate-once">Collaborate Once</option>
             <option value="advanced">Advanced</option>
@@ -1171,27 +1794,27 @@
           Read-only, one-time access for 5 minutes. Best for quick viewing without broad access.
         </p>
         <div class="row">
-          <select id="temp-ttl">
+          <select id="temp-ttl" aria-label="Link lifetime">
             <option value="5">5 min</option>
             <option value="15" selected>15 min</option>
             <option value="60">1 hour</option>
           </select>
-          <select id="temp-scope">
+          <select id="temp-scope" aria-label="Access scope">
             <option value="read-only" selected>Read only</option>
             <option value="interactive">Interactive</option>
           </select>
         </div>
         <div class="row">
           <label><input id="temp-one-time" type="checkbox" checked> One-time</label>
-          <input id="temp-max-uses" type="number" min="1" max="100" value="5" />
+          <input id="temp-max-uses" type="number" min="1" max="100" value="5" aria-label="Maximum uses" />
         </div>
         <div class="row">
           <label><input id="temp-bind-terminal" type="checkbox"> Bind active tab</label>
           <button id="create-temp-link" type="button">Create Share Link</button>
         </div>
       </div>
-      <div id="share-link-output"></div>
-      <div id="temp-links-list"></div>
+      <div id="share-link-output" role="status" aria-live="polite"></div>
+      <div id="temp-links-list" aria-live="polite"></div>
       <div class="modal-actions">
         <button id="share-close" class="ghost" type="button">Close</button>
       </div>
@@ -1202,8 +1825,8 @@
     <div class="modal-card">
       <h3 id="pin-modal-title">Confirm PIN</h3>
       <p id="pin-modal-copy">Enter your PIN to extend this session.</p>
-      <input id="pin-modal-input" type="password" autocomplete="one-time-code" placeholder="PIN" />
-      <div id="pin-modal-error"></div>
+      <input id="pin-modal-input" type="password" autocomplete="one-time-code" placeholder="PIN" aria-label="Machine PIN" />
+      <div id="pin-modal-error" role="status" aria-live="polite"></div>
       <div class="pin-keypad" id="pin-keypad-modal">
         <button type="button" data-pin-key="1">1</button>
         <button type="button" data-pin-key="2">2</button>
@@ -1225,8 +1848,8 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="/assets/vendor/xterm.min.js"></script>
+  <script src="/assets/vendor/xterm-addon-fit.min.js"></script>
   <script>
     const app = document.getElementById('app');
     const login = document.getElementById('login');
@@ -1288,6 +1911,8 @@
     const previewTabsEl = document.getElementById('preview-tabs');
     const previewEl = document.getElementById('preview');
     const editorEl = document.getElementById('editor');
+    const editorModeLabelEl = document.getElementById('editor-mode-label');
+    const editorModeNoteEl = document.getElementById('editor-mode-note');
     const editFileBtn = document.getElementById('edit-file');
     const saveFileBtn = document.getElementById('save-file');
     const cancelEditBtn = document.getElementById('cancel-edit');
@@ -1403,6 +2028,37 @@
     function setStatus(text, color) {
       statusEl.textContent = '● ' + text;
       statusEl.style.color = color || '#c8c8c8';
+    }
+
+    function activateWithKeyboard(event, action) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        action();
+      }
+    }
+
+    function syncTreeActiveState() {
+      if (!treeEl) return;
+      treeEl.querySelectorAll('.tree-item[data-path]').forEach((node) => {
+        node.classList.toggle('active', node.dataset.path === activeFilePath);
+      });
+    }
+
+    function setEditorModeCopy(label, note) {
+      if (!editorModeLabelEl || !editorModeNoteEl) return;
+      editorModeLabelEl.textContent = label;
+      editorModeNoteEl.textContent = note;
+    }
+
+    function showFilePreview(file) {
+      activeFilePath = file.path;
+      editingPath = null;
+      editingBaseHash = null;
+      editingOriginal = '';
+      editorEl.style.display = 'none';
+      previewEl.style.display = 'block';
+      previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
+      renderPreviewTabs();
     }
 
     function clearLoginFeedback() {
@@ -1792,6 +2448,9 @@
       const current = activeFilePath
         ? openFiles.find((item) => item.path === activeFilePath)
         : null;
+      const currentLabel = current
+        ? (current.path.split('/').pop() || current.path)
+        : null;
       const canEdit = Boolean(
         current &&
         !current.truncated &&
@@ -1804,6 +2463,46 @@
       saveFileBtn.disabled = !editing || readOnly;
       cancelEditBtn.disabled = !editing;
       saveFileBtn.classList.toggle('primary', editing);
+
+      if (!current) {
+        setEditorModeCopy(
+          'Preview Mode',
+          'Open a file from the list to inspect it beside the shell, then switch into edit mode only when you need to change it.'
+        );
+        return;
+      }
+
+      if (editing) {
+        setEditorModeCopy(
+          'Edit Mode',
+          `Editing ${currentLabel}. Save to write changes back to this machine, or cancel to return to preview.`
+        );
+        return;
+      }
+
+      if (readOnly) {
+        setEditorModeCopy(
+          'Preview Mode',
+          `${currentLabel} is open in a read-only session. You can inspect the file here, but saving changes is disabled.`
+        );
+        return;
+      }
+
+      if (!canEdit) {
+        const reason = current.truncated
+          ? 'The browser opened a truncated preview, so editing stays disabled.'
+          : 'This file is too large for in-browser editing.';
+        setEditorModeCopy(
+          'Preview Mode',
+          `${currentLabel} is open in preview only. ${reason}`
+        );
+        return;
+      }
+
+      setEditorModeCopy(
+        'Preview Mode',
+        `Previewing ${currentLabel}. Switch to edit when you are ready to make a change.`
+      );
     }
 
     function applySessionAccessState() {
@@ -1831,6 +2530,7 @@
           logoutLockBtn.onclick = null;
           logoutCancelBtn.onclick = null;
           logoutModal.onclick = null;
+          logoutBtn?.focus();
           resolve(value);
         };
 
@@ -1841,6 +2541,7 @@
           if (e.target === logoutModal) close(null);
         };
         logoutModal.classList.add('open');
+        logoutCancelBtn.focus();
       });
     }
 
@@ -2692,12 +3393,14 @@
         refreshTempLinks();
         if (tempLinksRefreshTimer) clearInterval(tempLinksRefreshTimer);
         tempLinksRefreshTimer = setInterval(() => renderTempLinks(), 1000);
+        tempPresetEl?.focus();
       } else {
         shareModal.classList.remove('open');
         if (tempLinksRefreshTimer) {
           clearInterval(tempLinksRefreshTimer);
           tempLinksRefreshTimer = null;
         }
+        shareBtn?.focus();
       }
     }
 
@@ -2720,7 +3423,9 @@
         actions.className = 'actions';
         const revokeBtn = document.createElement('button');
         revokeBtn.className = 'ghost';
+        revokeBtn.type = 'button';
         revokeBtn.textContent = 'Revoke';
+        revokeBtn.setAttribute('aria-label', `Revoke temporary link ${item.id}`);
         revokeBtn.onclick = async () => {
           const res = await api(`/auth/temp-links/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
           if (res.status === 204) {
@@ -2948,16 +3653,29 @@
       terminals.forEach((item, index) => {
         const tab = document.createElement('div');
         tab.className = `tab ${item.id === activeTerminalId ? 'active' : ''}`;
-        tab.onclick = () => connectTerminal(item.id);
+        tab.title = item.title;
+        const activateTab = () => connectTerminal(item.id);
+        tab.onclick = activateTab;
 
-        const title = document.createElement('span');
-        title.className = 'title';
+        const title = document.createElement('button');
+        title.type = 'button';
+        title.className = 'title tab-title';
         title.textContent = item.title;
+        title.setAttribute('aria-label', `Open terminal tab ${item.title}`);
+        title.setAttribute('aria-pressed', item.id === activeTerminalId ? 'true' : 'false');
+        title.title = `${item.title}. Double-click to rename this tab.`;
+        title.onclick = (e) => {
+          e.stopPropagation();
+          activateTab();
+        };
         title.ondblclick = (e) => { e.stopPropagation(); promptRenameTerminal(item); };
 
         const leftBtn = document.createElement('button');
         leftBtn.className = 'icon-btn';
+        leftBtn.type = 'button';
         leftBtn.textContent = '‹';
+        leftBtn.title = 'Move tab left';
+        leftBtn.setAttribute('aria-label', 'Move tab left');
         leftBtn.disabled = index === 0;
         leftBtn.onclick = (e) => {
           e.stopPropagation();
@@ -2967,7 +3685,10 @@
 
         const rightBtn = document.createElement('button');
         rightBtn.className = 'icon-btn';
+        rightBtn.type = 'button';
         rightBtn.textContent = '›';
+        rightBtn.title = 'Move tab right';
+        rightBtn.setAttribute('aria-label', 'Move tab right');
         rightBtn.disabled = index === terminals.length - 1;
         rightBtn.onclick = (e) => {
           e.stopPropagation();
@@ -2978,7 +3699,10 @@
 
         const closeBtn = document.createElement('button');
         closeBtn.className = 'icon-btn';
+        closeBtn.type = 'button';
         closeBtn.textContent = '×';
+        closeBtn.title = 'Close terminal tab';
+        closeBtn.setAttribute('aria-label', 'Close terminal tab');
         closeBtn.onclick = (e) => {
           e.stopPropagation();
           deleteTerminal(item.id);
@@ -3022,6 +3746,7 @@
         activeFilePath = null;
         previewEl.textContent = 'Select a file to preview';
         updateEditorActionState();
+        syncTreeActiveState();
         return;
       }
       openFiles.forEach((file, index) => {
@@ -3030,7 +3755,10 @@
 
         const leftBtn = document.createElement('button');
         leftBtn.className = 'close';
+        leftBtn.type = 'button';
         leftBtn.textContent = '‹';
+        leftBtn.title = 'Move file left';
+        leftBtn.setAttribute('aria-label', 'Move file tab left');
         leftBtn.disabled = index === 0;
         leftBtn.onclick = (e) => {
           e.stopPropagation();
@@ -3040,23 +3768,20 @@
 
         const label = document.createElement('button');
         label.className = 'label';
+        label.type = 'button';
         label.textContent = file.path.split('/').pop();
-        label.onclick = () => {
-          activeFilePath = file.path;
-          editingPath = null;
-          editingBaseHash = null;
-          editingOriginal = '';
-          editorEl.style.display = 'none';
-          previewEl.style.display = 'block';
-          previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
-          renderPreviewTabs();
-          updateEditorActionState();
-        };
+        label.title = file.path;
+        label.setAttribute('aria-label', `Open ${file.path}`);
+        label.setAttribute('aria-pressed', file.path === activeFilePath ? 'true' : 'false');
+        label.onclick = () => showFilePreview(file);
         tab.appendChild(label);
 
         const rightBtn = document.createElement('button');
         rightBtn.className = 'close';
+        rightBtn.type = 'button';
         rightBtn.textContent = '›';
+        rightBtn.title = 'Move file right';
+        rightBtn.setAttribute('aria-label', 'Move file tab right');
         rightBtn.disabled = index === openFiles.length - 1;
         rightBtn.onclick = (e) => {
           e.stopPropagation();
@@ -3066,7 +3791,10 @@
 
         const closeBtn = document.createElement('button');
         closeBtn.className = 'close';
+        closeBtn.type = 'button';
         closeBtn.textContent = '×';
+        closeBtn.title = 'Close file preview';
+        closeBtn.setAttribute('aria-label', `Close ${file.path}`);
         closeBtn.onclick = (e) => {
           e.stopPropagation();
           const idx = openFiles.findIndex((item) => item.path === file.path);
@@ -3090,6 +3818,7 @@
         previewTabsEl.appendChild(tab);
       });
       updateEditorActionState();
+      syncTreeActiveState();
     }
 
     async function openFile(path) {
@@ -3116,15 +3845,7 @@
           existingCached.hash = cached.hash;
           existingCached.size_bytes = cached.size_bytes;
         }
-        activeFilePath = cached.path;
-        editingPath = null;
-        editingBaseHash = null;
-        editingOriginal = '';
-        editorEl.style.display = 'none';
-        previewEl.style.display = 'block';
-        previewEl.textContent = cached.content + (cached.truncated ? '\n\n[truncated]' : '');
-        renderPreviewTabs();
-        updateEditorActionState();
+        showFilePreview(cached);
         return;
       }
 
@@ -3140,15 +3861,7 @@
         existing.size_bytes = file.size_bytes;
       }
       writeFileCache(file);
-      activeFilePath = file.path;
-      editingPath = null;
-      editingBaseHash = null;
-      editingOriginal = '';
-      editorEl.style.display = 'none';
-      previewEl.style.display = 'block';
-      previewEl.textContent = file.content + (file.truncated ? '\n\n[truncated]' : '');
-      renderPreviewTabs();
-      updateEditorActionState();
+      showFilePreview(file);
     }
 
     async function saveActiveFile() {
@@ -3198,7 +3911,9 @@
     async function renderNav() {
       treeEl.innerHTML = '';
       fileMeta.clear();
-      navPathEl.textContent = currentNavDir === '.' ? '/' : currentNavDir;
+      const currentPathLabel = currentNavDir === '.' ? '/' : currentNavDir;
+      navPathEl.textContent = currentPathLabel;
+      navPathEl.title = currentPathLabel;
       navBackBtn.disabled = (currentNavDir === '.');
 
       const tree = await fetchTree(currentNavDir);
@@ -3211,18 +3926,46 @@
         fileMeta.set(entry.path, entry);
         const row = document.createElement('div');
         row.className = 'tree-item';
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.setAttribute('aria-label', entry.is_dir ? `Open folder ${entry.name}` : `Open file ${entry.name}`);
+        row.title = entry.path;
+
+        const icon = document.createElement('span');
+        icon.className = 'tree-item-icon';
+        icon.textContent = entry.is_dir ? '▣' : '·';
+        row.appendChild(icon);
+
+        const label = document.createElement('span');
+        label.className = 'tree-item-label';
+        label.textContent = entry.name;
+        row.appendChild(label);
+
+        const meta = document.createElement('span');
+        meta.className = 'tree-item-meta';
+        meta.textContent = entry.is_dir
+          ? 'Dir'
+          : (typeof entry.size_bytes === 'number' ? formatBytes(entry.size_bytes) : 'File');
+        row.appendChild(meta);
+
         if (entry.is_dir) {
-          row.textContent = `📁  ${entry.name}`;
           row.onclick = () => {
             currentNavDir = entry.path;
             renderNav();
           };
+          row.onkeydown = (event) => activateWithKeyboard(event, () => {
+            currentNavDir = entry.path;
+            renderNav();
+          });
         } else {
-          row.textContent = `📄  ${entry.name}`;
+          row.dataset.path = entry.path;
+          row.classList.toggle('active', entry.path === activeFilePath);
           row.onclick = () => openFile(entry.path);
+          row.onkeydown = (event) => activateWithKeyboard(event, () => openFile(entry.path));
         }
         treeEl.appendChild(row);
       }
+      syncTreeActiveState();
     }
 
     async function bootstrapWorkspace() {
