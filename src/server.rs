@@ -40,6 +40,7 @@ const PIN_ATTEMPT_MAX: usize = 8;
 const CHALLENGE_POLL_ATTEMPT_MAX: usize = 90;
 const AUTH_ATTEMPT_WINDOW_SECS: u64 = 300;
 const CHALLENGE_POLL_WINDOW_SECS: u64 = 120;
+const SSO_TICKET_CLOCK_SKEW_SECS: u64 = 30;
 
 pub struct AppState {
     pub password: String,
@@ -3234,7 +3235,9 @@ fn inspect_sso_ticket(
             return None;
         }
     }
-    if payload.exp < now_unix || payload.exp > now_unix.saturating_add(5 * 60) {
+    if payload.exp.saturating_add(SSO_TICKET_CLOCK_SKEW_SECS) < now_unix
+        || payload.exp > now_unix.saturating_add(5 * 60 + SSO_TICKET_CLOCK_SKEW_SECS)
+    {
         return None;
     }
     Some(payload)

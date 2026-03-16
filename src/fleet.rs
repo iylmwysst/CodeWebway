@@ -58,6 +58,16 @@ pub fn save_credentials_to(creds: &FleetCredentials, path: &Path) -> Result<()> 
     }
     let data = toml::to_string_pretty(creds)?;
     std::fs::write(path, data)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .context("Cannot read fleet.toml metadata")?
+            .permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms)
+            .context("Cannot set fleet.toml permissions")?;
+    }
     Ok(())
 }
 
