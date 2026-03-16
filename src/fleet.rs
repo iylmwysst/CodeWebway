@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use qrcode::render::unicode;
 use qrcode::types::Color;
 use qrcode::QrCode;
@@ -7,6 +8,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::http::Request;
+use tokio_tungstenite::tungstenite::Message;
 
 // ─── Credentials ──────────────────────────────────────────────────────────────
 
@@ -22,6 +26,10 @@ pub struct FleetCredentials {
 }
 
 const MACHINE_TOKEN_ROTATE_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+const CHANNEL_RECONCILE_INTERVAL_SECS: u64 = 5 * 60;
+const CHANNEL_PING_INTERVAL_SECS: u64 = 30;
+const CHANNEL_RECONNECT_INTERVAL_SECS: u64 = 10;
+const RUNTIME_SYNC_INTERVAL_SECS: u64 = 1;
 
 fn current_epoch_millis() -> u64 {
     std::time::SystemTime::now()
@@ -65,8 +73,7 @@ pub fn save_credentials_to(creds: &FleetCredentials, path: &Path) -> Result<()> 
             .context("Cannot read fleet.toml metadata")?
             .permissions();
         perms.set_mode(0o600);
-        std::fs::set_permissions(path, perms)
-            .context("Cannot set fleet.toml permissions")?;
+        std::fs::set_permissions(path, perms).context("Cannot set fleet.toml permissions")?;
     }
     Ok(())
 }
@@ -246,6 +253,177 @@ fn build_runtime_output(url: &str, access_token: &str, runtime_instance_id: &str
     .to_string()
 }
 
+fn machine_channel_url(fleet_endpoint: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(fleet_endpoint).context("Invalid fleet endpoint URL")?;
+    match url.scheme() {
+        "https" => {
+            url.set_scheme("wss")
+                .map_err(|_| anyhow::anyhow!("Failed to convert fleet endpoint to wss"))?;
+        }
+        "http" => {
+            url.set_scheme("ws")
+                .map_err(|_| anyhow::anyhow!("Failed to convert fleet endpoint to ws"))?;
+        }
+        other => anyhow::bail!("Unsupported fleet endpoint scheme for realtime channel: {other}"),
+    }
+    url.set_path("/api/v1/agent/channel");
+    url.set_query(None);
+    Ok(url.to_string())
+}
+
+fn build_channel_snapshot_message(
+    kind: &'static str,
+    status: &str,
+    active_url: Option<&str>,
+    runtime_instance_id: Option<&str>,
+) -> String {
+    let mut payload = serde_json::json!({
+        "type": kind,
+        "status": status,
+    });
+    if let Some(url) = active_url {
+        payload["active_url"] = serde_json::json!(url);
+    }
+    if let Some(runtime_instance_id) = runtime_instance_id {
+        payload["runtime_instance_id"] = serde_json::json!(runtime_instance_id);
+    }
+    payload.to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct ChannelCommandEnvelope {
+    #[serde(rename = "type")]
+    kind: String,
+    command: ChannelCommandPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChannelCommandPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    payload: serde_json::Value,
+}
+
+fn parse_channel_command_message(text: &str) -> Option<PendingCommand> {
+    let envelope: ChannelCommandEnvelope = serde_json::from_str(text).ok()?;
+    if envelope.kind != "command" {
+        return None;
+    }
+    let execution_id = envelope
+        .command
+        .payload
+        .get("execution_id")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+    Some(PendingCommand {
+        execution_id,
+        kind: envelope.command.kind,
+        payload: envelope.command.payload,
+    })
+}
+
+struct MachineChannelClient {
+    outbound_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    command_rx: tokio::sync::mpsc::UnboundedReceiver<PendingCommand>,
+}
+
+impl MachineChannelClient {
+    async fn connect(creds: &FleetCredentials, state: &DaemonState) -> Result<Self> {
+        let request = Request::builder()
+            .uri(machine_channel_url(&creds.fleet_endpoint)?)
+            .header("Authorization", format!("Bearer {}", creds.machine_token))
+            .body(())
+            .map_err(|err| anyhow::anyhow!("Failed to build realtime channel request: {err}"))?;
+        let (socket, _response) = connect_async(request)
+            .await
+            .context("Failed to connect realtime machine channel")?;
+        let (mut writer, mut reader) = socket.split();
+        writer
+            .send(Message::Text(build_channel_snapshot_message(
+                "hello",
+                &state.status,
+                state.active_url.as_deref(),
+                state.runtime_instance_id.as_deref(),
+            )))
+            .await
+            .context("Failed to send realtime hello")?;
+
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
+
+        tokio::spawn(async move {
+            let mut ping_tick =
+                tokio::time::interval(std::time::Duration::from_secs(CHANNEL_PING_INTERVAL_SECS));
+            ping_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    maybe_outbound = outbound_rx.recv() => {
+                        let Some(payload) = maybe_outbound else {
+                            let _ = writer.send(Message::Close(None)).await;
+                            break;
+                        };
+                        if let Err(err) = writer.send(Message::Text(payload)).await {
+                            eprintln!("  Fleet: realtime channel send failed: {err}");
+                            break;
+                        }
+                    }
+                    incoming = reader.next() => {
+                        match incoming {
+                            Some(Ok(Message::Text(text))) => {
+                                if let Some(command) = parse_channel_command_message(&text) {
+                                    let _ = command_tx.send(command);
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) | None => break,
+                            Some(Ok(_)) => {}
+                            Some(Err(err)) => {
+                                eprintln!("  Fleet: realtime channel receive failed: {err}");
+                                break;
+                            }
+                        }
+                    }
+                    _ = ping_tick.tick() => {
+                        if let Err(err) = writer.send(Message::Ping(Vec::<u8>::new())).await {
+                            eprintln!("  Fleet: realtime channel ping failed: {err}");
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            outbound_tx,
+            command_rx,
+        })
+    }
+
+    fn send_snapshot(&self, state: &DaemonState) -> Result<()> {
+        self.outbound_tx
+            .send(build_channel_snapshot_message(
+                "snapshot",
+                &state.status,
+                state.active_url.as_deref(),
+                state.runtime_instance_id.as_deref(),
+            ))
+            .map_err(|_| anyhow::anyhow!("Realtime machine channel is closed"))
+    }
+
+    async fn recv_command(&mut self) -> Option<PendingCommand> {
+        self.command_rx.recv().await
+    }
+}
+
+fn try_send_channel_snapshot(channel: &mut Option<MachineChannelClient>, state: &DaemonState) {
+    let Some(client) = channel.as_ref() else {
+        return;
+    };
+    if let Err(err) = client.send_snapshot(state) {
+        eprintln!("  Fleet: realtime snapshot send failed: {err}");
+        *channel = None;
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RotateTokenResponse {
     data: RotateTokenData,
@@ -423,8 +601,86 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
 
     let mut state = DaemonState::new();
     let poll_interval = std::time::Duration::from_secs(30);
+    let channel_reconcile_interval =
+        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS);
+    let channel_retry_interval = std::time::Duration::from_secs(CHANNEL_RECONNECT_INTERVAL_SECS);
+    let mut channel: Option<MachineChannelClient> = None;
+    let mut next_channel_retry = std::time::Instant::now();
 
     loop {
+        if channel.is_none() && std::time::Instant::now() >= next_channel_retry {
+            match MachineChannelClient::connect(&creds, &state).await {
+                Ok(client) => {
+                    eprintln!("  Fleet: realtime channel connected.");
+                    channel = Some(client);
+                }
+                Err(err) => {
+                    eprintln!("  Fleet: realtime channel unavailable: {err}");
+                    next_channel_retry = std::time::Instant::now() + channel_retry_interval;
+                }
+            }
+        }
+
+        enum IdleWaitResult {
+            Command(PendingCommand),
+            ChannelClosed,
+            Reconcile,
+        }
+
+        let idle_wait = if let Some(channel_client) = channel.as_mut() {
+            tokio::select! {
+                command = channel_client.recv_command() => {
+                    match command {
+                        Some(cmd) => IdleWaitResult::Command(cmd),
+                        None => IdleWaitResult::ChannelClosed,
+                    }
+                },
+                _ = tokio::time::sleep(channel_reconcile_interval) => IdleWaitResult::Reconcile,
+            }
+        } else {
+            tokio::time::sleep(poll_interval).await;
+            IdleWaitResult::Reconcile
+        };
+
+        let realtime_command = match idle_wait {
+            IdleWaitResult::Command(cmd) => Some(cmd),
+            IdleWaitResult::ChannelClosed => {
+                eprintln!("  Fleet: realtime channel disconnected.");
+                channel = None;
+                next_channel_retry = std::time::Instant::now() + channel_retry_interval;
+                None
+            }
+            IdleWaitResult::Reconcile => None,
+        };
+
+        if let Some(cmd) = realtime_command {
+            match cmd.kind.as_str() {
+                "run_codewebway" => {}
+                "stop_codewebway" => {
+                    eprintln!("  Fleet: stop received but no terminal running — ignoring");
+                    continue;
+                }
+                other => {
+                    eprintln!("  Fleet: realtime channel unknown command type: {other}");
+                    continue;
+                }
+            }
+            match handle_realtime_command(
+                &cfg,
+                &mut creds,
+                &mut state,
+                &mut channel,
+                cmd,
+                poll_interval,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(err) => eprintln!("  Fleet: realtime command handling failed: {err}"),
+            }
+            continue;
+        }
+
         let skip = !state.should_write(
             &state.status.clone(),
             state.active_url.as_deref(),
@@ -443,6 +699,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 if !skip {
                     state.last_d1_write = std::time::Instant::now();
                 }
+                try_send_channel_snapshot(&mut channel, &state);
                 if state.status != "running" {
                     match rotate_machine_token(&mut creds).await {
                         Ok(true) => eprintln!("  Fleet: rotated machine token during idle window."),
@@ -562,6 +819,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         state.runtime_instance_id = Some(runtime_instance_id.clone());
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
+                        try_send_channel_snapshot(&mut channel, &state);
 
                         let mut runtime = RunningRuntime {
                             execution_id: exec_id,
@@ -576,6 +834,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                             &creds,
                             &mut state,
                             &mut runtime,
+                            &mut channel,
                             handle.shutdown_tx,
                             handle.server_done,
                             poll_interval,
@@ -585,6 +844,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         state.status = "idle".to_string();
                         state.active_url = None;
                         state.runtime_instance_id = None;
+                        try_send_channel_snapshot(&mut channel, &state);
                         write_status_now(&creds, &mut state, "after terminal stop").await;
                     }
                 }
@@ -604,90 +864,306 @@ async fn wait_for_stop(
     creds: &FleetCredentials,
     state: &mut DaemonState,
     runtime: &mut RunningRuntime,
+    channel: &mut Option<MachineChannelClient>,
     shutdown_tx: tokio::sync::mpsc::UnboundedSender<()>,
     server_done: tokio::sync::oneshot::Receiver<()>,
     interval: std::time::Duration,
 ) {
     tokio::pin!(server_done);
-
-    loop {
-        sync_runtime_ready(creds, state, runtime).await;
-        let skip = !state.should_write(
-            &state.status,
-            state.active_url.as_deref(),
-            state.runtime_instance_id.as_deref(),
-        );
-        let heartbeat = send_heartbeat(
-            creds,
-            &state.status,
-            state.active_url.as_deref(),
-            state.runtime_instance_id.as_deref(),
-            skip,
-        );
-        let hb = tokio::select! {
-            done = &mut server_done => {
-                if done.is_err() {
-                    eprintln!("  Fleet: server stop signal dropped unexpectedly.");
-                }
-                report_runtime_start_failed_if_needed(
-                    creds,
-                    runtime,
-                    "Terminal stopped before public URL was ready",
-                )
-                .await;
-                return;
-            }
-            hb = heartbeat => hb,
+    let mut sync_tick =
+        tokio::time::interval(std::time::Duration::from_secs(RUNTIME_SYNC_INTERVAL_SECS));
+    sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut next_heartbeat_at = tokio::time::Instant::now()
+        + if channel.is_some() {
+            std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS)
+        } else {
+            std::time::Duration::from_secs(0)
         };
 
-        match hb {
-            Ok(hb) => {
-                if !skip {
-                    state.last_d1_write = std::time::Instant::now();
+    loop {
+        let heartbeat_sleep = tokio::time::sleep_until(next_heartbeat_at);
+        tokio::pin!(heartbeat_sleep);
+
+        if let Some(channel_client) = channel.as_mut() {
+            tokio::select! {
+                done = &mut server_done => {
+                    if done.is_err() {
+                        eprintln!("  Fleet: server stop signal dropped unexpectedly.");
+                    }
+                    report_runtime_start_failed_if_needed(
+                        creds,
+                        runtime,
+                        "Terminal stopped before public URL was ready",
+                    )
+                    .await;
+                    return;
                 }
-                if let Some(cmd) = hb.command {
-                    if cmd.kind == "stop_codewebway" {
-                        let exec_id = cmd.execution_id.unwrap_or_default();
-                        let _ = shutdown_tx.send(());
-                        report_runtime_start_failed_if_needed(
-                            creds,
-                            runtime,
-                            "Terminal stopped before public URL was ready",
-                        )
-                        .await;
-                        if !exec_id.is_empty() {
-                            let _ = report_result(creds, &exec_id, "stopped", true).await;
+                maybe_cmd = channel_client.recv_command() => {
+                    match maybe_cmd {
+                        Some(cmd) if cmd.kind == "stop_codewebway" => {
+                            let exec_id = cmd.execution_id.unwrap_or_default();
+                            let _ = shutdown_tx.send(());
+                            report_runtime_start_failed_if_needed(
+                                creds,
+                                runtime,
+                                "Terminal stopped before public URL was ready",
+                            )
+                            .await;
+                            if !exec_id.is_empty() {
+                                let _ = report_result(creds, &exec_id, "stopped", true).await;
+                            }
+                            return;
                         }
-                        return;
+                        Some(_) => {}
+                        None => {
+                            eprintln!("  Fleet: realtime channel disconnected during runtime.");
+                            *channel = None;
+                            next_heartbeat_at = tokio::time::Instant::now() + interval;
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                if is_unauthorized(&e) {
-                    eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                    eprintln!("  Run: codewebway disable");
-                    std::process::exit(1);
+                _ = sync_tick.tick() => {
+                    sync_runtime_ready(creds, state, runtime).await;
                 }
-                eprintln!("  Fleet: heartbeat error during run: {e}");
-            }
-        }
-
-        tokio::select! {
-            done = &mut server_done => {
-                if done.is_err() {
-                    eprintln!("  Fleet: server stop signal dropped unexpectedly.");
+                _ = &mut heartbeat_sleep => {
+                    let skip = !state.should_write(
+                        &state.status,
+                        state.active_url.as_deref(),
+                        state.runtime_instance_id.as_deref(),
+                    );
+                    match send_heartbeat(
+                        creds,
+                        &state.status,
+                        state.active_url.as_deref(),
+                        state.runtime_instance_id.as_deref(),
+                        skip,
+                    ).await {
+                        Ok(hb) => {
+                            if !skip {
+                                state.last_d1_write = std::time::Instant::now();
+                            }
+                            if let Some(cmd) = hb.command {
+                                if cmd.kind == "stop_codewebway" {
+                                    let exec_id = cmd.execution_id.unwrap_or_default();
+                                    let _ = shutdown_tx.send(());
+                                    report_runtime_start_failed_if_needed(
+                                        creds,
+                                        runtime,
+                                        "Terminal stopped before public URL was ready",
+                                    )
+                                    .await;
+                                    if !exec_id.is_empty() {
+                                        let _ = report_result(creds, &exec_id, "stopped", true).await;
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if is_unauthorized(&e) {
+                                eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
+                                eprintln!("  Run: codewebway disable");
+                                std::process::exit(1);
+                            }
+                            eprintln!("  Fleet: heartbeat error during run: {e}");
+                        }
+                    }
+                    next_heartbeat_at = tokio::time::Instant::now() + if channel.is_some() {
+                        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS)
+                    } else {
+                        interval
+                    };
                 }
-                report_runtime_start_failed_if_needed(
-                    creds,
-                    runtime,
-                    "Terminal stopped before public URL was ready",
-                )
-                .await;
-                return;
             }
-            _ = tokio::time::sleep(interval) => {}
+        } else {
+            tokio::select! {
+                done = &mut server_done => {
+                    if done.is_err() {
+                        eprintln!("  Fleet: server stop signal dropped unexpectedly.");
+                    }
+                    report_runtime_start_failed_if_needed(
+                        creds,
+                        runtime,
+                        "Terminal stopped before public URL was ready",
+                    )
+                    .await;
+                    return;
+                }
+                _ = sync_tick.tick() => {
+                    sync_runtime_ready(creds, state, runtime).await;
+                }
+                _ = &mut heartbeat_sleep => {
+                    let skip = !state.should_write(
+                        &state.status,
+                        state.active_url.as_deref(),
+                        state.runtime_instance_id.as_deref(),
+                    );
+                    match send_heartbeat(
+                        creds,
+                        &state.status,
+                        state.active_url.as_deref(),
+                        state.runtime_instance_id.as_deref(),
+                        skip,
+                    ).await {
+                        Ok(hb) => {
+                            if !skip {
+                                state.last_d1_write = std::time::Instant::now();
+                            }
+                            if let Some(cmd) = hb.command {
+                                if cmd.kind == "stop_codewebway" {
+                                    let exec_id = cmd.execution_id.unwrap_or_default();
+                                    let _ = shutdown_tx.send(());
+                                    report_runtime_start_failed_if_needed(
+                                        creds,
+                                        runtime,
+                                        "Terminal stopped before public URL was ready",
+                                    )
+                                    .await;
+                                    if !exec_id.is_empty() {
+                                        let _ = report_result(creds, &exec_id, "stopped", true).await;
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if is_unauthorized(&e) {
+                                eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
+                                eprintln!("  Run: codewebway disable");
+                                std::process::exit(1);
+                            }
+                            eprintln!("  Fleet: heartbeat error during run: {e}");
+                        }
+                    }
+                    next_heartbeat_at = tokio::time::Instant::now() + interval;
+                }
+            }
         }
     }
+}
+
+async fn handle_realtime_command(
+    cfg: &crate::config::Config,
+    creds: &mut FleetCredentials,
+    state: &mut DaemonState,
+    channel: &mut Option<MachineChannelClient>,
+    cmd: PendingCommand,
+    poll_interval: std::time::Duration,
+) -> Result<()> {
+    match cmd.kind.as_str() {
+        "run_codewebway" => {
+            let exec_id = cmd.execution_id.clone().unwrap_or_default();
+
+            let mut fleet_cfg = cfg.clone();
+            let session_token: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(24)
+                .map(char::from)
+                .collect();
+            let runtime_instance_id = if exec_id.is_empty() {
+                rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(16)
+                    .map(char::from)
+                    .collect::<String>()
+            } else {
+                exec_id.clone()
+            };
+            fleet_cfg.password = Some(session_token);
+            fleet_cfg.sso_shared_secret = Some(sha256_hex(&creds.machine_token));
+            fleet_cfg.runtime_instance_id = Some(runtime_instance_id.clone());
+            if let Some(ref pin) = creds.pin {
+                fleet_cfg.pin = Some(pin.clone());
+            }
+            fleet_cfg.dashboard_auth_machine_token = Some(creds.machine_token.clone());
+            if let Some(api_base) = payload_str(&cmd.payload, "fleet_api_base") {
+                fleet_cfg.dashboard_auth_api_base = Some(api_base.to_string());
+            }
+            if let Some(cwd) = payload_str(&cmd.payload, "cwd") {
+                fleet_cfg.cwd = Some(cwd.to_string());
+            }
+            if let Some(terminal_only) = payload_bool(&cmd.payload, "terminal_only") {
+                fleet_cfg.terminal_only = terminal_only;
+            }
+            if let Some(shell) = payload_str(&cmd.payload, "shell") {
+                fleet_cfg.shell = Some(shell.to_string());
+            }
+            if let Some(scrollback) =
+                payload_u64_in_range(&cmd.payload, "scrollback", 16_384, 2_097_152)
+            {
+                fleet_cfg.scrollback = scrollback as usize;
+            }
+            if let Some(max_connections) =
+                payload_u64_in_range(&cmd.payload, "max_connections", 1, 32)
+            {
+                fleet_cfg.max_connections = max_connections as usize;
+            }
+            if let Some(temp_link) = payload_bool(&cmd.payload, "temp_link") {
+                fleet_cfg.temp_link = temp_link;
+            }
+            if let Some(ttl) = payload_u64_in_range(&cmd.payload, "temp_link_ttl_minutes", 1, 120) {
+                if matches!(ttl, 5 | 15 | 60) {
+                    fleet_cfg.temp_link_ttl_minutes = ttl;
+                }
+            }
+            if let Some(scope) = payload_str(&cmd.payload, "temp_link_scope") {
+                if scope == "read-only" || scope == "interactive" {
+                    fleet_cfg.temp_link_scope = scope;
+                }
+            }
+            if let Some(max_uses) = payload_u64_in_range(&cmd.payload, "temp_link_max_uses", 1, 100)
+            {
+                fleet_cfg.temp_link_max_uses = max_uses as u32;
+            }
+
+            match crate::start_server(fleet_cfg).await {
+                Err(e) => {
+                    eprintln!("  Fleet: failed to start server: {e}");
+                    if !exec_id.is_empty() {
+                        let _ = report_result(creds, &exec_id, &e.to_string(), false).await;
+                    }
+                }
+                Ok(handle) => {
+                    state.status = "running".to_string();
+                    state.active_url = handle.current_zrok_url();
+                    state.runtime_instance_id = Some(runtime_instance_id.clone());
+                    state.last_d1_write =
+                        std::time::Instant::now() - std::time::Duration::from_secs(400);
+                    try_send_channel_snapshot(channel, state);
+
+                    let mut runtime = RunningRuntime {
+                        execution_id: exec_id,
+                        access_token: handle.token.clone(),
+                        runtime_instance_id,
+                        zrok_url_state: handle.zrok_url_state.clone(),
+                        ready_reported: false,
+                    };
+                    sync_runtime_ready(creds, state, &mut runtime).await;
+
+                    wait_for_stop(
+                        creds,
+                        state,
+                        &mut runtime,
+                        channel,
+                        handle.shutdown_tx,
+                        handle.server_done,
+                        poll_interval,
+                    )
+                    .await;
+
+                    state.status = "idle".to_string();
+                    state.active_url = None;
+                    state.runtime_instance_id = None;
+                    try_send_channel_snapshot(channel, state);
+                    write_status_now(creds, state, "after terminal stop").await;
+                }
+            }
+        }
+        other => {
+            eprintln!("  Fleet: realtime channel unknown command type: {other}");
+        }
+    }
+    Ok(())
 }
 
 // ─── System service ────────────────────────────────────────────────────────────
@@ -1264,10 +1740,12 @@ mod tests {
                 ))),
                 ready_reported: true,
             };
+            let mut channel = None;
             wait_for_stop(
                 &creds,
                 &mut state,
                 &mut runtime,
+                &mut channel,
                 shutdown_tx,
                 server_done_rx,
                 std::time::Duration::from_secs(5),
