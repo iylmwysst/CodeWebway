@@ -1,0 +1,26 @@
+#!/bin/sh
+
+set -- "$@"
+args=
+
+for arg in "$@"; do
+  case "$arg" in
+    --target=aarch64-unknown-linux-musl|--target=aarch64-linux-musl)
+      ;;
+    *)
+      args="$args
+$arg"
+      ;;
+  esac
+done
+
+set --
+OLDIFS=$IFS
+IFS='
+'
+for arg in $args; do
+  set -- "$@" "$arg"
+done
+IFS=$OLDIFS
+
+exec /usr/local/bin/zig cc -target aarch64-linux-musl "$@"
