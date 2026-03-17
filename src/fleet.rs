@@ -477,6 +477,52 @@ impl MachineChannelClient {
     }
 }
 
+fn should_attempt_realtime_channel_connect(
+    channel: &mut Option<MachineChannelClient>,
+    next_retry_at: &mut std::time::Instant,
+) -> bool {
+    channel.is_none() && std::time::Instant::now() >= *next_retry_at
+}
+
+fn apply_realtime_channel_connect_result(
+    channel: &mut Option<MachineChannelClient>,
+    next_retry_at: &mut std::time::Instant,
+    retry_interval: std::time::Duration,
+    result: Result<MachineChannelClient>,
+) -> bool {
+    match result {
+        Ok(client) => {
+            eprintln!("  Fleet: realtime channel connected.");
+            *channel = Some(client);
+            true
+        }
+        Err(err) => {
+            eprintln!("  Fleet: realtime channel unavailable: {err}");
+            *next_retry_at = std::time::Instant::now() + retry_interval;
+            false
+        }
+    }
+}
+
+async fn maybe_connect_realtime_channel(
+    creds: &FleetCredentials,
+    state: &DaemonState,
+    channel: &mut Option<MachineChannelClient>,
+    next_retry_at: &mut std::time::Instant,
+    retry_interval: std::time::Duration,
+) -> bool {
+    if !should_attempt_realtime_channel_connect(channel, next_retry_at) {
+        return false;
+    }
+
+    apply_realtime_channel_connect_result(
+        channel,
+        next_retry_at,
+        retry_interval,
+        MachineChannelClient::connect(creds, state).await,
+    )
+}
+
 fn try_send_channel_snapshot(channel: &mut Option<MachineChannelClient>, state: &DaemonState) {
     let Some(client) = channel.as_ref() else {
         return;
@@ -739,17 +785,16 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     let mut recent_commands = RecentCommandTracker::new();
 
     loop {
-        if channel.is_none() && std::time::Instant::now() >= next_channel_retry {
-            match MachineChannelClient::connect(&creds, &state).await {
-                Ok(client) => {
-                    eprintln!("  Fleet: realtime channel connected.");
-                    channel = Some(client);
-                }
-                Err(err) => {
-                    eprintln!("  Fleet: realtime channel unavailable: {err}");
-                    next_channel_retry = std::time::Instant::now() + channel_retry_interval;
-                }
-            }
+        if maybe_connect_realtime_channel(
+            &creds,
+            &state,
+            &mut channel,
+            &mut next_channel_retry,
+            channel_retry_interval,
+        )
+        .await
+        {
+            try_send_channel_snapshot(&mut channel, &state);
         }
 
         enum IdleWaitResult {
@@ -1037,14 +1082,31 @@ async fn wait_for_stop(
     let mut sync_tick =
         tokio::time::interval(std::time::Duration::from_secs(RUNTIME_SYNC_INTERVAL_SECS));
     sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let channel_reconcile_interval =
+        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS);
+    let channel_retry_interval = std::time::Duration::from_secs(CHANNEL_RECONNECT_INTERVAL_SECS);
+    let mut next_channel_retry = std::time::Instant::now();
     let mut next_heartbeat_at = tokio::time::Instant::now()
         + if channel.is_some() {
-            std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS)
+            channel_reconcile_interval
         } else {
             std::time::Duration::from_secs(0)
         };
 
     loop {
+        if maybe_connect_realtime_channel(
+            creds,
+            state,
+            channel,
+            &mut next_channel_retry,
+            channel_retry_interval,
+        )
+        .await
+        {
+            try_send_channel_snapshot(channel, state);
+            next_heartbeat_at = tokio::time::Instant::now() + channel_reconcile_interval;
+        }
+
         let heartbeat_sleep = tokio::time::sleep_until(next_heartbeat_at);
         tokio::pin!(heartbeat_sleep);
 
@@ -1102,6 +1164,7 @@ async fn wait_for_stop(
                         None => {
                             eprintln!("  Fleet: realtime channel disconnected during runtime.");
                             *channel = None;
+                            next_channel_retry = std::time::Instant::now() + channel_retry_interval;
                             next_heartbeat_at = tokio::time::Instant::now() + interval;
                         }
                     }
@@ -1129,7 +1192,7 @@ async fn wait_for_stop(
                             if let Some(cmd) = hb.command {
                                 if recent_commands.record_or_is_duplicate(&cmd) {
                                     next_heartbeat_at = tokio::time::Instant::now() + if channel.is_some() {
-                                        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS)
+                                        channel_reconcile_interval
                                     } else {
                                         interval
                                     };
@@ -1169,7 +1232,7 @@ async fn wait_for_stop(
                         }
                     }
                     next_heartbeat_at = tokio::time::Instant::now() + if channel.is_some() {
-                        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS)
+                        channel_reconcile_interval
                     } else {
                         interval
                     };
@@ -1714,6 +1777,15 @@ mod tests {
         dir.path().join("fleet.toml")
     }
 
+    fn dummy_channel() -> MachineChannelClient {
+        let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (_command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
+        MachineChannelClient {
+            outbound_tx,
+            command_rx,
+        }
+    }
+
     #[test]
     fn test_save_and_load_credentials() {
         let dir = TempDir::new().unwrap();
@@ -2007,6 +2079,55 @@ mod tests {
         );
         assert!(runtime.ready_reported);
         report.assert_async().await;
+    }
+
+    #[test]
+    fn test_should_attempt_realtime_channel_connect_only_when_due() {
+        let mut channel = None;
+        let mut due_now = std::time::Instant::now();
+        let mut future_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
+        assert!(should_attempt_realtime_channel_connect(
+            &mut channel,
+            &mut due_now
+        ));
+        assert!(!should_attempt_realtime_channel_connect(
+            &mut channel,
+            &mut future_deadline
+        ));
+    }
+
+    #[test]
+    fn test_apply_realtime_channel_connect_result_connects_when_successful() {
+        let mut channel = None;
+        let mut next_retry_at = std::time::Instant::now();
+
+        let connected = apply_realtime_channel_connect_result(
+            &mut channel,
+            &mut next_retry_at,
+            std::time::Duration::from_secs(10),
+            Ok(dummy_channel()),
+        );
+
+        assert!(connected);
+        assert!(channel.is_some());
+    }
+
+    #[test]
+    fn test_apply_realtime_channel_connect_result_delays_retry_after_failure() {
+        let mut channel = None;
+        let mut next_retry_at = std::time::Instant::now();
+
+        let connected = apply_realtime_channel_connect_result(
+            &mut channel,
+            &mut next_retry_at,
+            std::time::Duration::from_secs(10),
+            Err(anyhow::anyhow!("connect failed")),
+        );
+
+        assert!(!connected);
+        assert!(channel.is_none());
+        assert!(next_retry_at > std::time::Instant::now());
     }
 
     #[tokio::test]
