@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -330,6 +331,19 @@ fn build_channel_command_ack_message(cmd: &PendingCommand, duplicate: bool) -> S
     .to_string()
 }
 
+fn build_machine_channel_request(creds: &FleetCredentials) -> Result<Request<()>> {
+    let mut request = machine_channel_url(&creds.fleet_endpoint)?
+        .into_client_request()
+        .context("Failed to build realtime channel request")?;
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", creds.machine_token)
+            .parse()
+            .context("Failed to encode realtime channel authorization header")?,
+    );
+    Ok(request)
+}
+
 #[derive(Debug, Deserialize)]
 struct ChannelCommandEnvelope {
     #[serde(rename = "type")]
@@ -380,11 +394,7 @@ struct MachineChannelClient {
 
 impl MachineChannelClient {
     async fn connect(creds: &FleetCredentials, state: &DaemonState) -> Result<Self> {
-        let request = Request::builder()
-            .uri(machine_channel_url(&creds.fleet_endpoint)?)
-            .header("Authorization", format!("Bearer {}", creds.machine_token))
-            .body(())
-            .map_err(|err| anyhow::anyhow!("Failed to build realtime channel request: {err}"))?;
+        let request = build_machine_channel_request(creds)?;
         let (socket, _response) = connect_async(request)
             .await
             .context("Failed to connect realtime machine channel")?;
@@ -1784,6 +1794,28 @@ mod tests {
             outbound_tx,
             command_rx,
         }
+    }
+
+    #[test]
+    fn test_build_machine_channel_request_includes_websocket_headers_and_auth() {
+        let creds = make_creds("https://webwayfleet.dev");
+        let request = build_machine_channel_request(&creds).unwrap();
+
+        assert_eq!(
+            request.uri().to_string(),
+            "wss://webwayfleet.dev/api/v1/agent/channel"
+        );
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Bearer mt_test"
+        );
+        assert_eq!(request.headers().get("upgrade").unwrap(), "websocket");
+        assert_eq!(request.headers().get("connection").unwrap(), "Upgrade");
+        assert_eq!(
+            request.headers().get("sec-websocket-version").unwrap(),
+            "13"
+        );
+        assert!(request.headers().get("sec-websocket-key").is_some());
     }
 
     #[test]
