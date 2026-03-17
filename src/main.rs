@@ -419,7 +419,11 @@ fn stop_zrok_child(child: &mut Option<Child>, port: u16, reason: &str) -> bool {
     true
 }
 
-fn monitor_zrok_child(zrok_child: Arc<Mutex<Option<Child>>>, port: u16) {
+fn monitor_zrok_child(
+    zrok_child: Arc<Mutex<Option<Child>>>,
+    port: u16,
+    shutdown_tx: mpsc::UnboundedSender<()>,
+) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(2));
         let mut child = zrok_child.lock().unwrap();
@@ -431,6 +435,8 @@ fn monitor_zrok_child(zrok_child: Arc<Mutex<Option<Child>>>, port: u16) {
                 eprintln!("  zrok   : exited ({status})");
                 *child = None;
                 clear_owned_zrok_pid(port);
+                clear_owned_zrok_token(port);
+                let _ = shutdown_tx.send(());
                 break;
             }
             Ok(None) => {}
@@ -591,6 +597,13 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
             }
             // Wait up to 15 s — zrok usually assigns a URL in 3–10 s.
             let url = url_rx.recv_timeout(Duration::from_secs(15)).ok();
+            if url.is_none() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    clear_owned_zrok_pid(cfg.port);
+                    clear_owned_zrok_token(cfg.port);
+                    anyhow::bail!("zrok exited before a public URL was assigned ({status})");
+                }
+            }
             Ok((url, Some(log_path), child))
         })();
 
@@ -616,7 +629,7 @@ pub async fn start_server(cfg: Config) -> anyhow::Result<ServerHandle> {
     }
 
     if cfg.zrok {
-        monitor_zrok_child(Arc::clone(&zrok_child), cfg.port);
+        monitor_zrok_child(Arc::clone(&zrok_child), cfg.port, shutdown_tx.clone());
     }
 
     if cfg.zrok {
