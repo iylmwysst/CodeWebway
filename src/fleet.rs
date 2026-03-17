@@ -242,6 +242,22 @@ pub async fn report_result(
     Ok(())
 }
 
+async fn report_result_via_channel_or_http(
+    channel: Option<&MachineChannelClient>,
+    creds: &FleetCredentials,
+    execution_id: &str,
+    output: &str,
+    success: bool,
+) -> Result<()> {
+    if let Some(client) = channel {
+        if client.send_report(execution_id, output, success).is_ok() {
+            return Ok(());
+        }
+        eprintln!("  Fleet: realtime report send failed, falling back to HTTP.");
+    }
+    report_result(creds, execution_id, output, success).await
+}
+
 fn build_runtime_output(url: &str, access_token: &str, runtime_instance_id: &str) -> String {
     serde_json::json!({
         "kind": "codewebway_runtime",
@@ -288,6 +304,16 @@ fn build_channel_snapshot_message(
         payload["runtime_instance_id"] = serde_json::json!(runtime_instance_id);
     }
     payload.to_string()
+}
+
+fn build_channel_report_message(execution_id: &str, output: &str, success: bool) -> String {
+    serde_json::json!({
+        "type": "report",
+        "execution_id": execution_id,
+        "status": if success { "success" } else { "failed" },
+        "output": output,
+    })
+    .to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -398,15 +424,23 @@ impl MachineChannelClient {
         })
     }
 
-    fn send_snapshot(&self, state: &DaemonState) -> Result<()> {
+    fn send_message(&self, payload: String) -> Result<()> {
         self.outbound_tx
-            .send(build_channel_snapshot_message(
-                "snapshot",
-                &state.status,
-                state.active_url.as_deref(),
-                state.runtime_instance_id.as_deref(),
-            ))
+            .send(payload)
             .map_err(|_| anyhow::anyhow!("Realtime machine channel is closed"))
+    }
+
+    fn send_snapshot(&self, state: &DaemonState) -> Result<()> {
+        self.send_message(build_channel_snapshot_message(
+            "snapshot",
+            &state.status,
+            state.active_url.as_deref(),
+            state.runtime_instance_id.as_deref(),
+        ))
+    }
+
+    fn send_report(&self, execution_id: &str, output: &str, success: bool) -> Result<()> {
+        self.send_message(build_channel_report_message(execution_id, output, success))
     }
 
     async fn recv_command(&mut self) -> Option<PendingCommand> {
@@ -525,6 +559,7 @@ async fn sync_runtime_ready(
     creds: &FleetCredentials,
     state: &mut DaemonState,
     runtime: &mut RunningRuntime,
+    channel: Option<&MachineChannelClient>,
 ) {
     let latest_url = runtime.current_url();
     if latest_url != state.active_url {
@@ -548,13 +583,16 @@ async fn sync_runtime_ready(
     }
 
     let output = build_runtime_output(url, &runtime.access_token, &runtime.runtime_instance_id);
-    match report_result(creds, &runtime.execution_id, &output, true).await {
+    match report_result_via_channel_or_http(channel, creds, &runtime.execution_id, &output, true)
+        .await
+    {
         Ok(_) => runtime.ready_reported = true,
         Err(e) => eprintln!("  Fleet: report failed: {e}"),
     }
 }
 
 async fn report_runtime_start_failed_if_needed(
+    channel: Option<&MachineChannelClient>,
     creds: &FleetCredentials,
     runtime: &RunningRuntime,
     reason: &str,
@@ -562,7 +600,10 @@ async fn report_runtime_start_failed_if_needed(
     if runtime.ready_reported || runtime.execution_id.is_empty() {
         return;
     }
-    if let Err(e) = report_result(creds, &runtime.execution_id, reason, false).await {
+    if let Err(e) =
+        report_result_via_channel_or_http(channel, creds, &runtime.execution_id, reason, false)
+            .await
+    {
         eprintln!("  Fleet: failed to report runtime start failure: {e}");
     }
 }
@@ -810,7 +851,14 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     Err(e) => {
                         eprintln!("  Fleet: failed to start server: {e}");
                         if !exec_id.is_empty() {
-                            let _ = report_result(&creds, &exec_id, &e.to_string(), false).await;
+                            let _ = report_result_via_channel_or_http(
+                                channel.as_ref(),
+                                &creds,
+                                &exec_id,
+                                &e.to_string(),
+                                false,
+                            )
+                            .await;
                         }
                     }
                     Ok(handle) => {
@@ -828,7 +876,8 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                             zrok_url_state: handle.zrok_url_state.clone(),
                             ready_reported: false,
                         };
-                        sync_runtime_ready(&creds, &mut state, &mut runtime).await;
+                        sync_runtime_ready(&creds, &mut state, &mut runtime, channel.as_ref())
+                            .await;
 
                         wait_for_stop(
                             &creds,
@@ -891,6 +940,7 @@ async fn wait_for_stop(
                         eprintln!("  Fleet: server stop signal dropped unexpectedly.");
                     }
                     report_runtime_start_failed_if_needed(
+                        Some(channel_client),
                         creds,
                         runtime,
                         "Terminal stopped before public URL was ready",
@@ -904,13 +954,21 @@ async fn wait_for_stop(
                             let exec_id = cmd.execution_id.unwrap_or_default();
                             let _ = shutdown_tx.send(());
                             report_runtime_start_failed_if_needed(
+                                Some(channel_client),
                                 creds,
                                 runtime,
                                 "Terminal stopped before public URL was ready",
                             )
                             .await;
                             if !exec_id.is_empty() {
-                                let _ = report_result(creds, &exec_id, "stopped", true).await;
+                                let _ = report_result_via_channel_or_http(
+                                    Some(channel_client),
+                                    creds,
+                                    &exec_id,
+                                    "stopped",
+                                    true,
+                                )
+                                .await;
                             }
                             return;
                         }
@@ -923,7 +981,7 @@ async fn wait_for_stop(
                     }
                 }
                 _ = sync_tick.tick() => {
-                    sync_runtime_ready(creds, state, runtime).await;
+                    sync_runtime_ready(creds, state, runtime, Some(channel_client)).await;
                 }
                 _ = &mut heartbeat_sleep => {
                     let skip = !state.should_write(
@@ -947,13 +1005,21 @@ async fn wait_for_stop(
                                     let exec_id = cmd.execution_id.unwrap_or_default();
                                     let _ = shutdown_tx.send(());
                                     report_runtime_start_failed_if_needed(
+                                        Some(channel_client),
                                         creds,
                                         runtime,
                                         "Terminal stopped before public URL was ready",
                                     )
                                     .await;
                                     if !exec_id.is_empty() {
-                                        let _ = report_result(creds, &exec_id, "stopped", true).await;
+                                        let _ = report_result_via_channel_or_http(
+                                            Some(channel_client),
+                                            creds,
+                                            &exec_id,
+                                            "stopped",
+                                            true,
+                                        )
+                                        .await;
                                     }
                                     return;
                                 }
@@ -982,6 +1048,7 @@ async fn wait_for_stop(
                         eprintln!("  Fleet: server stop signal dropped unexpectedly.");
                     }
                     report_runtime_start_failed_if_needed(
+                        channel.as_ref(),
                         creds,
                         runtime,
                         "Terminal stopped before public URL was ready",
@@ -990,7 +1057,7 @@ async fn wait_for_stop(
                     return;
                 }
                 _ = sync_tick.tick() => {
-                    sync_runtime_ready(creds, state, runtime).await;
+                    sync_runtime_ready(creds, state, runtime, channel.as_ref()).await;
                 }
                 _ = &mut heartbeat_sleep => {
                     let skip = !state.should_write(
@@ -1014,13 +1081,21 @@ async fn wait_for_stop(
                                     let exec_id = cmd.execution_id.unwrap_or_default();
                                     let _ = shutdown_tx.send(());
                                     report_runtime_start_failed_if_needed(
+                                        channel.as_ref(),
                                         creds,
                                         runtime,
                                         "Terminal stopped before public URL was ready",
                                     )
                                     .await;
                                     if !exec_id.is_empty() {
-                                        let _ = report_result(creds, &exec_id, "stopped", true).await;
+                                        let _ = report_result_via_channel_or_http(
+                                            channel.as_ref(),
+                                            creds,
+                                            &exec_id,
+                                            "stopped",
+                                            true,
+                                        )
+                                        .await;
                                     }
                                     return;
                                 }
@@ -1120,7 +1195,14 @@ async fn handle_realtime_command(
                 Err(e) => {
                     eprintln!("  Fleet: failed to start server: {e}");
                     if !exec_id.is_empty() {
-                        let _ = report_result(creds, &exec_id, &e.to_string(), false).await;
+                        let _ = report_result_via_channel_or_http(
+                            channel.as_ref(),
+                            creds,
+                            &exec_id,
+                            &e.to_string(),
+                            false,
+                        )
+                        .await;
                     }
                 }
                 Ok(handle) => {
@@ -1138,7 +1220,7 @@ async fn handle_realtime_command(
                         zrok_url_state: handle.zrok_url_state.clone(),
                         ready_reported: false,
                     };
-                    sync_runtime_ready(creds, state, &mut runtime).await;
+                    sync_runtime_ready(creds, state, &mut runtime, channel.as_ref()).await;
 
                     wait_for_stop(
                         creds,
@@ -1670,6 +1752,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_report_result_via_channel_uses_realtime_when_available() {
+        let creds = make_creds("https://unused.example");
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (_command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
+        let channel = MachineChannelClient {
+            outbound_tx,
+            command_rx,
+        };
+
+        report_result_via_channel_or_http(Some(&channel), &creds, "ex-report-1", "ready", true)
+            .await
+            .unwrap();
+
+        let payload = outbound_rx.recv().await.expect("expected realtime report");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("report"));
+        assert_eq!(
+            json.get("execution_id").and_then(|v| v.as_str()),
+            Some("ex-report-1")
+        );
+        assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("success"));
+        assert_eq!(json.get("output").and_then(|v| v.as_str()), Some("ready"));
+    }
+
+    #[tokio::test]
+    async fn test_report_result_via_channel_falls_back_to_http_when_closed() {
+        let mut server = mockito::Server::new_async().await;
+        let report = server
+            .mock("POST", "/api/v1/agent/report")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"ok":true}}"#)
+            .create_async()
+            .await;
+
+        let creds = make_creds(&server.url());
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        drop(outbound_rx);
+        let (_command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
+        let channel = MachineChannelClient {
+            outbound_tx,
+            command_rx,
+        };
+
+        report_result_via_channel_or_http(Some(&channel), &creds, "ex-report-2", "fallback", false)
+            .await
+            .unwrap();
+
+        report.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_sync_runtime_ready_reports_late_zrok_url() {
         let mut server = mockito::Server::new_async().await;
         let report = server
@@ -1694,12 +1829,12 @@ mod tests {
             ready_reported: false,
         };
 
-        sync_runtime_ready(&creds, &mut state, &mut runtime).await;
+        sync_runtime_ready(&creds, &mut state, &mut runtime, None).await;
         assert!(state.active_url.is_none());
         assert!(!runtime.ready_reported);
 
         *shared_url.lock().unwrap() = Some("https://late.share.zrok.io".to_string());
-        sync_runtime_ready(&creds, &mut state, &mut runtime).await;
+        sync_runtime_ready(&creds, &mut state, &mut runtime, None).await;
 
         assert_eq!(
             state.active_url.as_deref(),
