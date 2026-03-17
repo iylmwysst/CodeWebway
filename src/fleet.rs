@@ -7,6 +7,7 @@ use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::http::Request;
@@ -30,6 +31,7 @@ const CHANNEL_RECONCILE_INTERVAL_SECS: u64 = 5 * 60;
 const CHANNEL_PING_INTERVAL_SECS: u64 = 30;
 const CHANNEL_RECONNECT_INTERVAL_SECS: u64 = 10;
 const RUNTIME_SYNC_INTERVAL_SECS: u64 = 1;
+const RECENT_COMMAND_TTL_SECS: u64 = 30 * 60;
 
 fn current_epoch_millis() -> u64 {
     std::time::SystemTime::now()
@@ -162,6 +164,8 @@ pub struct HeartbeatData {
 #[derive(Debug, Deserialize, Clone)]
 pub struct PendingCommand {
     pub execution_id: Option<String>,
+    #[serde(default)]
+    pub command_key: Option<String>,
     #[serde(rename = "type")]
     pub kind: String,
     #[allow(dead_code)]
@@ -316,10 +320,22 @@ fn build_channel_report_message(execution_id: &str, output: &str, success: bool)
     .to_string()
 }
 
+fn build_channel_command_ack_message(cmd: &PendingCommand, duplicate: bool) -> String {
+    serde_json::json!({
+        "type": "command_ack",
+        "command_key": cmd.command_key,
+        "execution_id": cmd.execution_id,
+        "duplicate": duplicate,
+    })
+    .to_string()
+}
+
 #[derive(Debug, Deserialize)]
 struct ChannelCommandEnvelope {
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
+    command_key: Option<String>,
     command: ChannelCommandPayload,
 }
 
@@ -343,9 +359,18 @@ fn parse_channel_command_message(text: &str) -> Option<PendingCommand> {
         .map(ToString::to_string);
     Some(PendingCommand {
         execution_id,
+        command_key: envelope.command_key,
         kind: envelope.command.kind,
         payload: envelope.command.payload,
     })
+}
+
+fn command_identity(cmd: &PendingCommand) -> Option<String> {
+    cmd.command_key
+        .clone()
+        .or_else(|| cmd.execution_id.clone())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 struct MachineChannelClient {
@@ -443,6 +468,10 @@ impl MachineChannelClient {
         self.send_message(build_channel_report_message(execution_id, output, success))
     }
 
+    fn send_command_ack(&self, cmd: &PendingCommand, duplicate: bool) -> Result<()> {
+        self.send_message(build_channel_command_ack_message(cmd, duplicate))
+    }
+
     async fn recv_command(&mut self) -> Option<PendingCommand> {
         self.command_rx.recv().await
     }
@@ -455,6 +484,66 @@ fn try_send_channel_snapshot(channel: &mut Option<MachineChannelClient>, state: 
     if let Err(err) = client.send_snapshot(state) {
         eprintln!("  Fleet: realtime snapshot send failed: {err}");
         *channel = None;
+    }
+}
+
+struct RecentCommandTracker {
+    seen: HashMap<String, std::time::Instant>,
+}
+
+impl RecentCommandTracker {
+    fn new() -> Self {
+        Self {
+            seen: HashMap::new(),
+        }
+    }
+
+    fn prune(&mut self) {
+        let ttl = std::time::Duration::from_secs(RECENT_COMMAND_TTL_SECS);
+        self.seen.retain(|_, seen_at| seen_at.elapsed() < ttl);
+    }
+
+    fn record_or_is_duplicate(&mut self, cmd: &PendingCommand) -> bool {
+        let Some(key) = command_identity(cmd) else {
+            return false;
+        };
+        self.prune();
+        if let Some(previous) = self.seen.get(&key) {
+            if previous.elapsed() < std::time::Duration::from_secs(RECENT_COMMAND_TTL_SECS) {
+                return true;
+            }
+        }
+        self.seen.insert(key, std::time::Instant::now());
+        false
+    }
+}
+
+fn acknowledge_realtime_command(
+    channel: Option<&MachineChannelClient>,
+    cmd: &PendingCommand,
+    duplicate: bool,
+) {
+    let Some(client) = channel else {
+        return;
+    };
+    if let Err(err) = client.send_command_ack(cmd, duplicate) {
+        eprintln!("  Fleet: realtime command ack failed: {err}");
+    }
+}
+
+async fn report_terminal_stopped_if_idle(
+    channel: Option<&MachineChannelClient>,
+    creds: &FleetCredentials,
+    cmd: &PendingCommand,
+) {
+    let exec_id = cmd.execution_id.clone().unwrap_or_default();
+    if exec_id.is_empty() {
+        return;
+    }
+    if let Err(err) =
+        report_result_via_channel_or_http(channel, creds, &exec_id, "stopped", true).await
+    {
+        eprintln!("  Fleet: failed to report already-stopped terminal: {err}");
     }
 }
 
@@ -647,6 +736,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     let channel_retry_interval = std::time::Duration::from_secs(CHANNEL_RECONNECT_INTERVAL_SECS);
     let mut channel: Option<MachineChannelClient> = None;
     let mut next_channel_retry = std::time::Instant::now();
+    let mut recent_commands = RecentCommandTracker::new();
 
     loop {
         if channel.is_none() && std::time::Instant::now() >= next_channel_retry {
@@ -695,10 +785,21 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         };
 
         if let Some(cmd) = realtime_command {
+            let duplicate = recent_commands.record_or_is_duplicate(&cmd);
+            acknowledge_realtime_command(channel.as_ref(), &cmd, duplicate);
+            if duplicate {
+                eprintln!(
+                    "  Fleet: duplicate realtime command ignored: {} {}",
+                    cmd.kind,
+                    cmd.execution_id.as_deref().unwrap_or("no-exec-id")
+                );
+                continue;
+            }
             match cmd.kind.as_str() {
                 "run_codewebway" => {}
                 "stop_codewebway" => {
-                    eprintln!("  Fleet: stop received but no terminal running — ignoring");
+                    eprintln!("  Fleet: stop received but no terminal running — reporting stopped");
+                    report_terminal_stopped_if_idle(channel.as_ref(), &creds, &cmd).await;
                     continue;
                 }
                 other => {
@@ -711,6 +812,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 &mut creds,
                 &mut state,
                 &mut channel,
+                &mut recent_commands,
                 cmd,
                 poll_interval,
             )
@@ -773,6 +875,16 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 continue;
             }
         };
+
+        if recent_commands.record_or_is_duplicate(&cmd) {
+            eprintln!(
+                "  Fleet: duplicate fallback command ignored: {} {}",
+                cmd.kind,
+                cmd.execution_id.as_deref().unwrap_or("no-exec-id")
+            );
+            tokio::time::sleep(poll_interval).await;
+            continue;
+        }
 
         match cmd.kind.as_str() {
             "run_codewebway" => {
@@ -884,6 +996,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                             &mut state,
                             &mut runtime,
                             &mut channel,
+                            &mut recent_commands,
                             handle.shutdown_tx,
                             handle.server_done,
                             poll_interval,
@@ -899,8 +1012,8 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 }
             }
             "stop_codewebway" => {
-                // handled inside wait_for_stop; if we get here the server isn't running
-                eprintln!("  Fleet: stop received but no terminal running — ignoring");
+                eprintln!("  Fleet: stop received but no terminal running — reporting stopped");
+                report_terminal_stopped_if_idle(channel.as_ref(), &creds, &cmd).await;
             }
             other => eprintln!("  Fleet: unknown command type: {other}"),
         }
@@ -909,11 +1022,13 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_stop(
     creds: &FleetCredentials,
     state: &mut DaemonState,
     runtime: &mut RunningRuntime,
     channel: &mut Option<MachineChannelClient>,
+    recent_commands: &mut RecentCommandTracker,
     shutdown_tx: tokio::sync::mpsc::UnboundedSender<()>,
     server_done: tokio::sync::oneshot::Receiver<()>,
     interval: std::time::Duration,
@@ -951,6 +1066,11 @@ async fn wait_for_stop(
                 maybe_cmd = channel_client.recv_command() => {
                     match maybe_cmd {
                         Some(cmd) if cmd.kind == "stop_codewebway" => {
+                            let duplicate = recent_commands.record_or_is_duplicate(&cmd);
+                            acknowledge_realtime_command(Some(channel_client), &cmd, duplicate);
+                            if duplicate {
+                                continue;
+                            }
                             let exec_id = cmd.execution_id.unwrap_or_default();
                             let _ = shutdown_tx.send(());
                             report_runtime_start_failed_if_needed(
@@ -972,7 +1092,13 @@ async fn wait_for_stop(
                             }
                             return;
                         }
-                        Some(_) => {}
+                        Some(cmd) => {
+                            let duplicate = recent_commands.record_or_is_duplicate(&cmd);
+                            acknowledge_realtime_command(Some(channel_client), &cmd, duplicate);
+                            if duplicate {
+                                continue;
+                            }
+                        }
                         None => {
                             eprintln!("  Fleet: realtime channel disconnected during runtime.");
                             *channel = None;
@@ -1001,6 +1127,14 @@ async fn wait_for_stop(
                                 state.last_d1_write = std::time::Instant::now();
                             }
                             if let Some(cmd) = hb.command {
+                                if recent_commands.record_or_is_duplicate(&cmd) {
+                                    next_heartbeat_at = tokio::time::Instant::now() + if channel.is_some() {
+                                        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS)
+                                    } else {
+                                        interval
+                                    };
+                                    continue;
+                                }
                                 if cmd.kind == "stop_codewebway" {
                                     let exec_id = cmd.execution_id.unwrap_or_default();
                                     let _ = shutdown_tx.send(());
@@ -1077,6 +1211,10 @@ async fn wait_for_stop(
                                 state.last_d1_write = std::time::Instant::now();
                             }
                             if let Some(cmd) = hb.command {
+                                if recent_commands.record_or_is_duplicate(&cmd) {
+                                    next_heartbeat_at = tokio::time::Instant::now() + interval;
+                                    continue;
+                                }
                                 if cmd.kind == "stop_codewebway" {
                                     let exec_id = cmd.execution_id.unwrap_or_default();
                                     let _ = shutdown_tx.send(());
@@ -1122,6 +1260,7 @@ async fn handle_realtime_command(
     creds: &mut FleetCredentials,
     state: &mut DaemonState,
     channel: &mut Option<MachineChannelClient>,
+    recent_commands: &mut RecentCommandTracker,
     cmd: PendingCommand,
     poll_interval: std::time::Duration,
 ) -> Result<()> {
@@ -1227,6 +1366,7 @@ async fn handle_realtime_command(
                         state,
                         &mut runtime,
                         channel,
+                        recent_commands,
                         handle.shutdown_tx,
                         handle.server_done,
                         poll_interval,
@@ -1776,6 +1916,31 @@ mod tests {
         assert_eq!(json.get("output").and_then(|v| v.as_str()), Some("ready"));
     }
 
+    #[test]
+    fn test_parse_channel_command_message_reads_command_key() {
+        let payload = r#"{"type":"command","command_key":"execution:ex-123","command":{"type":"run_codewebway","payload":{"execution_id":"ex-123","output_type":"codewebway_url"}}}"#;
+        let command = parse_channel_command_message(payload).expect("expected realtime command");
+        assert_eq!(command.command_key.as_deref(), Some("execution:ex-123"));
+        assert_eq!(command.execution_id.as_deref(), Some("ex-123"));
+        assert_eq!(command.kind, "run_codewebway");
+    }
+
+    #[test]
+    fn test_recent_command_tracker_dedupes_by_command_key() {
+        let mut tracker = RecentCommandTracker::new();
+        let command = PendingCommand {
+            execution_id: Some("ex-dup-1".to_string()),
+            command_key: Some("execution:ex-dup-1".to_string()),
+            kind: "run_codewebway".to_string(),
+            payload: serde_json::json!({
+                "execution_id": "ex-dup-1",
+            }),
+        };
+
+        assert!(!tracker.record_or_is_duplicate(&command));
+        assert!(tracker.record_or_is_duplicate(&command));
+    }
+
     #[tokio::test]
     async fn test_report_result_via_channel_falls_back_to_http_when_closed() {
         let mut server = mockito::Server::new_async().await;
@@ -1876,11 +2041,13 @@ mod tests {
                 ready_reported: true,
             };
             let mut channel = None;
+            let mut recent_commands = RecentCommandTracker::new();
             wait_for_stop(
                 &creds,
                 &mut state,
                 &mut runtime,
                 &mut channel,
+                &mut recent_commands,
                 shutdown_tx,
                 server_done_rx,
                 std::time::Duration::from_secs(5),
