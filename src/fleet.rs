@@ -28,9 +28,11 @@ pub struct FleetCredentials {
 }
 
 const MACHINE_TOKEN_ROTATE_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
-const CHANNEL_RECONCILE_INTERVAL_SECS: u64 = 5 * 60;
 const CHANNEL_PING_INTERVAL_SECS: u64 = 30;
 const CHANNEL_RECONNECT_INTERVAL_SECS: u64 = 10;
+const CONNECTED_IDLE_FALLBACK_CHECK_INTERVAL_SECS: u64 = 60 * 60;
+const CONNECTED_RUNNING_FALLBACK_CHECK_INTERVAL_SECS: u64 = 60;
+const MACHINE_TOKEN_ROTATE_RETRY_INTERVAL_SECS: u64 = 5 * 60;
 const RUNTIME_SYNC_INTERVAL_SECS: u64 = 1;
 const RECENT_COMMAND_TTL_SECS: u64 = 30 * 60;
 
@@ -660,6 +662,21 @@ async fn rotate_machine_token(creds: &mut FleetCredentials) -> Result<bool> {
     Ok(true)
 }
 
+fn next_machine_token_rotation_at(creds: &FleetCredentials) -> std::time::Instant {
+    let age_ms = current_epoch_millis().saturating_sub(creds.machine_token_issued_at);
+    let remaining_ms = MACHINE_TOKEN_ROTATE_INTERVAL_MS.saturating_sub(age_ms);
+    std::time::Instant::now() + std::time::Duration::from_millis(remaining_ms)
+}
+
+fn retry_machine_token_rotation_at() -> std::time::Instant {
+    std::time::Instant::now()
+        + std::time::Duration::from_secs(MACHINE_TOKEN_ROTATE_RETRY_INTERVAL_SECS)
+}
+
+fn next_connected_fallback_check_at(interval: std::time::Duration) -> std::time::Instant {
+    std::time::Instant::now() + interval
+}
+
 // ─── Daemon state ──────────────────────────────────────────────────────────────
 
 struct DaemonState {
@@ -797,11 +814,14 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
 
     let mut state = DaemonState::new();
     let poll_interval = std::time::Duration::from_secs(30);
-    let channel_reconcile_interval =
-        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS);
     let channel_retry_interval = std::time::Duration::from_secs(CHANNEL_RECONNECT_INTERVAL_SECS);
+    let connected_idle_fallback_check_interval =
+        std::time::Duration::from_secs(CONNECTED_IDLE_FALLBACK_CHECK_INTERVAL_SECS);
     let mut channel: Option<MachineChannelClient> = None;
     let mut next_channel_retry = std::time::Instant::now();
+    let mut next_idle_token_rotation = next_machine_token_rotation_at(&creds);
+    let mut next_connected_fallback_check =
+        next_connected_fallback_check_at(connected_idle_fallback_check_interval);
     let mut recent_commands = RecentCommandTracker::new();
 
     loop {
@@ -815,15 +835,24 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         .await
         {
             try_send_channel_snapshot(&mut channel, &state, true);
+            next_connected_fallback_check =
+                next_connected_fallback_check_at(connected_idle_fallback_check_interval);
         }
 
         enum IdleWaitResult {
             Command(PendingCommand),
             ChannelClosed,
+            FallbackCheck,
+            RotateToken,
             Reconcile,
         }
 
         let idle_wait = if let Some(channel_client) = channel.as_mut() {
+            let token_rotation_sleep = tokio::time::sleep_until(next_idle_token_rotation.into());
+            tokio::pin!(token_rotation_sleep);
+            let fallback_check_sleep =
+                tokio::time::sleep_until(next_connected_fallback_check.into());
+            tokio::pin!(fallback_check_sleep);
             tokio::select! {
                 command = channel_client.recv_command() => {
                     match command {
@@ -831,7 +860,8 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         None => IdleWaitResult::ChannelClosed,
                     }
                 },
-                _ = tokio::time::sleep(channel_reconcile_interval) => IdleWaitResult::Reconcile,
+                _ = &mut fallback_check_sleep => IdleWaitResult::FallbackCheck,
+                _ = &mut token_rotation_sleep => IdleWaitResult::RotateToken,
             }
         } else {
             tokio::time::sleep(poll_interval).await;
@@ -844,6 +874,27 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 eprintln!("  Fleet: realtime channel disconnected.");
                 channel = None;
                 next_channel_retry = std::time::Instant::now() + channel_retry_interval;
+                None
+            }
+            IdleWaitResult::FallbackCheck => None,
+            IdleWaitResult::RotateToken => {
+                match rotate_machine_token(&mut creds).await {
+                    Ok(true) => {
+                        eprintln!("  Fleet: rotated machine token during realtime idle window.");
+                        next_idle_token_rotation = next_machine_token_rotation_at(&creds);
+                    }
+                    Ok(false) => {
+                        next_idle_token_rotation = if should_rotate_machine_token(&creds) {
+                            retry_machine_token_rotation_at()
+                        } else {
+                            next_machine_token_rotation_at(&creds)
+                        };
+                    }
+                    Err(e) => {
+                        eprintln!("  Fleet: token rotation skipped: {e}");
+                        next_idle_token_rotation = retry_machine_token_rotation_at();
+                    }
+                }
                 None
             }
             IdleWaitResult::Reconcile => None,
@@ -889,11 +940,16 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             continue;
         }
 
-        let skip = !state.should_write(
-            &state.status.clone(),
-            state.active_url.as_deref(),
-            state.runtime_instance_id.as_deref(),
-        );
+        let connected_fallback_check_due = channel.is_some();
+        let skip = if connected_fallback_check_due {
+            true
+        } else {
+            !state.should_write(
+                &state.status.clone(),
+                state.active_url.as_deref(),
+                state.runtime_instance_id.as_deref(),
+            )
+        };
         let hb = match send_heartbeat(
             &creds,
             &state.status,
@@ -904,15 +960,32 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         .await
         {
             Ok(h) => {
-                if !skip {
+                if connected_fallback_check_due {
+                    next_connected_fallback_check =
+                        next_connected_fallback_check_at(connected_idle_fallback_check_interval);
+                } else if !skip {
                     state.last_d1_write = std::time::Instant::now();
                 }
-                try_send_channel_snapshot(&mut channel, &state, true);
-                if state.status != "running" {
+                if !connected_fallback_check_due {
+                    try_send_channel_snapshot(&mut channel, &state, true);
+                }
+                if !connected_fallback_check_due && state.status != "running" {
                     match rotate_machine_token(&mut creds).await {
-                        Ok(true) => eprintln!("  Fleet: rotated machine token during idle window."),
-                        Ok(false) => {}
-                        Err(e) => eprintln!("  Fleet: token rotation skipped: {e}"),
+                        Ok(true) => {
+                            eprintln!("  Fleet: rotated machine token during idle window.");
+                            next_idle_token_rotation = next_machine_token_rotation_at(&creds);
+                        }
+                        Ok(false) => {
+                            next_idle_token_rotation = if should_rotate_machine_token(&creds) {
+                                retry_machine_token_rotation_at()
+                            } else {
+                                next_machine_token_rotation_at(&creds)
+                            };
+                        }
+                        Err(e) => {
+                            eprintln!("  Fleet: token rotation skipped: {e}");
+                            next_idle_token_rotation = retry_machine_token_rotation_at();
+                        }
                     }
                 }
                 h
@@ -923,20 +996,29 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     eprintln!("  Run: codewebway disable");
                     std::process::exit(1);
                 }
-                eprintln!("  Fleet: heartbeat error (will retry): {e}");
-                tokio::time::sleep(poll_interval).await;
+                if connected_fallback_check_due {
+                    eprintln!("  Fleet: connected fallback check failed: {e}");
+                    next_connected_fallback_check = next_connected_fallback_check_at(poll_interval);
+                } else {
+                    eprintln!("  Fleet: heartbeat error (will retry): {e}");
+                    tokio::time::sleep(poll_interval).await;
+                }
                 continue;
             }
         };
 
         if !hb.has_command {
-            tokio::time::sleep(poll_interval).await;
+            if channel.is_none() {
+                tokio::time::sleep(poll_interval).await;
+            }
             continue;
         }
         let cmd = match hb.command {
             Some(c) => c,
             None => {
-                tokio::time::sleep(poll_interval).await;
+                if channel.is_none() {
+                    tokio::time::sleep(poll_interval).await;
+                }
                 continue;
             }
         };
@@ -947,7 +1029,9 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 cmd.kind,
                 cmd.execution_id.as_deref().unwrap_or("no-exec-id")
             );
-            tokio::time::sleep(poll_interval).await;
+            if channel.is_none() {
+                tokio::time::sleep(poll_interval).await;
+            }
             continue;
         }
 
@@ -1083,7 +1167,9 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             other => eprintln!("  Fleet: unknown command type: {other}"),
         }
 
-        tokio::time::sleep(poll_interval).await;
+        if channel.is_none() {
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 }
 
@@ -1102,16 +1188,13 @@ async fn wait_for_stop(
     let mut sync_tick =
         tokio::time::interval(std::time::Duration::from_secs(RUNTIME_SYNC_INTERVAL_SECS));
     sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let channel_reconcile_interval =
-        std::time::Duration::from_secs(CHANNEL_RECONCILE_INTERVAL_SECS);
     let channel_retry_interval = std::time::Duration::from_secs(CHANNEL_RECONNECT_INTERVAL_SECS);
+    let connected_running_fallback_check_interval =
+        std::time::Duration::from_secs(CONNECTED_RUNNING_FALLBACK_CHECK_INTERVAL_SECS);
     let mut next_channel_retry = std::time::Instant::now();
-    let mut next_heartbeat_at = tokio::time::Instant::now()
-        + if channel.is_some() {
-            channel_reconcile_interval
-        } else {
-            std::time::Duration::from_secs(0)
-        };
+    let mut next_heartbeat_at = tokio::time::Instant::now();
+    let mut next_connected_fallback_check =
+        next_connected_fallback_check_at(connected_running_fallback_check_interval);
 
     loop {
         if maybe_connect_realtime_channel(
@@ -1124,13 +1207,14 @@ async fn wait_for_stop(
         .await
         {
             try_send_channel_snapshot(channel, state, true);
-            next_heartbeat_at = tokio::time::Instant::now() + channel_reconcile_interval;
+            next_connected_fallback_check =
+                next_connected_fallback_check_at(connected_running_fallback_check_interval);
         }
 
-        let heartbeat_sleep = tokio::time::sleep_until(next_heartbeat_at);
-        tokio::pin!(heartbeat_sleep);
-
         if let Some(channel_client) = channel.as_mut() {
+            let fallback_check_sleep =
+                tokio::time::sleep_until(next_connected_fallback_check.into());
+            tokio::pin!(fallback_check_sleep);
             tokio::select! {
                 done = &mut server_done => {
                     if done.is_err() {
@@ -1192,30 +1276,19 @@ async fn wait_for_stop(
                 _ = sync_tick.tick() => {
                     sync_runtime_ready(creds, state, runtime, Some(channel_client)).await;
                 }
-                _ = &mut heartbeat_sleep => {
-                    let skip = !state.should_write(
-                        &state.status,
-                        state.active_url.as_deref(),
-                        state.runtime_instance_id.as_deref(),
-                    );
+                _ = &mut fallback_check_sleep => {
                     match send_heartbeat(
                         creds,
                         &state.status,
                         state.active_url.as_deref(),
                         state.runtime_instance_id.as_deref(),
-                        skip,
+                        true,
                     ).await {
                         Ok(hb) => {
-                            if !skip {
-                                state.last_d1_write = std::time::Instant::now();
-                            }
+                            next_connected_fallback_check =
+                                next_connected_fallback_check_at(connected_running_fallback_check_interval);
                             if let Some(cmd) = hb.command {
                                 if recent_commands.record_or_is_duplicate(&cmd) {
-                                    next_heartbeat_at = tokio::time::Instant::now() + if channel.is_some() {
-                                        channel_reconcile_interval
-                                    } else {
-                                        interval
-                                    };
                                     continue;
                                 }
                                 if cmd.kind == "stop_codewebway" {
@@ -1248,17 +1321,16 @@ async fn wait_for_stop(
                                 eprintln!("  Run: codewebway disable");
                                 std::process::exit(1);
                             }
-                            eprintln!("  Fleet: heartbeat error during run: {e}");
+                            eprintln!("  Fleet: connected fallback check during run failed: {e}");
+                            next_connected_fallback_check =
+                                next_connected_fallback_check_at(interval);
                         }
                     }
-                    next_heartbeat_at = tokio::time::Instant::now() + if channel.is_some() {
-                        channel_reconcile_interval
-                    } else {
-                        interval
-                    };
                 }
             }
         } else {
+            let heartbeat_sleep = tokio::time::sleep_until(next_heartbeat_at);
+            tokio::pin!(heartbeat_sleep);
             tokio::select! {
                 done = &mut server_done => {
                     if done.is_err() {
@@ -2243,6 +2315,67 @@ mod tests {
                 ready_reported: true,
             };
             let mut channel = None;
+            let mut recent_commands = RecentCommandTracker::new();
+            wait_for_stop(
+                &creds,
+                &mut state,
+                &mut runtime,
+                &mut channel,
+                &mut recent_commands,
+                shutdown_tx,
+                server_done_rx,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let _ = server_done_tx.send(());
+
+        tokio::time::timeout(std::time::Duration::from_millis(250), wait)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            shutdown_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        heartbeat.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_stop_with_connected_channel_skips_immediate_heartbeat() {
+        let mut server = mockito::Server::new_async().await;
+        let heartbeat = server
+            .mock("POST", "/api/v1/agent/heartbeat")
+            .expect(0)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"has_command":false}}"#)
+            .create_async()
+            .await;
+
+        let creds = make_creds(&server.url());
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let wait = tokio::spawn(async move {
+            let mut state = DaemonState::new();
+            state.status = "running".to_string();
+            state.active_url = Some("https://live.zrok.io".to_string());
+            state.runtime_instance_id = Some("runtime-live".to_string());
+            state.last_d1_write = std::time::Instant::now();
+            let mut runtime = RunningRuntime {
+                execution_id: "ex-live".to_string(),
+                access_token: "token-live".to_string(),
+                runtime_instance_id: "runtime-live".to_string(),
+                zrok_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    "https://live.zrok.io".to_string(),
+                ))),
+                ready_reported: true,
+            };
+            let mut channel = Some(dummy_channel());
             let mut recent_commands = RecentCommandTracker::new();
             wait_for_stop(
                 &creds,
