@@ -297,6 +297,7 @@ fn build_channel_snapshot_message(
     status: &str,
     active_url: Option<&str>,
     runtime_instance_id: Option<&str>,
+    skip_status_write: bool,
 ) -> String {
     let mut payload = serde_json::json!({
         "type": kind,
@@ -307,6 +308,9 @@ fn build_channel_snapshot_message(
     }
     if let Some(runtime_instance_id) = runtime_instance_id {
         payload["runtime_instance_id"] = serde_json::json!(runtime_instance_id);
+    }
+    if skip_status_write {
+        payload["skip_status_write"] = serde_json::json!(true);
     }
     payload.to_string()
 }
@@ -405,6 +409,7 @@ impl MachineChannelClient {
                 &state.status,
                 state.active_url.as_deref(),
                 state.runtime_instance_id.as_deref(),
+                false,
             )))
             .await
             .context("Failed to send realtime hello")?;
@@ -465,12 +470,13 @@ impl MachineChannelClient {
             .map_err(|_| anyhow::anyhow!("Realtime machine channel is closed"))
     }
 
-    fn send_snapshot(&self, state: &DaemonState) -> Result<()> {
+    fn send_snapshot(&self, state: &DaemonState, skip_status_write: bool) -> Result<()> {
         self.send_message(build_channel_snapshot_message(
             "snapshot",
             &state.status,
             state.active_url.as_deref(),
             state.runtime_instance_id.as_deref(),
+            skip_status_write,
         ))
     }
 
@@ -533,11 +539,15 @@ async fn maybe_connect_realtime_channel(
     )
 }
 
-fn try_send_channel_snapshot(channel: &mut Option<MachineChannelClient>, state: &DaemonState) {
+fn try_send_channel_snapshot(
+    channel: &mut Option<MachineChannelClient>,
+    state: &DaemonState,
+    skip_status_write: bool,
+) {
     let Some(client) = channel.as_ref() else {
         return;
     };
-    if let Err(err) = client.send_snapshot(state) {
+    if let Err(err) = client.send_snapshot(state, skip_status_write) {
         eprintln!("  Fleet: realtime snapshot send failed: {err}");
         *channel = None;
     }
@@ -804,7 +814,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         )
         .await
         {
-            try_send_channel_snapshot(&mut channel, &state);
+            try_send_channel_snapshot(&mut channel, &state, true);
         }
 
         enum IdleWaitResult {
@@ -897,7 +907,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 if !skip {
                     state.last_d1_write = std::time::Instant::now();
                 }
-                try_send_channel_snapshot(&mut channel, &state);
+                try_send_channel_snapshot(&mut channel, &state, true);
                 if state.status != "running" {
                     match rotate_machine_token(&mut creds).await {
                         Ok(true) => eprintln!("  Fleet: rotated machine token during idle window."),
@@ -1034,7 +1044,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         state.runtime_instance_id = Some(runtime_instance_id.clone());
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
-                        try_send_channel_snapshot(&mut channel, &state);
+                        try_send_channel_snapshot(&mut channel, &state, false);
 
                         let mut runtime = RunningRuntime {
                             execution_id: exec_id,
@@ -1061,7 +1071,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         state.status = "idle".to_string();
                         state.active_url = None;
                         state.runtime_instance_id = None;
-                        try_send_channel_snapshot(&mut channel, &state);
+                        try_send_channel_snapshot(&mut channel, &state, false);
                         write_status_now(&creds, &mut state, "after terminal stop").await;
                     }
                 }
@@ -1113,7 +1123,7 @@ async fn wait_for_stop(
         )
         .await
         {
-            try_send_channel_snapshot(channel, state);
+            try_send_channel_snapshot(channel, state, true);
             next_heartbeat_at = tokio::time::Instant::now() + channel_reconcile_interval;
         }
 
@@ -1423,7 +1433,7 @@ async fn handle_realtime_command(
                     state.runtime_instance_id = Some(runtime_instance_id.clone());
                     state.last_d1_write =
                         std::time::Instant::now() - std::time::Duration::from_secs(400);
-                    try_send_channel_snapshot(channel, state);
+                    try_send_channel_snapshot(channel, state, false);
 
                     let mut runtime = RunningRuntime {
                         execution_id: exec_id,
@@ -1449,7 +1459,7 @@ async fn handle_realtime_command(
                     state.status = "idle".to_string();
                     state.active_url = None;
                     state.runtime_instance_id = None;
-                    try_send_channel_snapshot(channel, state);
+                    try_send_channel_snapshot(channel, state, false);
                     write_status_now(creds, state, "after terminal stop").await;
                 }
             }
@@ -1816,6 +1826,45 @@ mod tests {
             "13"
         );
         assert!(request.headers().get("sec-websocket-key").is_some());
+    }
+
+    #[test]
+    fn test_build_channel_snapshot_message_omits_skip_status_write_by_default() {
+        let payload: serde_json::Value = serde_json::from_str(&build_channel_snapshot_message(
+            "snapshot", "idle", None, None, false,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            payload.get("type").and_then(|v| v.as_str()),
+            Some("snapshot")
+        );
+        assert!(payload.get("skip_status_write").is_none());
+    }
+
+    #[test]
+    fn test_build_channel_snapshot_message_includes_skip_status_write_when_requested() {
+        let payload: serde_json::Value = serde_json::from_str(&build_channel_snapshot_message(
+            "snapshot",
+            "idle",
+            Some("https://example.zrok.io"),
+            Some("runtime-1"),
+            true,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            payload.get("skip_status_write").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            payload.get("active_url").and_then(|v| v.as_str()),
+            Some("https://example.zrok.io")
+        );
+        assert_eq!(
+            payload.get("runtime_instance_id").and_then(|v| v.as_str()),
+            Some("runtime-1")
+        );
     }
 
     #[test]
