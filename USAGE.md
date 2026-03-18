@@ -206,7 +206,7 @@ Important fleet-mode behavior:
 
 - `codewebway fleet` always forces `--zrok --public-no-expiry`
 - if `--pin` is omitted, CodeWebway loads the stored PIN from `fleet.toml`
-- the daemon heartbeats to WebWayFleet every 30 seconds
+- healthy realtime-connected daemons use the machine channel for stop commands and only fall back to heartbeat polling when the channel is unavailable; legacy/degraded paths still heartbeat every 30 seconds
 - dashboard start/stop requests are delivered through the pending command channel
 - each dashboard "Start Terminal" creates a fresh runtime access token for that run
 

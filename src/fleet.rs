@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Request;
@@ -30,8 +32,8 @@ pub struct FleetCredentials {
 const MACHINE_TOKEN_ROTATE_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const CHANNEL_PING_INTERVAL_SECS: u64 = 30;
 const CHANNEL_RECONNECT_INTERVAL_SECS: u64 = 10;
+const CHANNEL_STALE_AFTER_MS: u64 = 90_000;
 const CONNECTED_IDLE_FALLBACK_CHECK_INTERVAL_SECS: u64 = 60 * 60;
-const CONNECTED_RUNNING_FALLBACK_CHECK_INTERVAL_SECS: u64 = 60;
 const MACHINE_TOKEN_ROTATE_RETRY_INTERVAL_SECS: u64 = 5 * 60;
 const RUNTIME_SYNC_INTERVAL_SECS: u64 = 1;
 const RECENT_COMMAND_TTL_SECS: u64 = 30 * 60;
@@ -418,6 +420,9 @@ impl MachineChannelClient {
 
         let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
+        let last_inbound_activity_ms = Arc::new(AtomicU64::new(current_epoch_millis()));
+        let reader_activity = Arc::clone(&last_inbound_activity_ms);
+        let writer_activity = Arc::clone(&last_inbound_activity_ms);
 
         tokio::spawn(async move {
             let mut ping_tick =
@@ -438,12 +443,18 @@ impl MachineChannelClient {
                     incoming = reader.next() => {
                         match incoming {
                             Some(Ok(Message::Text(text))) => {
+                                reader_activity.store(current_epoch_millis(), Ordering::Relaxed);
                                 if let Some(command) = parse_channel_command_message(&text) {
                                     let _ = command_tx.send(command);
                                 }
                             }
+                            Some(Ok(Message::Pong(_))) | Some(Ok(Message::Ping(_))) => {
+                                reader_activity.store(current_epoch_millis(), Ordering::Relaxed);
+                            }
                             Some(Ok(Message::Close(_))) | None => break,
-                            Some(Ok(_)) => {}
+                            Some(Ok(_)) => {
+                                reader_activity.store(current_epoch_millis(), Ordering::Relaxed);
+                            }
                             Some(Err(err)) => {
                                 eprintln!("  Fleet: realtime channel receive failed: {err}");
                                 break;
@@ -451,6 +462,12 @@ impl MachineChannelClient {
                         }
                     }
                     _ = ping_tick.tick() => {
+                        let last_inbound = writer_activity.load(Ordering::Relaxed);
+                        if current_epoch_millis().saturating_sub(last_inbound) >= CHANNEL_STALE_AFTER_MS {
+                            eprintln!("  Fleet: realtime channel stale, forcing reconnect.");
+                            let _ = writer.send(Message::Close(None)).await;
+                            break;
+                        }
                         if let Err(err) = writer.send(Message::Ping(Vec::<u8>::new())).await {
                             eprintln!("  Fleet: realtime channel ping failed: {err}");
                             break;
@@ -1189,12 +1206,8 @@ async fn wait_for_stop(
         tokio::time::interval(std::time::Duration::from_secs(RUNTIME_SYNC_INTERVAL_SECS));
     sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let channel_retry_interval = std::time::Duration::from_secs(CHANNEL_RECONNECT_INTERVAL_SECS);
-    let connected_running_fallback_check_interval =
-        std::time::Duration::from_secs(CONNECTED_RUNNING_FALLBACK_CHECK_INTERVAL_SECS);
     let mut next_channel_retry = std::time::Instant::now();
     let mut next_heartbeat_at = tokio::time::Instant::now();
-    let mut next_connected_fallback_check =
-        next_connected_fallback_check_at(connected_running_fallback_check_interval);
 
     loop {
         if maybe_connect_realtime_channel(
@@ -1207,14 +1220,9 @@ async fn wait_for_stop(
         .await
         {
             try_send_channel_snapshot(channel, state, true);
-            next_connected_fallback_check =
-                next_connected_fallback_check_at(connected_running_fallback_check_interval);
         }
 
         if let Some(channel_client) = channel.as_mut() {
-            let fallback_check_sleep =
-                tokio::time::sleep_until(next_connected_fallback_check.into());
-            tokio::pin!(fallback_check_sleep);
             tokio::select! {
                 done = &mut server_done => {
                     if done.is_err() {
@@ -1269,63 +1277,12 @@ async fn wait_for_stop(
                             eprintln!("  Fleet: realtime channel disconnected during runtime.");
                             *channel = None;
                             next_channel_retry = std::time::Instant::now() + channel_retry_interval;
-                            next_heartbeat_at = tokio::time::Instant::now() + interval;
+                            next_heartbeat_at = tokio::time::Instant::now();
                         }
                     }
                 }
                 _ = sync_tick.tick() => {
                     sync_runtime_ready(creds, state, runtime, Some(channel_client)).await;
-                }
-                _ = &mut fallback_check_sleep => {
-                    match send_heartbeat(
-                        creds,
-                        &state.status,
-                        state.active_url.as_deref(),
-                        state.runtime_instance_id.as_deref(),
-                        true,
-                    ).await {
-                        Ok(hb) => {
-                            next_connected_fallback_check =
-                                next_connected_fallback_check_at(connected_running_fallback_check_interval);
-                            if let Some(cmd) = hb.command {
-                                if recent_commands.record_or_is_duplicate(&cmd) {
-                                    continue;
-                                }
-                                if cmd.kind == "stop_codewebway" {
-                                    let exec_id = cmd.execution_id.unwrap_or_default();
-                                    let _ = shutdown_tx.send(());
-                                    report_runtime_start_failed_if_needed(
-                                        Some(channel_client),
-                                        creds,
-                                        runtime,
-                                        "Terminal stopped before public URL was ready",
-                                    )
-                                    .await;
-                                    if !exec_id.is_empty() {
-                                        let _ = report_result_via_channel_or_http(
-                                            Some(channel_client),
-                                            creds,
-                                            &exec_id,
-                                            "stopped",
-                                            true,
-                                        )
-                                        .await;
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            if is_unauthorized(&e) {
-                                eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                                eprintln!("  Run: codewebway disable");
-                                std::process::exit(1);
-                            }
-                            eprintln!("  Fleet: connected fallback check during run failed: {e}");
-                            next_connected_fallback_check =
-                                next_connected_fallback_check_at(interval);
-                        }
-                    }
                 }
             }
         } else {
@@ -1878,6 +1835,21 @@ mod tests {
         }
     }
 
+    fn live_dummy_channel() -> (
+        MachineChannelClient,
+        tokio::sync::mpsc::UnboundedSender<PendingCommand>,
+    ) {
+        let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
+        (
+            MachineChannelClient {
+                outbound_tx,
+                command_rx,
+            },
+            command_tx,
+        )
+    }
+
     #[test]
     fn test_build_machine_channel_request_includes_websocket_headers_and_auth() {
         let creds = make_creds("https://webwayfleet.dev");
@@ -2345,11 +2317,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_wait_for_stop_with_connected_channel_skips_immediate_heartbeat() {
+    async fn test_wait_for_stop_with_healthy_connected_channel_skips_running_heartbeat() {
         let mut server = mockito::Server::new_async().await;
         let heartbeat = server
             .mock("POST", "/api/v1/agent/heartbeat")
             .expect(0)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"has_command":false}}"#)
+            .create_async()
+            .await;
+
+        let creds = make_creds(&server.url());
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let (healthy_channel, _command_tx) = live_dummy_channel();
+
+        let wait = tokio::spawn(async move {
+            let mut state = DaemonState::new();
+            state.status = "running".to_string();
+            state.active_url = Some("https://live.zrok.io".to_string());
+            state.runtime_instance_id = Some("runtime-live".to_string());
+            state.last_d1_write = std::time::Instant::now();
+            let mut runtime = RunningRuntime {
+                execution_id: "ex-live".to_string(),
+                access_token: "token-live".to_string(),
+                runtime_instance_id: "runtime-live".to_string(),
+                zrok_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    "https://live.zrok.io".to_string(),
+                ))),
+                ready_reported: true,
+            };
+            let mut channel = Some(healthy_channel);
+            let mut recent_commands = RecentCommandTracker::new();
+            wait_for_stop(
+                &creds,
+                &mut state,
+                &mut runtime,
+                &mut channel,
+                &mut recent_commands,
+                shutdown_tx,
+                server_done_rx,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let _ = server_done_tx.send(());
+
+        tokio::time::timeout(std::time::Duration::from_millis(250), wait)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            shutdown_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        heartbeat.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_stop_with_disconnected_channel_uses_heartbeat_fallback_immediately() {
+        let mut server = mockito::Server::new_async().await;
+        let heartbeat = server
+            .mock("POST", "/api/v1/agent/heartbeat")
+            .expect(1)
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"data":{"has_command":false}}"#)
@@ -2385,15 +2419,15 @@ mod tests {
                 &mut recent_commands,
                 shutdown_tx,
                 server_done_rx,
-                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(30),
             )
             .await;
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let _ = server_done_tx.send(());
 
-        tokio::time::timeout(std::time::Duration::from_millis(250), wait)
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait)
             .await
             .unwrap()
             .unwrap();
