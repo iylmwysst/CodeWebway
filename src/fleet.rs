@@ -561,6 +561,7 @@ pub async fn send_heartbeat(
     let client = reqwest::Client::new();
     let mut body = serde_json::json!({
         "status": status,
+        "agent_version": env!("CARGO_PKG_VERSION"),
         "skip_status_write": skip_status_write,
     });
     if let Some(url) = active_url {
@@ -3102,6 +3103,11 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let m = server
             .mock("POST", "/api/v1/agent/heartbeat")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "status": "idle",
+                "agent_version": env!("CARGO_PKG_VERSION"),
+                "skip_status_write": false,
+            })))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"data":{"has_command":false}}"#)
