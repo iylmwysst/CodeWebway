@@ -235,10 +235,21 @@ pub async fn print_status() -> Result<()> {
     Ok(())
 }
 
+fn remove_file_if_exists(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_file(path)?;
+    Ok(true)
+}
+
+fn disable_at_path(path: &Path) -> Result<bool> {
+    remove_file_if_exists(path)
+}
+
 pub fn disable() -> Result<()> {
     let path = credentials_path();
-    if path.exists() {
-        std::fs::remove_file(&path)?;
+    if disable_at_path(&path)? {
         println!("  Device disabled. Credentials removed.");
     } else {
         println!("  Already disabled (no credentials found).");
@@ -889,15 +900,7 @@ async fn decommission_self_and_exit(
             eprintln!("  Fleet: failed to report decommission success: {err}");
         }
     }
-
-    if let Err(err) = uninstall_service() {
-        eprintln!("  Fleet: failed to uninstall auto-start service: {err}");
-    }
-    if let Err(err) = disable() {
-        eprintln!("  Fleet: failed to clear fleet credentials: {err}");
-    }
-    eprintln!("  Fleet: machine decommissioned locally.");
-    std::process::exit(0);
+    cleanup_local_fleet_state_and_exit("machine decommissioned locally");
 }
 
 #[derive(Debug, Deserialize)]
@@ -1080,9 +1083,7 @@ async fn write_status_now(creds: &FleetCredentials, state: &mut DaemonState, con
         }
         Err(e) => {
             if is_unauthorized(&e) {
-                eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                eprintln!("  Run: codewebway disable");
-                std::process::exit(1);
+                cleanup_local_fleet_state_and_exit("device deregistered (401)");
             }
             eprintln!("  Fleet: heartbeat error {context}: {e}");
         }
@@ -1281,9 +1282,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             }
             Err(e) => {
                 if is_unauthorized(&e) {
-                    eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                    eprintln!("  Run: codewebway disable");
-                    std::process::exit(1);
+                    cleanup_local_fleet_state_and_exit("device deregistered (401)");
                 }
                 if connected_fallback_check_due {
                     eprintln!("  Fleet: connected fallback check failed: {e}");
@@ -1637,9 +1636,7 @@ async fn wait_for_stop(
                         }
                         Err(e) => {
                             if is_unauthorized(&e) {
-                                eprintln!("  Fleet: device deregistered (401) — daemon stopping.");
-                                eprintln!("  Run: codewebway disable");
-                                std::process::exit(1);
+                                cleanup_local_fleet_state_and_exit("device deregistered (401)");
                             }
                             eprintln!("  Fleet: heartbeat error during run: {e}");
                         }
@@ -1911,11 +1908,7 @@ pub fn uninstall_service() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let plist_path = launchagent_plist_path();
-        if plist_path.exists() {
-            let _ = std::process::Command::new("launchctl")
-                .args(["unload", "-w", &plist_path.to_string_lossy()])
-                .status();
-            std::fs::remove_file(&plist_path)?;
+        if uninstall_launchagent_at(&plist_path)? {
             println!("  ✓ Auto-start service removed.");
         } else {
             println!("  Auto-start service not installed.");
@@ -1926,16 +1919,11 @@ pub fn uninstall_service() -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let svc_path = systemd_service_path();
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "disable", "--now", "codewebway-fleet"])
-            .status();
-        if svc_path.exists() {
-            std::fs::remove_file(&svc_path)?;
+        if uninstall_systemd_service_at(&svc_path)? {
+            println!("  ✓ Auto-start service removed.");
+        } else {
+            println!("  Auto-start service not installed.");
         }
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-        println!("  ✓ Auto-start service removed.");
         Ok(())
     }
 
@@ -1944,6 +1932,97 @@ pub fn uninstall_service() -> Result<()> {
 }
 
 // ─── Utility ───────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn uninstall_launchagent_at(plist_path: &Path) -> Result<bool> {
+    if !plist_path.exists() {
+        return Ok(false);
+    }
+    let _ = std::process::Command::new("launchctl")
+        .args(["unload", "-w", &plist_path.to_string_lossy()])
+        .status();
+    remove_file_if_exists(plist_path)
+}
+
+#[cfg(target_os = "linux")]
+fn uninstall_systemd_service_at(svc_path: &Path) -> Result<bool> {
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "disable", "--now", "codewebway-fleet"])
+        .status();
+    let removed = remove_file_if_exists(svc_path)?;
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
+    Ok(removed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalFleetCleanupOutcome {
+    service_removed: bool,
+    credentials_removed: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_local_fleet_state() -> Result<LocalFleetCleanupOutcome> {
+    cleanup_local_fleet_state_at(&credentials_path(), &launchagent_plist_path())
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_local_fleet_state() -> Result<LocalFleetCleanupOutcome> {
+    cleanup_local_fleet_state_at(&credentials_path(), &systemd_service_path())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn cleanup_local_fleet_state() -> Result<LocalFleetCleanupOutcome> {
+    Ok(LocalFleetCleanupOutcome {
+        service_removed: false,
+        credentials_removed: disable_at_path(&credentials_path())?,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_local_fleet_state_at(
+    credentials_path: &Path,
+    service_path: &Path,
+) -> Result<LocalFleetCleanupOutcome> {
+    Ok(LocalFleetCleanupOutcome {
+        service_removed: uninstall_launchagent_at(service_path)?,
+        credentials_removed: disable_at_path(credentials_path)?,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_local_fleet_state_at(
+    credentials_path: &Path,
+    service_path: &Path,
+) -> Result<LocalFleetCleanupOutcome> {
+    Ok(LocalFleetCleanupOutcome {
+        service_removed: uninstall_systemd_service_at(service_path)?,
+        credentials_removed: disable_at_path(credentials_path)?,
+    })
+}
+
+fn cleanup_local_fleet_state_and_exit(reason: &str) -> ! {
+    eprintln!("  Fleet: {reason} — cleaning up local fleet state.");
+    match cleanup_local_fleet_state() {
+        Ok(outcome) => {
+            if outcome.service_removed {
+                eprintln!("  Fleet: removed local auto-start service.");
+            }
+            if outcome.credentials_removed {
+                eprintln!("  Fleet: removed local fleet credentials.");
+            }
+            if !outcome.service_removed && !outcome.credentials_removed {
+                eprintln!("  Fleet: local fleet state was already absent.");
+            }
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("  Fleet: failed to clean up local fleet state: {err}");
+            std::process::exit(1);
+        }
+    }
+}
 
 fn is_unauthorized(e: &anyhow::Error) -> bool {
     e.downcast_ref::<reqwest::Error>()
@@ -2115,6 +2194,23 @@ mod tests {
         dir.path().join("fleet.toml")
     }
 
+    fn tmp_service_path(dir: &TempDir) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        {
+            dir.path().join("com.codewebway.fleet.plist")
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            dir.path().join("codewebway-fleet.service")
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            dir.path().join("service-placeholder")
+        }
+    }
+
     fn dummy_channel() -> MachineChannelClient {
         let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (_command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
@@ -2238,8 +2334,54 @@ mod tests {
         let path = tmp_path(&dir);
         save_credentials_to(&make_creds("https://x"), &path).unwrap();
         assert!(path.exists());
-        std::fs::remove_file(&path).unwrap();
+        assert!(disable_at_path(&path).unwrap());
         assert!(!path.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_cleanup_local_fleet_state_at_removes_launchagent_and_credentials() {
+        let dir = TempDir::new().unwrap();
+        let credentials_path = tmp_path(&dir);
+        let service_path = tmp_service_path(&dir);
+
+        save_credentials_to(&make_creds("https://x"), &credentials_path).unwrap();
+        std::fs::write(&service_path, "<plist />").unwrap();
+
+        let outcome = cleanup_local_fleet_state_at(&credentials_path, &service_path).unwrap();
+
+        assert_eq!(
+            outcome,
+            LocalFleetCleanupOutcome {
+                service_removed: true,
+                credentials_removed: true,
+            }
+        );
+        assert!(!credentials_path.exists());
+        assert!(!service_path.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_cleanup_local_fleet_state_at_removes_systemd_unit_and_credentials() {
+        let dir = TempDir::new().unwrap();
+        let credentials_path = tmp_path(&dir);
+        let service_path = tmp_service_path(&dir);
+
+        save_credentials_to(&make_creds("https://x"), &credentials_path).unwrap();
+        std::fs::write(&service_path, "[Unit]\nDescription=Test\n").unwrap();
+
+        let outcome = cleanup_local_fleet_state_at(&credentials_path, &service_path).unwrap();
+
+        assert_eq!(
+            outcome,
+            LocalFleetCleanupOutcome {
+                service_removed: true,
+                credentials_removed: true,
+            }
+        );
+        assert!(!credentials_path.exists());
+        assert!(!service_path.exists());
     }
 
     #[test]
