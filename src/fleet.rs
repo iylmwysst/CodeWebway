@@ -961,6 +961,7 @@ fn build_channel_snapshot_message(
     let mut payload = serde_json::json!({
         "type": kind,
         "status": status,
+        "agent_version": env!("CARGO_PKG_VERSION"),
     });
     if let Some(url) = active_url {
         payload["active_url"] = serde_json::json!(url);
@@ -2787,6 +2788,10 @@ mod tests {
             payload.get("type").and_then(|v| v.as_str()),
             Some("snapshot")
         );
+        assert_eq!(
+            payload.get("agent_version").and_then(|v| v.as_str()),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
         assert!(payload.get("skip_status_write").is_none());
     }
 
@@ -2804,6 +2809,10 @@ mod tests {
         assert_eq!(
             payload.get("skip_status_write").and_then(|v| v.as_bool()),
             Some(true)
+        );
+        assert_eq!(
+            payload.get("agent_version").and_then(|v| v.as_str()),
+            Some(env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(
             payload.get("active_url").and_then(|v| v.as_str()),
