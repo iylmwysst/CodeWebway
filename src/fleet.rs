@@ -23,6 +23,8 @@ pub struct FleetCredentials {
     pub machine_token: String,
     pub machine_name: String,
     pub fleet_endpoint: String,
+    #[serde(default)]
+    pub machine_id: Option<String>,
     #[serde(default = "current_epoch_millis")]
     pub machine_token_issued_at: u64,
     /// PIN stored during `enable`; used by the daemon so no flag is needed at runtime.
@@ -98,7 +100,7 @@ pub async fn enable_to_path(
     path: &Path,
 ) -> Result<()> {
     let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
+    let resp = client
         .post(format!("{fleet_endpoint}/api/v1/agent/enable"))
         .json(&serde_json::json!({
             "enable_token": enable_token,
@@ -110,13 +112,8 @@ pub async fn enable_to_path(
         .send()
         .await?
         .error_for_status()?
-        .json()
+        .json::<EnableResponse>()
         .await?;
-
-    let machine_token = resp["data"]["machine_token"]
-        .as_str()
-        .context("Invalid response: missing machine_token")?
-        .to_string();
 
     let machine_name = hostname();
     let pin = match pin {
@@ -129,9 +126,10 @@ pub async fn enable_to_path(
         }
     };
     let creds = FleetCredentials {
-        machine_token,
+        machine_token: resp.data.machine_token,
         machine_name: machine_name.clone(),
         fleet_endpoint: fleet_endpoint.to_string(),
+        machine_id: resp.data.machine_id,
         machine_token_issued_at: current_epoch_millis(),
         pin: Some(pin.clone()),
     };
@@ -139,6 +137,101 @@ pub async fn enable_to_path(
 
     println!("  ✓ Device enabled: \"{machine_name}\"");
     println!("  Credentials saved to {}", path.display());
+    Ok(())
+}
+
+pub async fn print_status() -> Result<()> {
+    let version = env!("CARGO_PKG_VERSION");
+    println!("CodeWebway {version}");
+    println!(
+        "Platform     : {} {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    println!("Credentials  : {}", credentials_path().display());
+    print_service_status();
+
+    let creds = match load_credentials() {
+        Ok(creds) => creds,
+        Err(err) => {
+            println!("Fleet        : disabled");
+            println!("Remote       : unavailable ({err})");
+            return Ok(());
+        }
+    };
+
+    println!("Fleet        : enabled");
+    println!("Machine name : {}", creds.machine_name);
+    println!(
+        "Machine ID   : {}",
+        creds.machine_id.as_deref().unwrap_or("unknown")
+    );
+    println!("Endpoint     : {}", creds.fleet_endpoint);
+    println!(
+        "PIN          : {}",
+        if creds.pin.as_deref().is_some() {
+            "configured"
+        } else {
+            "not stored"
+        }
+    );
+
+    match fetch_remote_status(&creds).await {
+        Ok(remote) => {
+            println!("Remote       : reachable");
+            println!("Owner user   : {}", remote.user_id);
+            println!(
+                "Project      : {}",
+                match remote.project_name.as_deref() {
+                    Some(name) if !name.trim().is_empty() => {
+                        format!("{name} ({})", remote.project_id)
+                    }
+                    _ => remote.project_id.clone(),
+                }
+            );
+            println!("Registered   : {}", remote.machine_id);
+            println!(
+                "Status       : {}",
+                remote.status.as_deref().unwrap_or("unknown")
+            );
+            println!(
+                "Transport    : {}",
+                format_transport_status(
+                    remote.transport_mode.as_deref(),
+                    remote.transport_connected,
+                    remote.last_channel_event_at
+                )
+            );
+            println!(
+                "Last seen    : {}",
+                format_relative_timestamp(remote.last_seen)
+            );
+            println!(
+                "Version      : local {} · fleet {}",
+                version,
+                remote.agent_version.as_deref().unwrap_or("unknown")
+            );
+            if let Some(hostname) = remote
+                .hostname
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                println!("Hostname     : {hostname}");
+            }
+            if let Some(machine_id) = creds.machine_id.as_deref() {
+                if machine_id != remote.machine_id {
+                    println!("Warning      : local machine_id differs from fleet record");
+                }
+            }
+        }
+        Err(err) => {
+            println!(
+                "Remote       : unavailable ({})",
+                summarize_remote_status_error(&err)
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -158,6 +251,46 @@ pub fn disable() -> Result<()> {
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatResponse {
     pub data: HeartbeatData,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnableResponse {
+    data: EnableResponseData,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnableResponseData {
+    machine_token: String,
+    #[serde(default)]
+    machine_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteStatusResponse {
+    data: RemoteStatusData,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteStatusData {
+    machine_id: String,
+    user_id: String,
+    project_id: String,
+    #[serde(default)]
+    project_name: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    transport_mode: Option<String>,
+    #[serde(default)]
+    transport_connected: Option<u8>,
+    #[serde(default)]
+    last_seen: Option<u64>,
+    #[serde(default)]
+    last_channel_event_at: Option<u64>,
+    #[serde(default)]
+    agent_version: Option<String>,
+    #[serde(default)]
+    hostname: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,6 +329,116 @@ fn payload_str(payload: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
+}
+
+async fn fetch_remote_status(creds: &FleetCredentials) -> Result<RemoteStatusData> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{}/api/v1/agent/status", creds.fleet_endpoint))
+        .bearer_auth(&creds.machine_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<RemoteStatusResponse>()
+        .await?;
+    Ok(response.data)
+}
+
+fn summarize_remote_status_error(err: &anyhow::Error) -> String {
+    if let Some(req_err) = err.downcast_ref::<reqwest::Error>() {
+        if let Some(status) = req_err.status() {
+            return match status {
+                reqwest::StatusCode::UNAUTHORIZED => {
+                    "token rejected or machine no longer exists".to_string()
+                }
+                reqwest::StatusCode::NOT_FOUND => "machine not found in fleet".to_string(),
+                other => format!("fleet returned {other}"),
+            };
+        }
+    }
+    err.to_string()
+}
+
+fn format_relative_timestamp(value: Option<u64>) -> String {
+    let Some(timestamp_ms) = value else {
+        return "unknown".to_string();
+    };
+    let now = current_epoch_millis();
+    if timestamp_ms > now {
+        return "just now".to_string();
+    }
+    let delta_secs = (now - timestamp_ms) / 1000;
+    if delta_secs < 60 {
+        return format!("{delta_secs}s ago");
+    }
+    let delta_mins = delta_secs / 60;
+    if delta_mins < 60 {
+        return format!("{delta_mins}m ago");
+    }
+    let delta_hours = delta_mins / 60;
+    if delta_hours < 48 {
+        return format!("{delta_hours}h ago");
+    }
+    let delta_days = delta_hours / 24;
+    format!("{delta_days}d ago")
+}
+
+fn format_transport_status(
+    mode: Option<&str>,
+    connected: Option<u8>,
+    last_channel_event_at: Option<u64>,
+) -> String {
+    match mode.unwrap_or("unknown") {
+        "realtime" => {
+            if connected == Some(1) {
+                "realtime connected".to_string()
+            } else if last_channel_event_at.is_some() {
+                format!(
+                    "realtime reconnecting · last channel event {}",
+                    format_relative_timestamp(last_channel_event_at)
+                )
+            } else {
+                "realtime disconnected".to_string()
+            }
+        }
+        "heartbeat" => "heartbeat".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn print_service_status() {
+    #[cfg(target_os = "macos")]
+    {
+        let service_path = launchagent_plist_path();
+        println!(
+            "Auto-start    : {} ({})",
+            if service_path.exists() {
+                "installed"
+            } else {
+                "not installed"
+            },
+            service_path.display()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let service_path = systemd_service_path();
+        println!(
+            "Auto-start    : {} ({})",
+            if service_path.exists() {
+                "installed"
+            } else {
+                "not installed"
+            },
+            service_path.display()
+        );
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        println!("Auto-start    : unsupported on this platform");
+    }
 }
 
 pub async fn send_heartbeat(
@@ -1862,6 +2105,7 @@ mod tests {
             machine_token: "mt_test".to_string(),
             machine_name: "pi-test".to_string(),
             fleet_endpoint: endpoint.to_string(),
+            machine_id: Some("mid_test".to_string()),
             machine_token_issued_at: 1_700_000_000_000,
             pin: Some("123456".to_string()),
         }
@@ -1966,6 +2210,7 @@ mod tests {
         assert_eq!(loaded.machine_token, "mt_test");
         assert_eq!(loaded.machine_name, "pi-test");
         assert_eq!(loaded.fleet_endpoint, "https://webwayfleet.dev");
+        assert_eq!(loaded.machine_id.as_deref(), Some("mid_test"));
         assert_eq!(loaded.machine_token_issued_at, 1_700_000_000_000);
         #[cfg(unix)]
         {
@@ -2050,11 +2295,46 @@ mod tests {
 
         let creds = load_credentials_from(&path).unwrap();
         assert_eq!(creds.machine_token, "mt_xyz");
+        assert_eq!(creds.machine_id.as_deref(), Some("mid1"));
         // PIN should be auto-generated (6 digits)
         let pin = creds.pin.unwrap();
         assert_eq!(pin.len(), 6);
         assert!(pin.chars().all(|c| c.is_ascii_digit()));
         m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_remote_status_returns_metadata() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("GET", "/api/v1/agent/status")
+            .match_header("authorization", "Bearer mt_test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":{"machine_id":"mid1","user_id":"user_123","project_id":"proj_123","project_name":"My Project","status":"running","transport_mode":"realtime","transport_connected":1,"last_seen":1700000000000,"last_channel_event_at":1700000001000,"agent_version":"1.1.0-beta.45","hostname":"pi-test"}}"#
+            )
+            .create_async()
+            .await;
+
+        let remote = fetch_remote_status(&make_creds(&server.url()))
+            .await
+            .unwrap();
+        assert_eq!(remote.machine_id, "mid1");
+        assert_eq!(remote.user_id, "user_123");
+        assert_eq!(remote.project_name.as_deref(), Some("My Project"));
+        assert_eq!(remote.transport_mode.as_deref(), Some("realtime"));
+        assert_eq!(remote.transport_connected, Some(1));
+        assert_eq!(remote.agent_version.as_deref(), Some("1.1.0-beta.45"));
+        m.assert_async().await;
+    }
+
+    #[test]
+    fn test_format_transport_status_prefers_realtime_connected_label() {
+        assert_eq!(
+            format_transport_status(Some("realtime"), Some(1), Some(current_epoch_millis())),
+            "realtime connected"
+        );
     }
 
     #[tokio::test]

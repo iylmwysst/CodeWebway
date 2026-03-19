@@ -789,6 +789,7 @@ async fn main() -> anyhow::Result<()> {
             }
             return fleet::run_daemon(cfg).await;
         }
+        Some("status") => return fleet::print_status().await,
         Some("disable") => return fleet::disable(),
         Some("uninstall-service") => return fleet::uninstall_service(),
         Some("fleet") => {
