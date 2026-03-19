@@ -70,6 +70,7 @@ codewebway fleet
 
 `enable` supports QR/device-code setup for headless machines, stores local fleet credentials, and can install an auto-start service on macOS or Linux.
 `status` prints local fleet registration details and best-effort remote metadata without exposing the raw machine token.
+Dashboard-driven client updates restart the local daemon with the existing fleet credential; active terminal sessions disconnect briefly during the update, but the machine does not need to be enabled again. Fleet can target `stable`, `latest`, or a dedicated `mock` release channel for update-flow testing.
 
 → Full CLI reference and examples: [USAGE.md](USAGE.md)
 → Security model and threat analysis: [SECURITY.md](SECURITY.md)

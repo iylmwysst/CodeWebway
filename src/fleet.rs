@@ -5,6 +5,7 @@ use qrcode::types::Color;
 use qrcode::QrCode;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
+use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -39,6 +40,7 @@ const CONNECTED_IDLE_FALLBACK_CHECK_INTERVAL_SECS: u64 = 60 * 60;
 const MACHINE_TOKEN_ROTATE_RETRY_INTERVAL_SECS: u64 = 5 * 60;
 const RUNTIME_SYNC_INTERVAL_SECS: u64 = 1;
 const RECENT_COMMAND_TTL_SECS: u64 = 30 * 60;
+const RELEASE_REPOSITORY_API_BASE: &str = "https://api.github.com/repos/iylmwysst/CodeWebway";
 
 fn current_epoch_millis() -> u64 {
     std::time::SystemTime::now()
@@ -321,6 +323,31 @@ pub struct PendingCommand {
     pub payload: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReleaseApiAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseApiResponse {
+    tag_name: String,
+    assets: Vec<ReleaseApiAsset>,
+}
+
+#[derive(Debug, Clone)]
+struct ClientUpdatePlan {
+    execution_id: String,
+    target_version: String,
+    download_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingUpdateReport {
+    execution_id: String,
+    target_version: String,
+}
+
 fn payload_bool(payload: &serde_json::Value, key: &str) -> Option<bool> {
     payload.get(key).and_then(|v| v.as_bool())
 }
@@ -340,6 +367,78 @@ fn payload_str(payload: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
+}
+
+fn release_tag_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload_str(payload, "release_tag")
+}
+
+fn release_api_base_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload_str(payload, "release_api_base")
+}
+
+fn current_release_target() -> Result<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
+        ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl"),
+        ("linux", "arm") | ("linux", "armv7") | ("linux", "armv7l") => {
+            Ok("aarch64-unknown-linux-musl")
+        }
+        (os, arch) => anyhow::bail!("Self-update is not supported on {os}/{arch}."),
+    }
+}
+
+fn normalize_release_version(value: &str) -> &str {
+    value.strip_prefix('v').unwrap_or(value)
+}
+
+fn current_version_matches_release(tag: &str) -> bool {
+    normalize_release_version(tag) == env!("CARGO_PKG_VERSION")
+}
+
+fn pending_update_report_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("codewebway")
+        .join("pending-update.json")
+}
+
+fn load_pending_update_report() -> Result<Option<PendingUpdateReport>> {
+    load_pending_update_report_from(&pending_update_report_path())
+}
+
+fn load_pending_update_report_from(path: &Path) -> Result<Option<PendingUpdateReport>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot read pending update report at {}", path.display()))?;
+    let report = serde_json::from_str(&data)
+        .with_context(|| format!("Malformed pending update report at {}", path.display()))?;
+    Ok(Some(report))
+}
+
+fn save_pending_update_report(report: &PendingUpdateReport) -> Result<()> {
+    save_pending_update_report_to(report, &pending_update_report_path())
+}
+
+fn save_pending_update_report_to(report: &PendingUpdateReport, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data = serde_json::to_vec_pretty(report)?;
+    std::fs::write(path, data)?;
+    Ok(())
+}
+
+fn clear_pending_update_report() -> Result<bool> {
+    clear_pending_update_report_at(&pending_update_report_path())
+}
+
+fn clear_pending_update_report_at(path: &Path) -> Result<bool> {
+    remove_file_if_exists(path)
 }
 
 async fn fetch_remote_status(creds: &FleetCredentials) -> Result<RemoteStatusData> {
@@ -519,6 +618,307 @@ async fn report_result_via_channel_or_http(
         eprintln!("  Fleet: realtime report send failed, falling back to HTTP.");
     }
     report_result(creds, execution_id, output, success).await
+}
+
+fn release_api_base() -> &'static str {
+    RELEASE_REPOSITORY_API_BASE
+}
+
+async fn fetch_latest_release_plan_from(
+    base: &str,
+    execution_id: &str,
+) -> Result<ClientUpdatePlan> {
+    let asset_target = current_release_target()?;
+    let expected_asset_name = format!("codewebway-{asset_target}");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{base}/releases/latest"))
+        .header(
+            USER_AGENT,
+            format!("codewebway/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<ReleaseApiResponse>()
+        .await?;
+    let tag_name = response.tag_name;
+    let asset = response
+        .assets
+        .into_iter()
+        .find(|candidate| candidate.name == expected_asset_name)
+        .with_context(|| {
+            format!(
+                "Latest release {} did not include asset {}",
+                tag_name, expected_asset_name
+            )
+        })?;
+
+    Ok(ClientUpdatePlan {
+        execution_id: execution_id.to_string(),
+        target_version: normalize_release_version(&tag_name).to_string(),
+        download_url: asset.browser_download_url,
+    })
+}
+
+async fn fetch_release_plan_by_tag_from(
+    base: &str,
+    execution_id: &str,
+    release_tag: &str,
+) -> Result<ClientUpdatePlan> {
+    let asset_target = current_release_target()?;
+    let expected_asset_name = format!("codewebway-{asset_target}");
+    let encoded_tag = release_tag.replace('/', "%2F");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{base}/releases/tags/{encoded_tag}"))
+        .header(
+            USER_AGENT,
+            format!("codewebway/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<ReleaseApiResponse>()
+        .await?;
+    let tag_name = response.tag_name;
+    let asset = response
+        .assets
+        .into_iter()
+        .find(|candidate| candidate.name == expected_asset_name)
+        .with_context(|| {
+            format!(
+                "Release {} did not include asset {}",
+                tag_name, expected_asset_name
+            )
+        })?;
+
+    Ok(ClientUpdatePlan {
+        execution_id: execution_id.to_string(),
+        target_version: normalize_release_version(&tag_name).to_string(),
+        download_url: asset.browser_download_url,
+    })
+}
+
+fn staged_update_binary_path(exe_path: &Path) -> Result<PathBuf> {
+    let file_name = exe_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("Cannot determine executable filename for self-update")?;
+    Ok(exe_path.with_file_name(format!("{file_name}.update-download")))
+}
+
+async fn download_release_binary(url: &str, destination: &Path) -> Result<()> {
+    let client = reqwest::Client::new();
+    let bytes = client
+        .get(url)
+        .header(
+            USER_AGENT,
+            format!("codewebway/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+
+    if bytes.is_empty() {
+        anyhow::bail!("Downloaded release asset was empty");
+    }
+
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = remove_file_if_exists(destination);
+    std::fs::write(destination, bytes)?;
+    Ok(())
+}
+
+fn install_downloaded_binary(download_path: &Path, exe_path: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(exe_path)
+        .with_context(|| format!("Cannot read executable metadata for {}", exe_path.display()))?;
+    std::fs::set_permissions(download_path, metadata.permissions()).with_context(|| {
+        format!(
+            "Cannot set permissions on downloaded binary at {}",
+            download_path.display()
+        )
+    })?;
+    std::fs::rename(download_path, exe_path).with_context(|| {
+        format!(
+            "Cannot replace executable {} with downloaded update",
+            exe_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn restart_current_process() -> Result<()> {
+    let exe_path = std::env::current_exe().context("Cannot locate current executable")?;
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        let err = std::process::Command::new(&exe_path).args(&args).exec();
+        anyhow::bail!(
+            "Failed to exec updated client {}: {}",
+            exe_path.display(),
+            err
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = exe_path;
+        let _ = args;
+        anyhow::bail!("Self-update restart is not supported on this platform.");
+    }
+}
+
+async fn flush_pending_update_report(
+    creds: &FleetCredentials,
+    pending_report: &mut Option<PendingUpdateReport>,
+) {
+    let Some(report) = pending_report.as_ref() else {
+        return;
+    };
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    let (success, output) = if normalize_release_version(&report.target_version) == current_version
+    {
+        (true, format!("updated to {current_version}"))
+    } else {
+        (
+            false,
+            format!(
+                "update restart version mismatch: expected {}, running {}",
+                report.target_version, current_version
+            ),
+        )
+    };
+
+    match report_result(creds, &report.execution_id, &output, success).await {
+        Ok(_) => {
+            if let Err(err) = clear_pending_update_report() {
+                eprintln!("  Fleet: failed to clear pending update report: {err}");
+            }
+            *pending_report = None;
+        }
+        Err(err) => {
+            if is_unauthorized(&err) {
+                cleanup_local_fleet_state_and_exit("device deregistered (401)");
+            }
+            eprintln!("  Fleet: pending update report retry failed: {err}");
+        }
+    }
+}
+
+async fn resolve_client_update_plan(
+    channel: Option<&MachineChannelClient>,
+    creds: &FleetCredentials,
+    cmd: &PendingCommand,
+) -> Result<Option<ClientUpdatePlan>> {
+    let execution_id = cmd.execution_id.clone().unwrap_or_default();
+    if execution_id.is_empty() {
+        anyhow::bail!("Update command is missing execution_id");
+    }
+
+    let release_api_base = release_api_base_from_payload(&cmd.payload)
+        .unwrap_or_else(|| release_api_base().to_string());
+    let plan = if let Some(release_tag) = release_tag_from_payload(&cmd.payload) {
+        fetch_release_plan_by_tag_from(&release_api_base, &execution_id, &release_tag).await?
+    } else {
+        fetch_latest_release_plan_from(&release_api_base, &execution_id).await?
+    };
+    if current_version_matches_release(&plan.target_version) {
+        report_result_via_channel_or_http(
+            channel,
+            creds,
+            &execution_id,
+            &format!("already on {}", env!("CARGO_PKG_VERSION")),
+            true,
+        )
+        .await?;
+        return Ok(None);
+    }
+
+    Ok(Some(plan))
+}
+
+async fn report_client_update_failure(
+    channel: Option<&MachineChannelClient>,
+    creds: &FleetCredentials,
+    execution_id: &str,
+    err: &anyhow::Error,
+) {
+    if execution_id.is_empty() {
+        return;
+    }
+    if let Err(report_err) =
+        report_result_via_channel_or_http(channel, creds, execution_id, &err.to_string(), false)
+            .await
+    {
+        eprintln!("  Fleet: failed to report client update failure: {report_err}");
+    }
+}
+
+async fn apply_client_update_plan(plan: &ClientUpdatePlan) -> Result<()> {
+    let exe_path = std::env::current_exe().context("Cannot determine current executable path")?;
+    let staged_binary_path = staged_update_binary_path(&exe_path)?;
+
+    if let Err(err) = download_release_binary(&plan.download_url, &staged_binary_path).await {
+        let _ = remove_file_if_exists(&staged_binary_path);
+        return Err(err);
+    }
+
+    let report = PendingUpdateReport {
+        execution_id: plan.execution_id.clone(),
+        target_version: plan.target_version.clone(),
+    };
+    if let Err(err) = save_pending_update_report(&report) {
+        let _ = remove_file_if_exists(&staged_binary_path);
+        return Err(err);
+    }
+
+    if let Err(err) = install_downloaded_binary(&staged_binary_path, &exe_path) {
+        let _ = clear_pending_update_report();
+        let _ = remove_file_if_exists(&staged_binary_path);
+        return Err(err);
+    }
+
+    if let Err(err) = restart_current_process() {
+        let _ = clear_pending_update_report();
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+async fn perform_client_update(
+    channel: Option<&MachineChannelClient>,
+    creds: &FleetCredentials,
+    cmd: &PendingCommand,
+) -> Result<()> {
+    let execution_id = cmd.execution_id.clone().unwrap_or_default();
+    let plan = match resolve_client_update_plan(channel, creds, cmd).await {
+        Ok(plan) => plan,
+        Err(err) => {
+            report_client_update_failure(channel, creds, &execution_id, &err).await;
+            return Err(err);
+        }
+    };
+
+    let Some(plan) = plan else {
+        return Ok(());
+    };
+
+    if let Err(err) = apply_client_update_plan(&plan).await {
+        report_client_update_failure(channel, creds, &execution_id, &err).await;
+        return Err(err);
+    }
+
+    Ok(())
 }
 
 fn build_runtime_output(url: &str, access_token: &str, runtime_instance_id: &str) -> String {
@@ -1094,6 +1494,14 @@ async fn write_status_now(creds: &FleetCredentials, state: &mut DaemonState, con
 
 pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     let mut creds = load_credentials().context("Not enabled. Run: codewebway enable <token>")?;
+    let mut pending_update_report = match load_pending_update_report() {
+        Ok(report) => report,
+        Err(err) => {
+            eprintln!("  Fleet: ignoring malformed pending update report: {err}");
+            let _ = clear_pending_update_report();
+            None
+        }
+    };
 
     println!("  Fleet daemon starting for \"{}\"", creds.machine_name);
     println!("  Endpoint: {}", creds.fleet_endpoint);
@@ -1109,6 +1517,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
     let mut next_connected_fallback_check =
         next_connected_fallback_check_at(connected_idle_fallback_check_interval);
     let mut recent_commands = RecentCommandTracker::new();
+    flush_pending_update_report(&creds, &mut pending_update_report).await;
 
     loop {
         if maybe_connect_realtime_channel(
@@ -1121,6 +1530,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         .await
         {
             try_send_channel_snapshot(&mut channel, &state, true);
+            flush_pending_update_report(&creds, &mut pending_update_report).await;
             next_connected_fallback_check =
                 next_connected_fallback_check_at(connected_idle_fallback_check_interval);
         }
@@ -1199,6 +1609,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             }
             match cmd.kind.as_str() {
                 "run_codewebway" => {}
+                "update_codewebway" => {}
                 "stop_codewebway" => {
                     eprintln!("  Fleet: stop received but no terminal running — reporting stopped");
                     report_terminal_stopped_if_idle(channel.as_ref(), &creds, &cmd).await;
@@ -1218,6 +1629,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 &mut creds,
                 &mut state,
                 &mut channel,
+                &mut pending_update_report,
                 &mut recent_commands,
                 cmd,
                 poll_interval,
@@ -1250,6 +1662,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
         .await
         {
             Ok(h) => {
+                flush_pending_update_report(&creds, &mut pending_update_report).await;
                 if connected_fallback_check_due {
                     next_connected_fallback_check =
                         next_connected_fallback_check_at(connected_idle_fallback_check_interval);
@@ -1428,7 +1841,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         sync_runtime_ready(&creds, &mut state, &mut runtime, channel.as_ref())
                             .await;
 
-                        wait_for_stop(
+                        let exit_action = wait_for_stop(
                             &creds,
                             &mut state,
                             &mut runtime,
@@ -1445,6 +1858,20 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                         state.runtime_instance_id = None;
                         try_send_channel_snapshot(&mut channel, &state, false);
                         write_status_now(&creds, &mut state, "after terminal stop").await;
+                        if let RuntimeExitAction::ApplyClientUpdate(plan) = exit_action {
+                            if let Err(err) = apply_client_update_plan(&plan).await {
+                                report_client_update_failure(
+                                    channel.as_ref(),
+                                    &creds,
+                                    &plan.execution_id,
+                                    &err,
+                                )
+                                .await;
+                                eprintln!(
+                                    "  Fleet: client update failed after runtime stop: {err}"
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1456,6 +1883,11 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 eprintln!("  Fleet: decommission requested while idle.");
                 decommission_self_and_exit(channel.as_ref(), &creds, &cmd).await;
             }
+            "update_codewebway" => {
+                if let Err(err) = perform_client_update(channel.as_ref(), &creds, &cmd).await {
+                    eprintln!("  Fleet: client update failed: {err}");
+                }
+            }
             other => eprintln!("  Fleet: unknown command type: {other}"),
         }
 
@@ -1463,6 +1895,11 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
             tokio::time::sleep(poll_interval).await;
         }
     }
+}
+
+enum RuntimeExitAction {
+    None,
+    ApplyClientUpdate(ClientUpdatePlan),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1475,7 +1912,7 @@ async fn wait_for_stop(
     shutdown_tx: tokio::sync::mpsc::UnboundedSender<()>,
     server_done: tokio::sync::oneshot::Receiver<()>,
     interval: std::time::Duration,
-) {
+) -> RuntimeExitAction {
     tokio::pin!(server_done);
     let mut sync_tick =
         tokio::time::interval(std::time::Duration::from_secs(RUNTIME_SYNC_INTERVAL_SECS));
@@ -1510,11 +1947,11 @@ async fn wait_for_stop(
                         "Terminal stopped before public URL was ready",
                     )
                     .await;
-                    return;
+                    return RuntimeExitAction::None;
                 }
                 maybe_cmd = channel_client.recv_command() => {
                     match maybe_cmd {
-                        Some(cmd) if cmd.kind == "stop_codewebway" || cmd.kind == "decommission_client" => {
+                        Some(cmd) if cmd.kind == "stop_codewebway" || cmd.kind == "decommission_client" || cmd.kind == "update_codewebway" => {
                             let duplicate = recent_commands.record_or_is_duplicate(&cmd);
                             acknowledge_realtime_command(Some(channel_client), &cmd, duplicate);
                             if duplicate {
@@ -1523,6 +1960,28 @@ async fn wait_for_stop(
                             if cmd.kind == "decommission_client" {
                                 eprintln!("  Fleet: decommission requested during runtime.");
                                 decommission_self_and_exit(Some(channel_client), creds, &cmd).await;
+                            }
+                            let update_plan = if cmd.kind == "update_codewebway" {
+                                match resolve_client_update_plan(Some(channel_client), creds, &cmd).await {
+                                    Ok(Some(plan)) => Some(plan),
+                                    Ok(None) => None,
+                                    Err(err) => {
+                                        report_client_update_failure(
+                                            Some(channel_client),
+                                            creds,
+                                            cmd.execution_id.as_deref().unwrap_or_default(),
+                                            &err,
+                                        )
+                                        .await;
+                                        eprintln!("  Fleet: client update preparation failed: {err}");
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+                            if cmd.kind == "update_codewebway" && update_plan.is_none() {
+                                continue;
                             }
                             let exec_id = cmd.execution_id.unwrap_or_default();
                             let _ = shutdown_tx.send(());
@@ -1533,7 +1992,7 @@ async fn wait_for_stop(
                                 "Terminal stopped before public URL was ready",
                             )
                             .await;
-                            if !exec_id.is_empty() {
+                            if cmd.kind == "stop_codewebway" && !exec_id.is_empty() {
                                 let _ = report_result_via_channel_or_http(
                                     Some(channel_client),
                                     creds,
@@ -1543,7 +2002,10 @@ async fn wait_for_stop(
                                 )
                                 .await;
                             }
-                            return;
+                            if let Some(plan) = update_plan {
+                                return RuntimeExitAction::ApplyClientUpdate(plan);
+                            }
+                            return RuntimeExitAction::None;
                         }
                         Some(cmd) => {
                             let duplicate = recent_commands.record_or_is_duplicate(&cmd);
@@ -1579,7 +2041,7 @@ async fn wait_for_stop(
                         "Terminal stopped before public URL was ready",
                     )
                     .await;
-                    return;
+                    return RuntimeExitAction::None;
                 }
                 _ = sync_tick.tick() => {
                     sync_runtime_ready(creds, state, runtime, channel.as_ref()).await;
@@ -1610,6 +2072,30 @@ async fn wait_for_stop(
                                     eprintln!("  Fleet: decommission requested during runtime.");
                                     decommission_self_and_exit(channel.as_ref(), creds, &cmd).await;
                                 }
+                                let update_plan = if cmd.kind == "update_codewebway" {
+                                    match resolve_client_update_plan(channel.as_ref(), creds, &cmd).await {
+                                        Ok(Some(plan)) => Some(plan),
+                                        Ok(None) => None,
+                                        Err(err) => {
+                                            report_client_update_failure(
+                                                channel.as_ref(),
+                                                creds,
+                                                cmd.execution_id.as_deref().unwrap_or_default(),
+                                                &err,
+                                            )
+                                            .await;
+                                            eprintln!("  Fleet: client update preparation failed: {err}");
+                                            next_heartbeat_at = tokio::time::Instant::now() + interval;
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    None
+                                };
+                                if cmd.kind == "update_codewebway" && update_plan.is_none() {
+                                    next_heartbeat_at = tokio::time::Instant::now() + interval;
+                                    continue;
+                                }
                                 if cmd.kind == "stop_codewebway" {
                                     let exec_id = cmd.execution_id.unwrap_or_default();
                                     let _ = shutdown_tx.send(());
@@ -1620,7 +2106,7 @@ async fn wait_for_stop(
                                         "Terminal stopped before public URL was ready",
                                     )
                                     .await;
-                                    if !exec_id.is_empty() {
+                                    if cmd.kind == "stop_codewebway" && !exec_id.is_empty() {
                                         let _ = report_result_via_channel_or_http(
                                             channel.as_ref(),
                                             creds,
@@ -1630,7 +2116,18 @@ async fn wait_for_stop(
                                         )
                                         .await;
                                     }
-                                    return;
+                                    return RuntimeExitAction::None;
+                                }
+                                if let Some(plan) = update_plan {
+                                    let _ = shutdown_tx.send(());
+                                    report_runtime_start_failed_if_needed(
+                                        channel.as_ref(),
+                                        creds,
+                                        runtime,
+                                        "Terminal stopped before public URL was ready",
+                                    )
+                                    .await;
+                                    return RuntimeExitAction::ApplyClientUpdate(plan);
                                 }
                             }
                         }
@@ -1648,11 +2145,13 @@ async fn wait_for_stop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_realtime_command(
     cfg: &crate::config::Config,
     creds: &mut FleetCredentials,
     state: &mut DaemonState,
     channel: &mut Option<MachineChannelClient>,
+    _pending_update_report: &mut Option<PendingUpdateReport>,
     recent_commands: &mut RecentCommandTracker,
     cmd: PendingCommand,
     poll_interval: std::time::Duration,
@@ -1754,7 +2253,7 @@ async fn handle_realtime_command(
                     };
                     sync_runtime_ready(creds, state, &mut runtime, channel.as_ref()).await;
 
-                    wait_for_stop(
+                    let exit_action = wait_for_stop(
                         creds,
                         state,
                         &mut runtime,
@@ -1771,8 +2270,23 @@ async fn handle_realtime_command(
                     state.runtime_instance_id = None;
                     try_send_channel_snapshot(channel, state, false);
                     write_status_now(creds, state, "after terminal stop").await;
+                    if let RuntimeExitAction::ApplyClientUpdate(plan) = exit_action {
+                        if let Err(err) = apply_client_update_plan(&plan).await {
+                            report_client_update_failure(
+                                channel.as_ref(),
+                                creds,
+                                &plan.execution_id,
+                                &err,
+                            )
+                            .await;
+                            eprintln!("  Fleet: client update failed after runtime stop: {err}");
+                        }
+                    }
                 }
             }
+        }
+        "update_codewebway" => {
+            perform_client_update(channel.as_ref(), creds, &cmd).await?;
         }
         "decommission_client" => {
             eprintln!("  Fleet: decommission requested.");
@@ -2211,6 +2725,10 @@ mod tests {
         }
     }
 
+    fn tmp_update_report_path(dir: &TempDir) -> PathBuf {
+        dir.path().join("pending-update.json")
+    }
+
     fn dummy_channel() -> MachineChannelClient {
         let (outbound_tx, _outbound_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (_command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<PendingCommand>();
@@ -2336,6 +2854,106 @@ mod tests {
         assert!(path.exists());
         assert!(disable_at_path(&path).unwrap());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_normalize_release_version_strips_v_prefix() {
+        assert_eq!(normalize_release_version("v1.2.3"), "1.2.3");
+        assert_eq!(normalize_release_version("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn test_pending_update_report_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_update_report_path(&dir);
+        let report = PendingUpdateReport {
+            execution_id: "ex-update".to_string(),
+            target_version: "1.2.3".to_string(),
+        };
+
+        save_pending_update_report_to(&report, &path).unwrap();
+        let loaded = load_pending_update_report_from(&path).unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.execution_id, "ex-update");
+        assert_eq!(loaded.target_version, "1.2.3");
+
+        assert!(clear_pending_update_report_at(&path).unwrap());
+        assert!(load_pending_update_report_from(&path).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_latest_release_plan_from_selects_matching_asset() {
+        let mut server = mockito::Server::new_async().await;
+        let target = current_release_target().unwrap();
+        let asset_url = format!("{}/download/{}", server.url(), target);
+        let body = serde_json::json!({
+            "tag_name": "v9.9.9",
+            "assets": [
+                {
+                    "name": format!("codewebway-{}", target),
+                    "browser_download_url": asset_url.clone(),
+                },
+                {
+                    "name": "codewebway-unused",
+                    "browser_download_url": format!("{}/download/unused", server.url()),
+                }
+            ]
+        });
+        let release = server
+            .mock("GET", "/releases/latest")
+            .match_header(
+                "user-agent",
+                mockito::Matcher::Regex("^codewebway/".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+
+        let plan = fetch_latest_release_plan_from(&server.url(), "ex-update")
+            .await
+            .unwrap();
+        assert_eq!(plan.execution_id, "ex-update");
+        assert_eq!(plan.target_version, "9.9.9");
+        assert_eq!(plan.download_url, asset_url);
+        release.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_release_plan_by_tag_from_selects_matching_asset() {
+        let mut server = mockito::Server::new_async().await;
+        let target = current_release_target().unwrap();
+        let asset_url = format!("{}/download/tagged/{}", server.url(), target);
+        let body = serde_json::json!({
+            "tag_name": "v9.9.10-mock.1",
+            "assets": [
+                {
+                    "name": format!("codewebway-{}", target),
+                    "browser_download_url": asset_url.clone(),
+                }
+            ]
+        });
+        let release = server
+            .mock("GET", "/releases/tags/v9.9.10-mock.1")
+            .match_header(
+                "user-agent",
+                mockito::Matcher::Regex("^codewebway/".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+
+        let plan = fetch_release_plan_by_tag_from(&server.url(), "ex-update", "v9.9.10-mock.1")
+            .await
+            .unwrap();
+        assert_eq!(plan.execution_id, "ex-update");
+        assert_eq!(plan.target_version, "9.9.10-mock.1");
+        assert_eq!(plan.download_url, asset_url);
+        release.assert_async().await;
     }
 
     #[cfg(target_os = "macos")]

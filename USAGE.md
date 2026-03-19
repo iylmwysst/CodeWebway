@@ -237,7 +237,9 @@ Important fleet-mode behavior:
 - if `--pin` is omitted, CodeWebway loads the stored PIN from `fleet.toml`
 - healthy realtime-connected daemons use the machine channel for stop commands and only fall back to heartbeat polling when the channel is unavailable; legacy/degraded paths still heartbeat every 30 seconds
 - dashboard start/stop requests are delivered through the pending command channel
+- dashboard "Update Client" requests fetch the Fleet-selected `stable`, `latest`, or `mock` CodeWebway release, replace the local binary, and restart the daemon with the existing fleet credential
 - each dashboard "Start Terminal" creates a fresh runtime access token for that run
+- active terminal sessions disconnect briefly during a client update; after restart the machine reconnects to Fleet automatically and does not need to be enabled again
 
 ### Service Installation
 
