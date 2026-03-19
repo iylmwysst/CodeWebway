@@ -632,6 +632,31 @@ async fn report_terminal_stopped_if_idle(
     }
 }
 
+async fn decommission_self_and_exit(
+    channel: Option<&MachineChannelClient>,
+    creds: &FleetCredentials,
+    cmd: &PendingCommand,
+) -> ! {
+    let exec_id = cmd.execution_id.clone().unwrap_or_default();
+    if !exec_id.is_empty() {
+        if let Err(err) =
+            report_result_via_channel_or_http(channel, creds, &exec_id, "decommissioned", true)
+                .await
+        {
+            eprintln!("  Fleet: failed to report decommission success: {err}");
+        }
+    }
+
+    if let Err(err) = uninstall_service() {
+        eprintln!("  Fleet: failed to uninstall auto-start service: {err}");
+    }
+    if let Err(err) = disable() {
+        eprintln!("  Fleet: failed to clear fleet credentials: {err}");
+    }
+    eprintln!("  Fleet: machine decommissioned locally.");
+    std::process::exit(0);
+}
+
 #[derive(Debug, Deserialize)]
 struct RotateTokenResponse {
     data: RotateTokenData,
@@ -935,6 +960,10 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     report_terminal_stopped_if_idle(channel.as_ref(), &creds, &cmd).await;
                     continue;
                 }
+                "decommission_client" => {
+                    eprintln!("  Fleet: decommission requested while idle.");
+                    decommission_self_and_exit(channel.as_ref(), &creds, &cmd).await;
+                }
                 other => {
                     eprintln!("  Fleet: realtime channel unknown command type: {other}");
                     continue;
@@ -1181,6 +1210,10 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 eprintln!("  Fleet: stop received but no terminal running — reporting stopped");
                 report_terminal_stopped_if_idle(channel.as_ref(), &creds, &cmd).await;
             }
+            "decommission_client" => {
+                eprintln!("  Fleet: decommission requested while idle.");
+                decommission_self_and_exit(channel.as_ref(), &creds, &cmd).await;
+            }
             other => eprintln!("  Fleet: unknown command type: {other}"),
         }
 
@@ -1239,11 +1272,15 @@ async fn wait_for_stop(
                 }
                 maybe_cmd = channel_client.recv_command() => {
                     match maybe_cmd {
-                        Some(cmd) if cmd.kind == "stop_codewebway" => {
+                        Some(cmd) if cmd.kind == "stop_codewebway" || cmd.kind == "decommission_client" => {
                             let duplicate = recent_commands.record_or_is_duplicate(&cmd);
                             acknowledge_realtime_command(Some(channel_client), &cmd, duplicate);
                             if duplicate {
                                 continue;
+                            }
+                            if cmd.kind == "decommission_client" {
+                                eprintln!("  Fleet: decommission requested during runtime.");
+                                decommission_self_and_exit(Some(channel_client), creds, &cmd).await;
                             }
                             let exec_id = cmd.execution_id.unwrap_or_default();
                             let _ = shutdown_tx.send(());
@@ -1326,6 +1363,10 @@ async fn wait_for_stop(
                                 if recent_commands.record_or_is_duplicate(&cmd) {
                                     next_heartbeat_at = tokio::time::Instant::now() + interval;
                                     continue;
+                                }
+                                if cmd.kind == "decommission_client" {
+                                    eprintln!("  Fleet: decommission requested during runtime.");
+                                    decommission_self_and_exit(channel.as_ref(), creds, &cmd).await;
                                 }
                                 if cmd.kind == "stop_codewebway" {
                                     let exec_id = cmd.execution_id.unwrap_or_default();
@@ -1492,6 +1533,10 @@ async fn handle_realtime_command(
                     write_status_now(creds, state, "after terminal stop").await;
                 }
             }
+        }
+        "decommission_client" => {
+            eprintln!("  Fleet: decommission requested.");
+            decommission_self_and_exit(channel.as_ref(), creds, &cmd).await;
         }
         other => {
             eprintln!("  Fleet: realtime channel unknown command type: {other}");
