@@ -61,11 +61,15 @@ If you start from an interactive terminal, CodeWebway will prompt for a machine 
 # first-time registration
 codewebway enable
 
+# inspect local registration and remote fleet metadata
+codewebway status
+
 # long-running daemon for dashboard start/stop
 codewebway fleet
 ```
 
 `enable` supports QR/device-code setup for headless machines, stores local fleet credentials, and can install an auto-start service on macOS or Linux.
+`status` prints local fleet registration details and best-effort remote metadata without exposing the raw machine token.
 
 → Full CLI reference and examples: [USAGE.md](USAGE.md)
 → Security model and threat analysis: [SECURITY.md](SECURITY.md)

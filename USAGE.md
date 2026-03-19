@@ -13,6 +13,7 @@ Manual subcommands:
 ```text
 codewebway enable [<token>] [--endpoint <url>] [--pin <pin>] [--service|--no-service]
 codewebway fleet [OPTIONS]
+codewebway status
 codewebway disable
 codewebway uninstall-service
 ```
@@ -45,6 +46,9 @@ codewebway enable
 
 # After registration, run the long-lived fleet daemon
 codewebway fleet
+
+# Inspect local fleet registration and best-effort remote metadata
+codewebway status
 ```
 
 ## Global Options
@@ -187,6 +191,31 @@ After success, credentials are stored in:
 ```text
 ~/.config/codewebway/fleet.toml
 ```
+
+### Inspecting Fleet Status
+
+Use:
+
+```bash
+codewebway status
+```
+
+`status` prints local machine details first, then tries a best-effort remote lookup through WebWayFleet.
+
+Current output includes:
+
+- installed CodeWebway version
+- current OS / architecture
+- local credentials path
+- whether the auto-start service is installed
+- whether fleet mode is enabled locally
+- machine name
+- stored machine ID when available
+- fleet endpoint
+- whether a PIN is configured
+- best-effort remote status, transport mode, last-seen time, owner/project IDs, hostname, and server-reported version
+
+`status` intentionally does not print the raw machine token or the PIN value.
 
 ### Running the Daemon
 
