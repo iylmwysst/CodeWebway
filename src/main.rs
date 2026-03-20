@@ -5,7 +5,7 @@ mod server;
 mod session;
 
 use std::fs;
-use std::io::{self, BufRead as _, IsTerminal};
+use std::io::{self, BufRead as _, IsTerminal, Write as _};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -23,6 +23,12 @@ use server::TerminalManager;
 use tokio::sync::mpsc;
 
 const ZROK_OWNER_DIR: &str = "codewebway";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnableConnectChoice {
+    ScanQrCode,
+    EnterToken,
+}
 
 fn generate_token(len: usize) -> String {
     rand::thread_rng()
@@ -46,6 +52,65 @@ fn validate_token(token: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn prompt_secret(prompt: &str) -> anyhow::Result<String> {
+    Ok(rpassword::prompt_password(prompt)?)
+}
+
+fn prompt_line(prompt: &str) -> anyhow::Result<String> {
+    eprint!("{prompt}");
+    io::stderr().flush()?;
+
+    let mut value = String::new();
+    let bytes_read = io::stdin().lock().read_line(&mut value)?;
+    if bytes_read == 0 {
+        anyhow::bail!("Input cancelled.");
+    }
+    Ok(value.trim().to_string())
+}
+
+fn parse_enable_connect_choice(choice: &str) -> anyhow::Result<EnableConnectChoice> {
+    match choice.trim() {
+        "1" => Ok(EnableConnectChoice::ScanQrCode),
+        "2" => Ok(EnableConnectChoice::EnterToken),
+        _ => anyhow::bail!("Please enter 1 or 2."),
+    }
+}
+
+fn prompt_enable_connect_choice() -> anyhow::Result<EnableConnectChoice> {
+    loop {
+        let choice =
+            prompt_secret("  Choice [1/2]: ").or_else(|_| prompt_line("  Choice [1/2]: "))?;
+        match parse_enable_connect_choice(&choice) {
+            Ok(choice) => return Ok(choice),
+            Err(err) => eprintln!("  {err}"),
+        }
+    }
+}
+
+fn parse_yes_no(answer: &str, default_yes: bool) -> anyhow::Result<bool> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
+    if answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+        return Ok(true);
+    }
+    if answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no") {
+        return Ok(false);
+    }
+    anyhow::bail!("Please enter Y or N.")
+}
+
+fn prompt_yes_no(prompt: &str, default_yes: bool) -> anyhow::Result<bool> {
+    loop {
+        let answer = prompt_line(prompt)?;
+        match parse_yes_no(&answer, default_yes) {
+            Ok(answer) => return Ok(answer),
+            Err(err) => eprintln!("  {err}"),
+        }
+    }
+}
+
 fn resolve_pin(config_pin: Option<String>) -> anyhow::Result<String> {
     if let Some(pin) = config_pin {
         validate_pin(&pin)?;
@@ -55,9 +120,9 @@ fn resolve_pin(config_pin: Option<String>) -> anyhow::Result<String> {
         anyhow::bail!("PIN is required. Run in an interactive terminal or pass --pin.");
     }
 
-    let pin = rpassword::prompt_password("Set PIN (required): ")?;
+    let pin = prompt_secret("Set PIN (required): ")?;
     validate_pin(&pin)?;
-    let confirm = rpassword::prompt_password("Confirm PIN: ")?;
+    let confirm = prompt_secret("Confirm PIN: ")?;
     if pin != confirm {
         anyhow::bail!("PIN confirmation does not match.");
     }
@@ -81,7 +146,7 @@ fn resolve_enable_pin(raw_args: &[String]) -> anyhow::Result<Option<String>> {
     }
 
     loop {
-        let pin = rpassword::prompt_password("  Set terminal PIN (6 digits): ")?;
+        let pin = prompt_secret("  Set terminal PIN (6 digits): ")?;
         if pin.trim().is_empty() {
             eprintln!("  PIN cannot be empty.");
             continue;
@@ -90,7 +155,7 @@ fn resolve_enable_pin(raw_args: &[String]) -> anyhow::Result<Option<String>> {
             eprintln!("  {err}");
             continue;
         }
-        let confirm = rpassword::prompt_password("  Confirm terminal PIN: ")?;
+        let confirm = prompt_secret("  Confirm terminal PIN: ")?;
         if pin != confirm {
             eprintln!("  PIN confirmation does not match.");
             continue;
@@ -705,11 +770,7 @@ async fn main() -> anyhow::Result<()> {
                 );
                 println!("  [2] Enter Token    — paste the token from the Dashboard");
                 println!();
-                eprint!("  Choice [1/2]: ");
-                let mut choice = String::new();
-                io::stdin().lock().read_line(&mut choice).unwrap_or(0);
-
-                if choice.trim() == "1" {
+                if prompt_enable_connect_choice()? == EnableConnectChoice::ScanQrCode {
                     // ── QR path ───────────────────────────────────────────────
                     let pin = resolve_enable_pin(&raw_args)?;
                     fleet::enable_qr(&endpoint, pin).await?;
@@ -722,10 +783,7 @@ async fn main() -> anyhow::Result<()> {
                     } else if force_no_service {
                         false
                     } else if io::stdin().is_terminal() {
-                        eprint!("  Install auto-start service? [Y/n]: ");
-                        let mut answer = String::new();
-                        io::stdin().lock().read_line(&mut answer).unwrap_or(0);
-                        !answer.trim().eq_ignore_ascii_case("n")
+                        prompt_yes_no("  Install auto-start service? [Y/n]: ", true)?
                     } else {
                         false
                     };
@@ -741,10 +799,7 @@ async fn main() -> anyhow::Result<()> {
                     return fleet::run_daemon(cfg).await;
                 } else {
                     // ── manual token prompt ───────────────────────────────────
-                    eprint!("  Enable token from Dashboard: ");
-                    let mut t = String::new();
-                    io::stdin().lock().read_line(&mut t).unwrap_or(0);
-                    let t = t.trim().to_string();
+                    let t = prompt_line("  Enable token from Dashboard: ")?;
                     if t.is_empty() {
                         anyhow::bail!("No token entered.");
                     }
@@ -768,10 +823,7 @@ async fn main() -> anyhow::Result<()> {
             } else if force_no_service {
                 false
             } else if io::stdin().is_terminal() {
-                eprint!("  Install auto-start service? [Y/n]: ");
-                let mut answer = String::new();
-                io::stdin().lock().read_line(&mut answer).unwrap_or(0);
-                !answer.trim().eq_ignore_ascii_case("n")
+                prompt_yes_no("  Install auto-start service? [Y/n]: ", true)?
             } else {
                 false
             };
@@ -970,4 +1022,40 @@ async fn main() -> anyhow::Result<()> {
 
     let _ = handle.server_done.await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_enable_connect_choice, parse_yes_no, EnableConnectChoice};
+
+    #[test]
+    fn test_parse_enable_connect_choice_accepts_qr() {
+        assert_eq!(
+            parse_enable_connect_choice("1").unwrap(),
+            EnableConnectChoice::ScanQrCode
+        );
+    }
+
+    #[test]
+    fn test_parse_enable_connect_choice_accepts_token() {
+        assert_eq!(
+            parse_enable_connect_choice("2").unwrap(),
+            EnableConnectChoice::EnterToken
+        );
+    }
+
+    #[test]
+    fn test_parse_enable_connect_choice_rejects_invalid_input() {
+        assert!(parse_enable_connect_choice("abc").is_err());
+        assert!(parse_enable_connect_choice("").is_err());
+    }
+
+    #[test]
+    fn test_parse_yes_no_defaults_and_validates() {
+        assert!(parse_yes_no("", true).unwrap());
+        assert!(!parse_yes_no("", false).unwrap());
+        assert!(parse_yes_no("yes", false).unwrap());
+        assert!(!parse_yes_no("n", true).unwrap());
+        assert!(parse_yes_no("maybe", true).is_err());
+    }
 }
