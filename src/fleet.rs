@@ -2582,25 +2582,6 @@ struct DevicePollData {
     enable_token: Option<String>,
 }
 
-/// Render a URL as a QR code using Unicode block characters.
-fn qr_module_color(colors: &[Color], width: usize, quiet: usize, x: usize, y: usize) -> Color {
-    if x < quiet || y < quiet || x >= width + quiet || y >= width + quiet {
-        Color::Light
-    } else {
-        let idx = (y - quiet) * width + (x - quiet);
-        colors[idx]
-    }
-}
-
-fn ansi_qr_half_block(top: Color, bottom: Color) -> &'static str {
-    match (top, bottom) {
-        (Color::Dark, Color::Dark) => "\x1b[38;5;0m\x1b[48;5;0m▀\x1b[0m",
-        (Color::Dark, Color::Light) => "\x1b[38;5;0m\x1b[48;5;15m▀\x1b[0m",
-        (Color::Light, Color::Dark) => "\x1b[38;5;15m\x1b[48;5;0m▀\x1b[0m",
-        (Color::Light, Color::Light) => "\x1b[38;5;15m\x1b[48;5;15m▀\x1b[0m",
-    }
-}
-
 pub fn render_qr(url: &str) {
     if let Ok(code) = QrCode::new(url) {
         // Use explicit ANSI background colors so QR remains scannable in both
@@ -2611,13 +2592,20 @@ pub fn render_qr(url: &str) {
             let width = code.width();
             let colors = code.to_colors();
             let quiet = 2usize;
-            let size = width + quiet * 2;
-            for y in (0..size).step_by(2) {
+            for y in 0..(width + quiet * 2) {
                 print!("  ");
-                for x in 0..size {
-                    let top = qr_module_color(&colors, width, quiet, x, y);
-                    let bottom = qr_module_color(&colors, width, quiet, x, y + 1);
-                    print!("{}", ansi_qr_half_block(top, bottom));
+                for x in 0..(width + quiet * 2) {
+                    let module =
+                        if x < quiet || y < quiet || x >= width + quiet || y >= width + quiet {
+                            Color::Light
+                        } else {
+                            let idx = (y - quiet) * width + (x - quiet);
+                            colors[idx]
+                        };
+                    match module {
+                        Color::Dark => print!("\x1b[48;5;0m  \x1b[0m"),
+                        Color::Light => print!("\x1b[48;5;15m  \x1b[0m"),
+                    }
                 }
                 println!();
             }
@@ -2786,27 +2774,6 @@ mod tests {
             "13"
         );
         assert!(request.headers().get("sec-websocket-key").is_some());
-    }
-
-    #[test]
-    fn test_qr_module_color_applies_quiet_zone() {
-        let colors = vec![Color::Dark];
-
-        assert_eq!(qr_module_color(&colors, 1, 2, 0, 0), Color::Light);
-        assert_eq!(qr_module_color(&colors, 1, 2, 2, 2), Color::Dark);
-        assert_eq!(qr_module_color(&colors, 1, 2, 4, 4), Color::Light);
-    }
-
-    #[test]
-    fn test_ansi_qr_half_block_encodes_top_and_bottom_colors() {
-        assert_eq!(
-            ansi_qr_half_block(Color::Dark, Color::Light),
-            "\x1b[38;5;0m\x1b[48;5;15m▀\x1b[0m"
-        );
-        assert_eq!(
-            ansi_qr_half_block(Color::Light, Color::Dark),
-            "\x1b[38;5;15m\x1b[48;5;0m▀\x1b[0m"
-        );
     }
 
     #[test]

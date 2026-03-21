@@ -78,8 +78,7 @@ fn parse_enable_connect_choice(choice: &str) -> anyhow::Result<EnableConnectChoi
 
 fn prompt_enable_connect_choice() -> anyhow::Result<EnableConnectChoice> {
     loop {
-        let choice =
-            prompt_secret("  Choice [1/2]: ").or_else(|_| prompt_line("  Choice [1/2]: "))?;
+        let choice = prompt_line("  Choice [1/2]: ")?;
         match parse_enable_connect_choice(&choice) {
             Ok(choice) => return Ok(choice),
             Err(err) => eprintln!("  {err}"),
