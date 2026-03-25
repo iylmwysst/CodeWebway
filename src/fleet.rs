@@ -1927,6 +1927,9 @@ async fn wait_for_stop(
                                 "Terminal stopped before public URL was ready",
                             )
                             .await;
+                            if server_done.await.is_err() {
+                                eprintln!("  Fleet: server stop signal dropped unexpectedly.");
+                            }
                             if cmd.kind == "stop_codewebway" && !exec_id.is_empty() {
                                 let _ = report_result_via_channel_or_http(
                                     Some(channel_client),
@@ -3498,5 +3501,78 @@ mod tests {
                 | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
         ));
         heartbeat.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_stop_command_waits_for_runtime_shutdown_before_reporting_stopped() {
+        let mut server = mockito::Server::new_async().await;
+        let report = server
+            .mock("POST", "/api/v1/agent/report")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"ok":true}}"#)
+            .create_async()
+            .await;
+
+        let creds = make_creds(&server.url());
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let (healthy_channel, command_tx) = live_dummy_channel();
+
+        let mut wait = tokio::spawn(async move {
+            let mut state = DaemonState::new();
+            state.status = "running".to_string();
+            state.active_url = Some("https://live.public.example.com".to_string());
+            state.runtime_instance_id = Some("runtime-live".to_string());
+            state.last_d1_write = std::time::Instant::now();
+            let mut runtime = RunningRuntime {
+                execution_id: "ex-live".to_string(),
+                access_token: "token-live".to_string(),
+                runtime_instance_id: "runtime-live".to_string(),
+                public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    "https://live.public.example.com".to_string(),
+                ))),
+                ready_reported: true,
+            };
+            let mut channel = Some(healthy_channel);
+            let mut recent_commands = RecentCommandTracker::new();
+            wait_for_stop(
+                &creds,
+                &mut state,
+                &mut runtime,
+                &mut channel,
+                &mut recent_commands,
+                shutdown_tx,
+                server_done_rx,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+        });
+
+        command_tx
+            .send(PendingCommand {
+                execution_id: Some("ex-stop".to_string()),
+                command_key: Some("cmd-stop".to_string()),
+                kind: "stop_codewebway".to_string(),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(matches!(shutdown_rx.try_recv(), Ok(())));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut wait)
+                .await
+                .is_err()
+        );
+
+        let _ = server_done_tx.send(());
+
+        tokio::time::timeout(std::time::Duration::from_millis(250), wait)
+            .await
+            .unwrap()
+            .unwrap();
+        report.assert_async().await;
     }
 }

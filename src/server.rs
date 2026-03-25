@@ -1689,7 +1689,7 @@ fn access_paused_response() -> Response {
 }
 
 async fn auth_session(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
-    if let Some(session_token) = has_valid_session_cookie(&headers, &state, false) {
+    if let Some(session_token) = has_valid_session_cookie(&headers, &state, true) {
         let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
         return (StatusCode::OK, [(header::SET_COOKIE, set_cookie)], "OK").into_response();
     }
@@ -1697,7 +1697,7 @@ async fn auth_session(headers: HeaderMap, State(state): State<Arc<AppState>>) ->
 }
 
 async fn auth_session_status(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
-    let Some(session_token) = has_valid_session_cookie(&headers, &state, false) else {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     let now = Instant::now();
@@ -4380,6 +4380,46 @@ mod tests {
             .lock()
             .unwrap()
             .is_valid(&session_token, Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn test_auth_session_status_touches_idle_session() {
+        use axum::{body::Body, http::Request};
+        use tower::util::ServiceExt;
+
+        let state = make_state(false);
+        let now = Instant::now();
+        let session_token = state.sessions.lock().unwrap().create(now);
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let record = sessions.by_token.get_mut(&session_token).unwrap();
+            record.last_activity_at = now - Duration::from_secs(1799);
+        }
+
+        let app = router(state.clone());
+        let req = Request::builder()
+            .uri("/auth/session/status")
+            .header(
+                header::COOKIE,
+                format!("codewebway_session={session_token}"),
+            )
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let remaining_idle = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let (idle, _) = sessions
+                .remaining_secs(&session_token, Instant::now())
+                .expect("session should still be valid after status touch");
+            idle
+        };
+        assert!(
+            remaining_idle > 1700,
+            "remaining idle seconds should be reset, got {remaining_idle}"
+        );
     }
 
     #[tokio::test]

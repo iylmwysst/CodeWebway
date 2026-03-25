@@ -76,6 +76,23 @@ Dashboard-driven client updates restart the local daemon with the existing fleet
 → Security model and threat analysis: [SECURITY.md](SECURITY.md)
 → Contributing and project scope: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Release
+
+Fastest repeatable release command:
+
+```bash
+./scripts/release.sh 1.1.0-beta.49
+```
+
+What it does:
+
+- bumps `Cargo.toml`
+- runs `cargo fmt --all`, `cargo test`, and `cargo clippy --all-targets -- -D warnings`
+- builds the four installer assets expected by `install.sh`
+- commits, tags, pushes, and creates the GitHub release
+
+Use the next version number when you run it again.
+
 ## When to Use CodeWebway
 
 CodeWebway is optimized for a specific gap: **single-operator remote access from a machine you do not fully control the network on.**
