@@ -30,6 +30,14 @@ pub struct FleetCredentials {
     pub machine_token_issued_at: u64,
     /// PIN stored during `enable`; used by the daemon so no flag is needed at runtime.
     pub pin: Option<String>,
+    #[serde(default)]
+    pub public_provider: Option<String>,
+    #[serde(default)]
+    pub public_hostname: Option<String>,
+    #[serde(default)]
+    pub cloudflare_tunnel_id: Option<String>,
+    #[serde(default)]
+    pub cloudflare_tunnel_token: Option<String>,
 }
 
 const MACHINE_TOKEN_ROTATE_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
@@ -134,6 +142,26 @@ pub async fn enable_to_path(
         machine_id: resp.data.machine_id,
         machine_token_issued_at: current_epoch_millis(),
         pin: Some(pin.clone()),
+        public_provider: resp
+            .data
+            .public_ingress
+            .as_ref()
+            .map(|ingress| ingress.provider.clone()),
+        public_hostname: resp
+            .data
+            .public_ingress
+            .as_ref()
+            .map(|ingress| ingress.hostname.clone()),
+        cloudflare_tunnel_id: resp
+            .data
+            .public_ingress
+            .as_ref()
+            .map(|ingress| ingress.tunnel_id.clone()),
+        cloudflare_tunnel_token: resp
+            .data
+            .public_ingress
+            .as_ref()
+            .map(|ingress| ingress.tunnel_token.clone()),
     };
     save_credentials_to(&creds, path)?;
 
@@ -276,6 +304,27 @@ struct EnableResponseData {
     machine_token: String,
     #[serde(default)]
     machine_id: Option<String>,
+    #[serde(default)]
+    public_ingress: Option<EnablePublicIngress>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnablePublicIngress {
+    provider: String,
+    hostname: String,
+    tunnel_id: String,
+    tunnel_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicIngressResponse {
+    data: PublicIngressResponseData,
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicIngressResponseData {
+    #[serde(default)]
+    public_ingress: Option<EnablePublicIngress>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -452,6 +501,62 @@ async fn fetch_remote_status(creds: &FleetCredentials) -> Result<RemoteStatusDat
         .json::<RemoteStatusResponse>()
         .await?;
     Ok(response.data)
+}
+
+fn apply_public_ingress_to_credentials(
+    creds: &mut FleetCredentials,
+    ingress: Option<&EnablePublicIngress>,
+) -> bool {
+    let provider = ingress.map(|value| value.provider.clone());
+    let hostname = ingress.map(|value| value.hostname.clone());
+    let tunnel_id = ingress.map(|value| value.tunnel_id.clone());
+    let tunnel_token = ingress.map(|value| value.tunnel_token.clone());
+
+    let changed = creds.public_provider != provider
+        || creds.public_hostname != hostname
+        || creds.cloudflare_tunnel_id != tunnel_id
+        || creds.cloudflare_tunnel_token != tunnel_token;
+
+    if changed {
+        creds.public_provider = provider;
+        creds.public_hostname = hostname;
+        creds.cloudflare_tunnel_id = tunnel_id;
+        creds.cloudflare_tunnel_token = tunnel_token;
+    }
+
+    changed
+}
+
+async fn refresh_public_ingress(creds: &mut FleetCredentials) -> Result<bool> {
+    refresh_public_ingress_to_path(creds, &credentials_path()).await
+}
+
+async fn refresh_public_ingress_to_path(creds: &mut FleetCredentials, path: &Path) -> Result<bool> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!(
+            "{}/api/v1/agent/public-ingress",
+            creds.fleet_endpoint
+        ))
+        .bearer_auth(&creds.machine_token)
+        .send()
+        .await?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
+    }
+
+    let payload = response
+        .error_for_status()?
+        .json::<PublicIngressResponse>()
+        .await?;
+
+    if !apply_public_ingress_to_credentials(creds, payload.data.public_ingress.as_ref()) {
+        return Ok(false);
+    }
+
+    save_credentials_to(creds, path)?;
+    Ok(true)
 }
 
 fn summarize_remote_status_error(err: &anyhow::Error) -> String {
@@ -1404,13 +1509,13 @@ struct RunningRuntime {
     execution_id: String,
     access_token: String,
     runtime_instance_id: String,
-    zrok_url_state: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    public_url_state: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     ready_reported: bool,
 }
 
 impl RunningRuntime {
     fn current_url(&self) -> Option<String> {
-        self.zrok_url_state
+        self.public_url_state
             .lock()
             .ok()
             .and_then(|current| current.clone())
@@ -1494,8 +1599,18 @@ async fn write_status_now(creds: &FleetCredentials, state: &mut DaemonState, con
 
 // ─── Daemon loop ───────────────────────────────────────────────────────────────
 
-pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
+pub async fn run_daemon(mut cfg: crate::config::Config) -> anyhow::Result<()> {
     let mut creds = load_credentials().context("Not enabled. Run: codewebway enable <token>")?;
+    if let Err(err) = refresh_public_ingress(&mut creds).await {
+        eprintln!("  Fleet: public ingress refresh skipped: {err}");
+    }
+    if creds.public_provider.as_deref() == Some("cloudflare") && cfg.port != 8080 {
+        eprintln!(
+            "  Fleet: Cloudflare public ingress uses local port 8080; overriding configured port {}",
+            cfg.port
+        );
+        cfg.port = 8080;
+    }
     let mut pending_update_report = match load_pending_update_report() {
         Ok(report) => report,
         Err(err) => {
@@ -1810,6 +1925,13 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                 {
                     fleet_cfg.temp_link_max_uses = max_uses as u32;
                 }
+                if creds.public_provider.as_deref() == Some("cloudflare")
+                    && creds.cloudflare_tunnel_token.is_none()
+                {
+                    if let Err(err) = refresh_public_ingress(&mut creds).await {
+                        eprintln!("  Fleet: public ingress refresh before launch failed: {err}");
+                    }
+                }
 
                 match crate::start_server(fleet_cfg).await {
                     Err(e) => {
@@ -1827,7 +1949,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                     }
                     Ok(handle) => {
                         state.status = "running".to_string();
-                        state.active_url = handle.current_zrok_url();
+                        state.active_url = handle.current_public_url();
                         state.runtime_instance_id = Some(runtime_instance_id.clone());
                         state.last_d1_write =
                             std::time::Instant::now() - std::time::Duration::from_secs(400);
@@ -1837,7 +1959,7 @@ pub async fn run_daemon(cfg: crate::config::Config) -> anyhow::Result<()> {
                             execution_id: exec_id,
                             access_token: handle.token.clone(),
                             runtime_instance_id,
-                            zrok_url_state: handle.zrok_url_state.clone(),
+                            public_url_state: handle.public_url_state.clone(),
                             ready_reported: false,
                         };
                         sync_runtime_ready(&creds, &mut state, &mut runtime, channel.as_ref())
@@ -2223,6 +2345,13 @@ async fn handle_realtime_command(
             {
                 fleet_cfg.temp_link_max_uses = max_uses as u32;
             }
+            if creds.public_provider.as_deref() == Some("cloudflare")
+                && creds.cloudflare_tunnel_token.is_none()
+            {
+                if let Err(err) = refresh_public_ingress(creds).await {
+                    eprintln!("  Fleet: public ingress refresh before launch failed: {err}");
+                }
+            }
 
             match crate::start_server(fleet_cfg).await {
                 Err(e) => {
@@ -2240,7 +2369,7 @@ async fn handle_realtime_command(
                 }
                 Ok(handle) => {
                     state.status = "running".to_string();
-                    state.active_url = handle.current_zrok_url();
+                    state.active_url = handle.current_public_url();
                     state.runtime_instance_id = Some(runtime_instance_id.clone());
                     state.last_d1_write =
                         std::time::Instant::now() - std::time::Duration::from_secs(400);
@@ -2250,7 +2379,7 @@ async fn handle_realtime_command(
                         execution_id: exec_id,
                         access_token: handle.token.clone(),
                         runtime_instance_id,
-                        zrok_url_state: handle.zrok_url_state.clone(),
+                        public_url_state: handle.public_url_state.clone(),
                         ready_reported: false,
                     };
                     sync_runtime_ready(creds, state, &mut runtime, channel.as_ref()).await;
@@ -2702,6 +2831,10 @@ mod tests {
             machine_id: Some("mid_test".to_string()),
             machine_token_issued_at: 1_700_000_000_000,
             pin: Some("123456".to_string()),
+            public_provider: None,
+            public_hostname: None,
+            cloudflare_tunnel_id: None,
+            cloudflare_tunnel_token: None,
         }
     }
 
@@ -3073,6 +3206,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_enable_saves_public_ingress_credentials_when_present() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("POST", "/api/v1/agent/enable")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":{"machine_token":"mt_xyz","machine_id":"mid1","public_ingress":{"provider":"cloudflare","hostname":"m-mid1.codewebway.com","tunnel_id":"tunnel-1","tunnel_token":"tunnel-token-1"}}}"#,
+            )
+            .create_async()
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir);
+        enable_to_path(
+            &server.url(),
+            "enable_tok_123",
+            Some("123456".to_string()),
+            &path,
+        )
+        .await
+        .unwrap();
+
+        let creds = load_credentials_from(&path).unwrap();
+        assert_eq!(creds.public_provider.as_deref(), Some("cloudflare"));
+        assert_eq!(
+            creds.public_hostname.as_deref(),
+            Some("m-mid1.codewebway.com")
+        );
+        assert_eq!(creds.cloudflare_tunnel_id.as_deref(), Some("tunnel-1"));
+        assert_eq!(
+            creds.cloudflare_tunnel_token.as_deref(),
+            Some("tunnel-token-1")
+        );
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_public_ingress_updates_credentials_when_present() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("GET", "/api/v1/agent/public-ingress")
+            .match_header("authorization", "Bearer mt_test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":{"public_ingress":{"provider":"cloudflare","hostname":"m-machine-1.codewebway.com","tunnel_id":"tunnel-1","tunnel_token":"tunnel-token-1"}}}"#,
+            )
+            .create_async()
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir);
+        let mut creds = make_creds(&server.url());
+        save_credentials_to(&creds, &path).unwrap();
+
+        let changed = refresh_public_ingress_to_path(&mut creds, &path)
+            .await
+            .unwrap();
+        assert!(changed);
+        assert_eq!(creds.public_provider.as_deref(), Some("cloudflare"));
+        assert_eq!(
+            creds.public_hostname.as_deref(),
+            Some("m-machine-1.codewebway.com")
+        );
+        assert_eq!(creds.cloudflare_tunnel_id.as_deref(), Some("tunnel-1"));
+        assert_eq!(
+            creds.cloudflare_tunnel_token.as_deref(),
+            Some("tunnel-token-1")
+        );
+        let saved = load_credentials_from(&path).unwrap();
+        assert_eq!(saved.public_provider.as_deref(), Some("cloudflare"));
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_fetch_remote_status_returns_metadata() {
         let mut server = mockito::Server::new_async().await;
         let m = server
@@ -3286,7 +3495,7 @@ mod tests {
             execution_id: "ex-late".to_string(),
             access_token: "token-123".to_string(),
             runtime_instance_id: "runtime-1".to_string(),
-            zrok_url_state: shared_url.clone(),
+            public_url_state: shared_url.clone(),
             ready_reported: false,
         };
 
@@ -3380,7 +3589,7 @@ mod tests {
                 execution_id: "ex-live".to_string(),
                 access_token: "token-live".to_string(),
                 runtime_instance_id: "runtime-live".to_string(),
-                zrok_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
                     "https://live.zrok.io".to_string(),
                 ))),
                 ready_reported: true,
@@ -3442,7 +3651,7 @@ mod tests {
                 execution_id: "ex-live".to_string(),
                 access_token: "token-live".to_string(),
                 runtime_instance_id: "runtime-live".to_string(),
-                zrok_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
                     "https://live.zrok.io".to_string(),
                 ))),
                 ready_reported: true,
@@ -3503,7 +3712,7 @@ mod tests {
                 execution_id: "ex-live".to_string(),
                 access_token: "token-live".to_string(),
                 runtime_instance_id: "runtime-live".to_string(),
-                zrok_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
                     "https://live.zrok.io".to_string(),
                 ))),
                 ready_reported: true,
