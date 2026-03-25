@@ -35,6 +35,8 @@ pub struct FleetCredentials {
     #[serde(default)]
     pub public_hostname: Option<String>,
     #[serde(default)]
+    pub public_runtime_instance_id: Option<String>,
+    #[serde(default)]
     pub cloudflare_tunnel_id: Option<String>,
     #[serde(default)]
     pub cloudflare_tunnel_token: Option<String>,
@@ -151,7 +153,12 @@ pub async fn enable_to_path(
             .data
             .public_ingress
             .as_ref()
-            .map(|ingress| ingress.hostname.clone()),
+            .and_then(|ingress| ingress.hostname.clone()),
+        public_runtime_instance_id: resp
+            .data
+            .public_ingress
+            .as_ref()
+            .and_then(|ingress| ingress.runtime_instance_id.clone()),
         cloudflare_tunnel_id: resp
             .data
             .public_ingress
@@ -311,7 +318,10 @@ struct EnableResponseData {
 #[derive(Debug, Deserialize)]
 struct EnablePublicIngress {
     provider: String,
-    hostname: String,
+    #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
+    runtime_instance_id: Option<String>,
     tunnel_id: String,
     tunnel_token: String,
 }
@@ -509,18 +519,21 @@ fn apply_public_ingress_to_credentials(
     ingress: Option<&EnablePublicIngress>,
 ) -> bool {
     let provider = ingress.map(|value| value.provider.clone());
-    let hostname = ingress.map(|value| value.hostname.clone());
+    let hostname = ingress.and_then(|value| value.hostname.clone());
+    let runtime_instance_id = ingress.and_then(|value| value.runtime_instance_id.clone());
     let tunnel_id = ingress.map(|value| value.tunnel_id.clone());
     let tunnel_token = ingress.map(|value| value.tunnel_token.clone());
 
     let changed = creds.public_provider != provider
         || creds.public_hostname != hostname
+        || creds.public_runtime_instance_id != runtime_instance_id
         || creds.cloudflare_tunnel_id != tunnel_id
         || creds.cloudflare_tunnel_token != tunnel_token;
 
     if changed {
         creds.public_provider = provider;
         creds.public_hostname = hostname;
+        creds.public_runtime_instance_id = runtime_instance_id;
         creds.cloudflare_tunnel_id = tunnel_id;
         creds.cloudflare_tunnel_token = tunnel_token;
     }
@@ -558,6 +571,104 @@ async fn refresh_public_ingress_to_path(creds: &mut FleetCredentials, path: &Pat
 
     save_credentials_to(creds, path)?;
     Ok(true)
+}
+
+async fn lease_runtime_public_ingress(
+    creds: &mut FleetCredentials,
+    runtime_instance_id: &str,
+) -> Result<bool> {
+    lease_runtime_public_ingress_to_path(creds, runtime_instance_id, &credentials_path()).await
+}
+
+async fn lease_runtime_public_ingress_to_path(
+    creds: &mut FleetCredentials,
+    runtime_instance_id: &str,
+    path: &Path,
+) -> Result<bool> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!(
+            "{}/api/v1/agent/public-ingress/runtime",
+            creds.fleet_endpoint
+        ))
+        .bearer_auth(&creds.machine_token)
+        .json(&serde_json::json!({
+            "runtime_instance_id": runtime_instance_id,
+        }))
+        .send()
+        .await?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
+    }
+
+    let payload = response
+        .error_for_status()?
+        .json::<PublicIngressResponse>()
+        .await?;
+
+    if payload.data.public_ingress.is_none() {
+        anyhow::bail!("Fleet API did not return Cloudflare runtime ingress.");
+    }
+
+    let changed = apply_public_ingress_to_credentials(creds, payload.data.public_ingress.as_ref());
+    if changed {
+        save_credentials_to(creds, path)?;
+    }
+    Ok(changed)
+}
+
+async fn revoke_runtime_public_ingress(
+    creds: &mut FleetCredentials,
+    runtime_instance_id: &str,
+) -> Result<bool> {
+    revoke_runtime_public_ingress_to_path(creds, runtime_instance_id, &credentials_path()).await
+}
+
+async fn revoke_runtime_public_ingress_to_path(
+    creds: &mut FleetCredentials,
+    runtime_instance_id: &str,
+    path: &Path,
+) -> Result<bool> {
+    #[derive(Debug, Deserialize)]
+    struct RuntimeIngressRevokeResponse {
+        data: RuntimeIngressRevokeData,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RuntimeIngressRevokeData {
+        revoked: bool,
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!(
+            "{}/api/v1/agent/public-ingress/runtime/revoke",
+            creds.fleet_endpoint
+        ))
+        .bearer_auth(&creds.machine_token)
+        .json(&serde_json::json!({
+            "runtime_instance_id": runtime_instance_id,
+        }))
+        .send()
+        .await?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
+    }
+
+    let payload = response
+        .error_for_status()?
+        .json::<RuntimeIngressRevokeResponse>()
+        .await?;
+
+    if creds.public_runtime_instance_id.as_deref() == Some(runtime_instance_id) {
+        creds.public_hostname = None;
+        creds.public_runtime_instance_id = None;
+        save_credentials_to(creds, path)?;
+    }
+
+    Ok(payload.data.revoked)
 }
 
 fn summarize_remote_status_error(err: &anyhow::Error) -> String {
@@ -2100,9 +2211,43 @@ async fn handle_realtime_command(
                 }
             }
 
+            let cloudflare_runtime_leased =
+                if creds.public_provider.as_deref() == Some("cloudflare") {
+                    match lease_runtime_public_ingress(creds, &runtime_instance_id).await {
+                        Ok(_) => true,
+                        Err(err) => {
+                            eprintln!(
+                                "  Fleet: runtime public ingress lease before launch failed: {err}"
+                            );
+                            if !exec_id.is_empty() {
+                                let _ = report_result_via_channel_or_http(
+                                    channel.as_ref(),
+                                    creds,
+                                    &exec_id,
+                                    &format!("Cloudflare public ingress lease failed: {err}"),
+                                    false,
+                                )
+                                .await;
+                            }
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    false
+                };
+
             match crate::start_server(fleet_cfg).await {
                 Err(e) => {
                     eprintln!("  Fleet: failed to start server: {e}");
+                    if cloudflare_runtime_leased {
+                        if let Err(revoke_err) =
+                            revoke_runtime_public_ingress(creds, &runtime_instance_id).await
+                        {
+                            eprintln!(
+                                "  Fleet: runtime public ingress revoke after start failure failed: {revoke_err}"
+                            );
+                        }
+                    }
                     if !exec_id.is_empty() {
                         let _ = report_result_via_channel_or_http(
                             channel.as_ref(),
@@ -2125,7 +2270,7 @@ async fn handle_realtime_command(
                     let mut runtime = RunningRuntime {
                         execution_id: exec_id,
                         access_token: handle.token.clone(),
-                        runtime_instance_id,
+                        runtime_instance_id: runtime_instance_id.clone(),
                         public_url_state: handle.public_url_state.clone(),
                         ready_reported: false,
                     };
@@ -2148,6 +2293,15 @@ async fn handle_realtime_command(
                     state.runtime_instance_id = None;
                     try_send_channel_snapshot(channel, state, false);
                     write_status_now(creds, state, "after terminal stop").await;
+                    if cloudflare_runtime_leased {
+                        if let Err(revoke_err) =
+                            revoke_runtime_public_ingress(creds, &runtime_instance_id).await
+                        {
+                            eprintln!(
+                                "  Fleet: runtime public ingress revoke after terminal stop failed: {revoke_err}"
+                            );
+                        }
+                    }
                     if let RuntimeExitAction::ApplyClientUpdate(plan) = exit_action {
                         if let Err(err) = apply_client_update_plan(&plan).await {
                             report_client_update_failure(
@@ -2580,6 +2734,7 @@ mod tests {
             pin: Some("123456".to_string()),
             public_provider: None,
             public_hostname: None,
+            public_runtime_instance_id: None,
             cloudflare_tunnel_id: None,
             cloudflare_tunnel_token: None,
         }

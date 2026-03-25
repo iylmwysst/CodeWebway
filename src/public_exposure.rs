@@ -1026,6 +1026,7 @@ mod tests {
             pin: Some("123456".to_string()),
             public_provider: Some("cloudflare".to_string()),
             public_hostname: Some("m-machine-1.codewebway.com".to_string()),
+            public_runtime_instance_id: Some("runtime-1".to_string()),
             cloudflare_tunnel_id: Some("tunnel-1".to_string()),
             cloudflare_tunnel_token: Some("token-1".to_string()),
         }
