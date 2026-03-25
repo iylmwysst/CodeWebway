@@ -88,7 +88,7 @@ fi
 
 git commit -m "build: release $TAG"
 git tag -a "$TAG" -m "$TAG"
-git push origin main
+git push origin HEAD:main
 git push origin "$TAG"
 gh release create "$TAG" \
   dist/codewebway-aarch64-apple-darwin \
