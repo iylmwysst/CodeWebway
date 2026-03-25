@@ -6,7 +6,7 @@ use qrcode::QrCode;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use reqwest::header::USER_AGENT;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -112,7 +112,7 @@ pub async fn enable_to_path(
     path: &Path,
 ) -> Result<()> {
     let client = reqwest::Client::new();
-    let resp = client
+    let response = client
         .post(format!("{fleet_endpoint}/api/v1/agent/enable"))
         .json(&serde_json::json!({
             "enable_token": enable_token,
@@ -122,10 +122,12 @@ pub async fn enable_to_path(
             "agent_version": env!("CARGO_PKG_VERSION"),
         }))
         .send()
-        .await?
-        .error_for_status()?
-        .json::<EnableResponse>()
         .await?;
+    let resp = parse_json_response::<EnableResponse>(
+        response.error_for_status()?,
+        "Fleet API returned an invalid enable response",
+    )
+    .await?;
 
     let machine_name = hostname();
     let pin = match pin {
@@ -148,7 +150,7 @@ pub async fn enable_to_path(
             .data
             .public_ingress
             .as_ref()
-            .map(|ingress| ingress.provider.clone()),
+            .and_then(|ingress| ingress.provider.clone()),
         public_hostname: resp
             .data
             .public_ingress
@@ -163,12 +165,12 @@ pub async fn enable_to_path(
             .data
             .public_ingress
             .as_ref()
-            .map(|ingress| ingress.tunnel_id.clone()),
+            .and_then(|ingress| ingress.tunnel_id.clone()),
         cloudflare_tunnel_token: resp
             .data
             .public_ingress
             .as_ref()
-            .map(|ingress| ingress.tunnel_token.clone()),
+            .and_then(|ingress| ingress.tunnel_token.clone()),
     };
     save_credentials_to(&creds, path)?;
 
@@ -317,13 +319,18 @@ struct EnableResponseData {
 
 #[derive(Debug, Deserialize)]
 struct EnablePublicIngress {
-    provider: String,
+    #[serde(default, alias = "public_provider")]
+    provider: Option<String>,
     #[serde(default)]
+    #[serde(alias = "public_hostname")]
     hostname: Option<String>,
     #[serde(default)]
+    #[serde(alias = "public_runtime_instance_id")]
     runtime_instance_id: Option<String>,
-    tunnel_id: String,
-    tunnel_token: String,
+    #[serde(default, alias = "cloudflare_tunnel_id")]
+    tunnel_id: Option<String>,
+    #[serde(default, alias = "cloudflare_tunnel_token")]
+    tunnel_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,21 +515,52 @@ async fn fetch_remote_status(creds: &FleetCredentials) -> Result<RemoteStatusDat
         .bearer_auth(&creds.machine_token)
         .send()
         .await?
-        .error_for_status()?
-        .json::<RemoteStatusResponse>()
-        .await?;
+        .error_for_status()?;
+    let response = parse_json_response::<RemoteStatusResponse>(
+        response,
+        "Fleet API returned an invalid remote status response",
+    )
+    .await?;
     Ok(response.data)
+}
+
+fn response_body_excerpt(body: &str) -> String {
+    const LIMIT: usize = 400;
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "<empty body>".to_string();
+    }
+
+    let mut excerpt = trimmed.chars().take(LIMIT).collect::<String>();
+    if trimmed.chars().count() > LIMIT {
+        excerpt.push_str("...");
+    }
+    excerpt
+}
+
+async fn parse_json_response<T: DeserializeOwned>(
+    response: reqwest::Response,
+    context: &str,
+) -> Result<T> {
+    let status = response.status();
+    let body = response.text().await?;
+    serde_json::from_str::<T>(&body).with_context(|| {
+        format!(
+            "{context} (status {status}): {}",
+            response_body_excerpt(&body)
+        )
+    })
 }
 
 fn apply_public_ingress_to_credentials(
     creds: &mut FleetCredentials,
     ingress: Option<&EnablePublicIngress>,
 ) -> bool {
-    let provider = ingress.map(|value| value.provider.clone());
+    let provider = ingress.and_then(|value| value.provider.clone());
     let hostname = ingress.and_then(|value| value.hostname.clone());
     let runtime_instance_id = ingress.and_then(|value| value.runtime_instance_id.clone());
-    let tunnel_id = ingress.map(|value| value.tunnel_id.clone());
-    let tunnel_token = ingress.map(|value| value.tunnel_token.clone());
+    let tunnel_id = ingress.and_then(|value| value.tunnel_id.clone());
+    let tunnel_token = ingress.and_then(|value| value.tunnel_token.clone());
 
     let changed = creds.public_provider != provider
         || creds.public_hostname != hostname
@@ -560,10 +598,12 @@ async fn refresh_public_ingress_to_path(creds: &mut FleetCredentials, path: &Pat
         anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
     }
 
-    let payload = response
-        .error_for_status()?
-        .json::<PublicIngressResponse>()
-        .await?;
+    let payload = response.error_for_status()?;
+    let payload = parse_json_response::<PublicIngressResponse>(
+        payload,
+        "Fleet API returned an invalid public ingress response",
+    )
+    .await?;
 
     if !apply_public_ingress_to_credentials(creds, payload.data.public_ingress.as_ref()) {
         return Ok(false);
@@ -602,10 +642,12 @@ async fn lease_runtime_public_ingress_to_path(
         anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
     }
 
-    let payload = response
-        .error_for_status()?
-        .json::<PublicIngressResponse>()
-        .await?;
+    let payload = response.error_for_status()?;
+    let payload = parse_json_response::<PublicIngressResponse>(
+        payload,
+        "Fleet API returned an invalid runtime ingress lease response",
+    )
+    .await?;
 
     if payload.data.public_ingress.is_none() {
         anyhow::bail!("Fleet API did not return Cloudflare runtime ingress.");
@@ -657,10 +699,12 @@ async fn revoke_runtime_public_ingress_to_path(
         anyhow::bail!("Machine token rejected — machine may have been deleted from Dashboard.");
     }
 
-    let payload = response
-        .error_for_status()?
-        .json::<RuntimeIngressRevokeResponse>()
-        .await?;
+    let payload = response.error_for_status()?;
+    let payload = parse_json_response::<RuntimeIngressRevokeResponse>(
+        payload,
+        "Fleet API returned an invalid runtime ingress revoke response",
+    )
+    .await?;
 
     if creds.public_runtime_instance_id.as_deref() == Some(runtime_instance_id) {
         creds.public_hostname = None;
@@ -3188,6 +3232,46 @@ mod tests {
         );
         let saved = load_credentials_from(&path).unwrap();
         assert_eq!(saved.public_provider.as_deref(), Some("cloudflare"));
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_lease_runtime_public_ingress_accepts_alias_fields() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("POST", "/api/v1/agent/public-ingress/runtime")
+            .match_header("authorization", "Bearer mt_test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"data":{"public_ingress":{"public_provider":"cloudflare","public_hostname":"m-machine-1-runtime123.codewebway.com","public_runtime_instance_id":"runtime123","cloudflare_tunnel_id":"tunnel-1","cloudflare_tunnel_token":"tunnel-token-1"}}}"#,
+            )
+            .create_async()
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir);
+        let mut creds = make_creds(&server.url());
+        save_credentials_to(&creds, &path).unwrap();
+
+        let changed = lease_runtime_public_ingress_to_path(&mut creds, "runtime123", &path)
+            .await
+            .unwrap();
+        assert!(changed);
+        assert_eq!(creds.public_provider.as_deref(), Some("cloudflare"));
+        assert_eq!(
+            creds.public_hostname.as_deref(),
+            Some("m-machine-1-runtime123.codewebway.com")
+        );
+        assert_eq!(
+            creds.public_runtime_instance_id.as_deref(),
+            Some("runtime123")
+        );
+        assert_eq!(creds.cloudflare_tunnel_id.as_deref(), Some("tunnel-1"));
+        assert_eq!(
+            creds.cloudflare_tunnel_token.as_deref(),
+            Some("tunnel-token-1")
+        );
         m.assert_async().await;
     }
 
