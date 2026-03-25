@@ -475,7 +475,7 @@ async fn main() -> anyhow::Result<()> {
             let mut fleet_args = raw_args.clone();
             fleet_args.remove(1); // strip "fleet" so Config::parse_from works normally
             let mut cfg = Config::parse_from(fleet_args);
-            // Fleet mode always uses zrok with no expiry — no flags needed.
+            // Fleet mode always uses managed public ingress with no expiry — no flags needed.
             cfg.zrok = true;
             cfg.public_no_expiry = true;
             // Use stored PIN from fleet.toml unless overridden on the CLI.
@@ -500,9 +500,9 @@ async fn main() -> anyhow::Result<()> {
     println!("  CodeWebway  ");
     println!("  ─────────────────────────────────");
     if let Some(ref zu) = handle.public_url {
-        println!("  zrok   : {zu}");
+        println!("  Public : {zu}");
     } else if cfg.zrok {
-        println!("  zrok   : (URL pending — see Log below)");
+        println!("  Public : (URL pending — see Log below)");
     }
     println!("  Token  : {}", handle.token);
     println!("  PIN    : configured (hidden)");
@@ -515,7 +515,7 @@ async fn main() -> anyhow::Result<()> {
     println!();
 
     if cfg.zrok {
-        println!("  WARNING: This host is now publicly accessible via zrok.");
+        println!("  WARNING: This host is now publicly accessible via public ingress.");
         println!("           Anyone with the URL can attempt to log in.");
         println!("           Keep Token + PIN secret — do not share them.");
         println!("           To end exposure: lock out all sessions, then shutdown.");
@@ -566,7 +566,7 @@ async fn main() -> anyhow::Result<()> {
             println!("  Tip    : use --public-timeout-minutes <N> or --public-no-expiry");
         }
     } else if cfg.public_timeout_minutes.is_some() || cfg.public_no_expiry {
-        println!("  Note   : public share flags are ignored without --zrok.");
+        println!("  Note   : public ingress flags are ignored without --zrok.");
     }
 
     if io::stdin().is_terminal() {

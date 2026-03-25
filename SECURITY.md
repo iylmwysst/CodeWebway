@@ -8,7 +8,7 @@ Anyone who successfully authenticates gets a shell with the same OS privileges a
 
 Before exposing a host publicly:
 
-- Use TLS. The built-in server speaks plain HTTP; use `--zrok` or an HTTPS reverse proxy.
+- Use TLS. The built-in server speaks plain HTTP; use standalone public ingress (`--zrok`), fleet-managed Cloudflare ingress, or an HTTPS reverse proxy.
 - Run as a non-root dedicated user.
 - Narrow the filesystem root with `--cwd`.
 - Use `--terminal-only` when you do not need the file browser/editor routes.
@@ -28,10 +28,15 @@ The default bind is `127.0.0.1:8080`, so nothing is reachable off-host unless yo
 
 ## Trust Boundaries
 
-- Browser to CodeWebway: HTTP on localhost by default, or HTTPS when fronted by zrok/reverse proxy.
+- Browser to CodeWebway: HTTP on localhost by default, or HTTPS when fronted by public ingress / reverse proxy.
 - CodeWebway to PTY/filesystem: same OS user privileges as the CodeWebway process.
 - CodeWebway to WebWayFleet API: outbound HTTPS with bearer machine token in fleet mode.
 - WebWayFleet Dashboard/API to users: Clerk bearer tokens for dashboard auth, D1 for persistent state, KV for short-lived challenge/token state.
+
+Current fleet control behavior:
+
+- Remote start, stop, and client-update actions depend on the realtime machine channel.
+- `/api/v1/agent/heartbeat` is no longer a command-delivery path; it is only used for coarse lease/reconcile behavior while the presence redesign is still in progress.
 
 ## Authentication Flows
 
@@ -125,6 +130,10 @@ WebWayFleet adds separate best-effort in-memory rate limits on machine endpoints
 
 When those trip, WebWayFleet records a `security_events` audit entry when the table exists.
 
+Important fleet note:
+
+- heartbeat rate limiting no longer gates command delivery because command dispatch is realtime-only
+
 ## Comparison and Secret Handling
 
 - Token and PIN comparisons use a byte-wise XOR fold when the lengths match.
@@ -177,7 +186,7 @@ This flow does not ask for the PIN again.
 
 ## Auto-Shutdown Behavior
 
-CodeWebway has an inactivity shutdown timer unless `--zrok --public-no-expiry` is combined.
+CodeWebway has an inactivity shutdown timer unless public ingress is enabled with `--public-no-expiry`.
 
 Current behavior:
 
@@ -290,7 +299,7 @@ Use GitHub private security advisories:
 Include:
 
 - affected version or commit
-- deployment mode (`local`, `zrok`, `reverse proxy`, `fleet`)
+- deployment mode (`local`, `standalone public ingress`, `reverse proxy`, `fleet`)
 - reproduction steps
 - whether WebWayFleet is involved
 

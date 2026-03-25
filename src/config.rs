@@ -51,15 +51,15 @@ pub struct Config {
     #[arg(long, default_value_t = 131072)]
     pub scrollback: usize,
 
-    /// Create a public URL with zrok (requires `zrok` installed and enabled)
+    /// Enable public ingress (standalone uses zrok; fleet may use Cloudflare-managed ingress)
     #[arg(short = 'z', long)]
     pub zrok: bool,
 
-    /// Auto-disable public zrok share after N minutes (requires --zrok)
+    /// Auto-disable public ingress after N minutes (requires --zrok)
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..), conflicts_with = "public_no_expiry")]
     pub public_timeout_minutes: Option<u64>,
 
-    /// Keep public zrok share active with no automatic expiry (requires --zrok)
+    /// Keep public ingress active with no automatic expiry (requires --zrok)
     #[arg(long, conflicts_with = "public_timeout_minutes")]
     pub public_no_expiry: bool,
 

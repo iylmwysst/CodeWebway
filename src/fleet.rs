@@ -355,6 +355,7 @@ struct RemoteStatusData {
     hostname: Option<String>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatData {
     pub has_command: bool,
@@ -1769,7 +1770,7 @@ pub async fn run_daemon(mut cfg: crate::config::Config) -> anyhow::Result<()> {
                 state.runtime_instance_id.as_deref(),
             )
         };
-        let hb = match send_heartbeat(
+        match send_heartbeat(
             &creds,
             &state.status,
             state.active_url.as_deref(),
@@ -1824,196 +1825,6 @@ pub async fn run_daemon(mut cfg: crate::config::Config) -> anyhow::Result<()> {
                 continue;
             }
         };
-
-        if !hb.has_command {
-            if channel.is_none() {
-                tokio::time::sleep(poll_interval).await;
-            }
-            continue;
-        }
-        let cmd = match hb.command {
-            Some(c) => c,
-            None => {
-                if channel.is_none() {
-                    tokio::time::sleep(poll_interval).await;
-                }
-                continue;
-            }
-        };
-
-        if recent_commands.record_or_is_duplicate(&cmd) {
-            eprintln!(
-                "  Fleet: duplicate fallback command ignored: {} {}",
-                cmd.kind,
-                cmd.execution_id.as_deref().unwrap_or("no-exec-id")
-            );
-            if channel.is_none() {
-                tokio::time::sleep(poll_interval).await;
-            }
-            continue;
-        }
-
-        match cmd.kind.as_str() {
-            "run_codewebway" => {
-                let exec_id = cmd.execution_id.clone().unwrap_or_default();
-
-                // Fleet mode: generate a fresh session token each run.
-                // PIN stays as second factor. Dashboard receives both via report.
-                let mut fleet_cfg = cfg.clone();
-                let session_token: String = rand::thread_rng()
-                    .sample_iter(&Alphanumeric)
-                    .take(24)
-                    .map(char::from)
-                    .collect();
-                let runtime_instance_id = if exec_id.is_empty() {
-                    rand::thread_rng()
-                        .sample_iter(&Alphanumeric)
-                        .take(16)
-                        .map(char::from)
-                        .collect::<String>()
-                } else {
-                    exec_id.clone()
-                };
-                fleet_cfg.password = Some(session_token);
-                fleet_cfg.sso_shared_secret = Some(sha256_hex(&creds.machine_token));
-                fleet_cfg.runtime_instance_id = Some(runtime_instance_id.clone());
-                if let Some(ref pin) = creds.pin {
-                    fleet_cfg.pin = Some(pin.clone());
-                }
-                fleet_cfg.dashboard_auth_machine_token = Some(creds.machine_token.clone());
-                if let Some(api_base) = payload_str(&cmd.payload, "fleet_api_base") {
-                    fleet_cfg.dashboard_auth_api_base = Some(api_base.to_string());
-                }
-
-                // Apply per-trigger config from command payload
-                if let Some(cwd) = payload_str(&cmd.payload, "cwd") {
-                    fleet_cfg.cwd = Some(cwd.to_string());
-                }
-                if let Some(terminal_only) = payload_bool(&cmd.payload, "terminal_only") {
-                    fleet_cfg.terminal_only = terminal_only;
-                }
-                if let Some(shell) = payload_str(&cmd.payload, "shell") {
-                    fleet_cfg.shell = Some(shell.to_string());
-                }
-                if let Some(scrollback) =
-                    payload_u64_in_range(&cmd.payload, "scrollback", 16_384, 2_097_152)
-                {
-                    fleet_cfg.scrollback = scrollback as usize;
-                }
-                if let Some(max_connections) =
-                    payload_u64_in_range(&cmd.payload, "max_connections", 1, 32)
-                {
-                    fleet_cfg.max_connections = max_connections as usize;
-                }
-                if let Some(temp_link) = payload_bool(&cmd.payload, "temp_link") {
-                    fleet_cfg.temp_link = temp_link;
-                }
-                if let Some(ttl) =
-                    payload_u64_in_range(&cmd.payload, "temp_link_ttl_minutes", 1, 120)
-                {
-                    if matches!(ttl, 5 | 15 | 60) {
-                        fleet_cfg.temp_link_ttl_minutes = ttl;
-                    }
-                }
-                if let Some(scope) = payload_str(&cmd.payload, "temp_link_scope") {
-                    if scope == "read-only" || scope == "interactive" {
-                        fleet_cfg.temp_link_scope = scope;
-                    }
-                }
-                if let Some(max_uses) =
-                    payload_u64_in_range(&cmd.payload, "temp_link_max_uses", 1, 100)
-                {
-                    fleet_cfg.temp_link_max_uses = max_uses as u32;
-                }
-                if creds.public_provider.as_deref() == Some("cloudflare")
-                    && creds.cloudflare_tunnel_token.is_none()
-                {
-                    if let Err(err) = refresh_public_ingress(&mut creds).await {
-                        eprintln!("  Fleet: public ingress refresh before launch failed: {err}");
-                    }
-                }
-
-                match crate::start_server(fleet_cfg).await {
-                    Err(e) => {
-                        eprintln!("  Fleet: failed to start server: {e}");
-                        if !exec_id.is_empty() {
-                            let _ = report_result_via_channel_or_http(
-                                channel.as_ref(),
-                                &creds,
-                                &exec_id,
-                                &e.to_string(),
-                                false,
-                            )
-                            .await;
-                        }
-                    }
-                    Ok(handle) => {
-                        state.status = "running".to_string();
-                        state.active_url = handle.current_public_url();
-                        state.runtime_instance_id = Some(runtime_instance_id.clone());
-                        state.last_d1_write =
-                            std::time::Instant::now() - std::time::Duration::from_secs(400);
-                        try_send_channel_snapshot(&mut channel, &state, false);
-
-                        let mut runtime = RunningRuntime {
-                            execution_id: exec_id,
-                            access_token: handle.token.clone(),
-                            runtime_instance_id,
-                            public_url_state: handle.public_url_state.clone(),
-                            ready_reported: false,
-                        };
-                        sync_runtime_ready(&creds, &mut state, &mut runtime, channel.as_ref())
-                            .await;
-
-                        let exit_action = wait_for_stop(
-                            &creds,
-                            &mut state,
-                            &mut runtime,
-                            &mut channel,
-                            &mut recent_commands,
-                            handle.shutdown_tx,
-                            handle.server_done,
-                            poll_interval,
-                        )
-                        .await;
-
-                        state.status = "idle".to_string();
-                        state.active_url = None;
-                        state.runtime_instance_id = None;
-                        try_send_channel_snapshot(&mut channel, &state, false);
-                        write_status_now(&creds, &mut state, "after terminal stop").await;
-                        if let RuntimeExitAction::ApplyClientUpdate(plan) = exit_action {
-                            if let Err(err) = apply_client_update_plan(&plan).await {
-                                report_client_update_failure(
-                                    channel.as_ref(),
-                                    &creds,
-                                    &plan.execution_id,
-                                    &err,
-                                )
-                                .await;
-                                eprintln!(
-                                    "  Fleet: client update failed after runtime stop: {err}"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            "stop_codewebway" => {
-                eprintln!("  Fleet: stop received but no terminal running — reporting stopped");
-                report_terminal_stopped_if_idle(channel.as_ref(), &creds, &cmd).await;
-            }
-            "decommission_client" => {
-                eprintln!("  Fleet: decommission requested while idle.");
-                decommission_self_and_exit(channel.as_ref(), &creds, &cmd).await;
-            }
-            "update_codewebway" => {
-                if let Err(err) = perform_client_update(channel.as_ref(), &creds, &cmd).await {
-                    eprintln!("  Fleet: client update failed: {err}");
-                }
-            }
-            other => eprintln!("  Fleet: unknown command type: {other}"),
-        }
 
         if channel.is_none() {
             tokio::time::sleep(poll_interval).await;
@@ -2183,76 +1994,9 @@ async fn wait_for_stop(
                         state.runtime_instance_id.as_deref(),
                         skip,
                     ).await {
-                        Ok(hb) => {
+                        Ok(_hb) => {
                             if !skip {
                                 state.last_d1_write = std::time::Instant::now();
-                            }
-                            if let Some(cmd) = hb.command {
-                                if recent_commands.record_or_is_duplicate(&cmd) {
-                                    next_heartbeat_at = tokio::time::Instant::now() + interval;
-                                    continue;
-                                }
-                                if cmd.kind == "decommission_client" {
-                                    eprintln!("  Fleet: decommission requested during runtime.");
-                                    decommission_self_and_exit(channel.as_ref(), creds, &cmd).await;
-                                }
-                                let update_plan = if cmd.kind == "update_codewebway" {
-                                    match resolve_client_update_plan(channel.as_ref(), creds, &cmd).await {
-                                        Ok(Some(plan)) => Some(plan),
-                                        Ok(None) => None,
-                                        Err(err) => {
-                                            report_client_update_failure(
-                                                channel.as_ref(),
-                                                creds,
-                                                cmd.execution_id.as_deref().unwrap_or_default(),
-                                                &err,
-                                            )
-                                            .await;
-                                            eprintln!("  Fleet: client update preparation failed: {err}");
-                                            next_heartbeat_at = tokio::time::Instant::now() + interval;
-                                            continue;
-                                        }
-                                    }
-                                } else {
-                                    None
-                                };
-                                if cmd.kind == "update_codewebway" && update_plan.is_none() {
-                                    next_heartbeat_at = tokio::time::Instant::now() + interval;
-                                    continue;
-                                }
-                                if cmd.kind == "stop_codewebway" {
-                                    let exec_id = cmd.execution_id.unwrap_or_default();
-                                    let _ = shutdown_tx.send(());
-                                    report_runtime_start_failed_if_needed(
-                                        channel.as_ref(),
-                                        creds,
-                                        runtime,
-                                        "Terminal stopped before public URL was ready",
-                                    )
-                                    .await;
-                                    if cmd.kind == "stop_codewebway" && !exec_id.is_empty() {
-                                        let _ = report_result_via_channel_or_http(
-                                            channel.as_ref(),
-                                            creds,
-                                            &exec_id,
-                                            "stopped",
-                                            true,
-                                        )
-                                        .await;
-                                    }
-                                    return RuntimeExitAction::None;
-                                }
-                                if let Some(plan) = update_plan {
-                                    let _ = shutdown_tx.send(());
-                                    report_runtime_start_failed_if_needed(
-                                        channel.as_ref(),
-                                        creds,
-                                        runtime,
-                                        "Terminal stopped before public URL was ready",
-                                    )
-                                    .await;
-                                    return RuntimeExitAction::ApplyClientUpdate(plan);
-                                }
                             }
                         }
                         Err(e) => {
@@ -2932,7 +2676,7 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_str(&build_channel_snapshot_message(
             "snapshot",
             "idle",
-            Some("https://example.zrok.io"),
+            Some("https://public.example.com"),
             Some("runtime-1"),
             true,
         ))
@@ -2948,7 +2692,7 @@ mod tests {
         );
         assert_eq!(
             payload.get("active_url").and_then(|v| v.as_str()),
-            Some("https://example.zrok.io")
+            Some("https://public.example.com")
         );
         assert_eq!(
             payload.get("runtime_instance_id").and_then(|v| v.as_str()),
@@ -3160,10 +2904,10 @@ mod tests {
         let mut state = DaemonState::new();
         state.last_d1_write = std::time::Instant::now();
         state.status = "running".to_string();
-        state.active_url = Some("https://old.zrok.io".to_string());
+        state.active_url = Some("https://old.public.example.com".to_string());
 
-        assert!(!state.should_write("running", Some("https://old.zrok.io"), None));
-        assert!(state.should_write("running", Some("https://new.zrok.io"), None));
+        assert!(!state.should_write("running", Some("https://old.public.example.com"), None));
+        assert!(state.should_write("running", Some("https://new.public.example.com"), None));
     }
 
     #[test]
@@ -3171,11 +2915,19 @@ mod tests {
         let mut state = DaemonState::new();
         state.last_d1_write = std::time::Instant::now();
         state.status = "running".to_string();
-        state.active_url = Some("https://old.zrok.io".to_string());
+        state.active_url = Some("https://old.public.example.com".to_string());
         state.runtime_instance_id = Some("instance-old".to_string());
 
-        assert!(!state.should_write("running", Some("https://old.zrok.io"), Some("instance-old")));
-        assert!(state.should_write("running", Some("https://old.zrok.io"), Some("instance-new")));
+        assert!(!state.should_write(
+            "running",
+            Some("https://old.public.example.com"),
+            Some("instance-old")
+        ));
+        assert!(state.should_write(
+            "running",
+            Some("https://old.public.example.com"),
+            Some("instance-new")
+        ));
     }
 
     #[tokio::test]
@@ -3341,7 +3093,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_heartbeat_with_command() {
+    async fn test_heartbeat_ignores_command_payloads() {
         let mut server = mockito::Server::new_async().await;
         server
             .mock("POST", "/api/v1/agent/heartbeat")
@@ -3356,9 +3108,10 @@ mod tests {
             .await
             .unwrap();
         assert!(hb.has_command);
-        let cmd = hb.command.unwrap();
-        assert_eq!(cmd.kind, "run_codewebway");
-        assert_eq!(cmd.execution_id.as_deref(), Some("ex1"));
+        assert_eq!(
+            hb.command.as_ref().map(|cmd| cmd.kind.as_str()),
+            Some("run_codewebway")
+        );
     }
 
     #[tokio::test]
@@ -3390,7 +3143,7 @@ mod tests {
             .await;
 
         let creds = make_creds(&server.url());
-        report_result(&creds, "ex1", "https://abc.zrok.io", true)
+        report_result(&creds, "ex1", "https://public.example.com", true)
             .await
             .unwrap();
         m.assert_async().await;
@@ -3475,7 +3228,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sync_runtime_ready_reports_late_zrok_url() {
+    async fn test_sync_runtime_ready_reports_late_public_url() {
         let mut server = mockito::Server::new_async().await;
         let report = server
             .mock("POST", "/api/v1/agent/report")
@@ -3503,12 +3256,12 @@ mod tests {
         assert!(state.active_url.is_none());
         assert!(!runtime.ready_reported);
 
-        *shared_url.lock().unwrap() = Some("https://late.share.zrok.io".to_string());
+        *shared_url.lock().unwrap() = Some("https://late.public.example.com".to_string());
         sync_runtime_ready(&creds, &mut state, &mut runtime, None).await;
 
         assert_eq!(
             state.active_url.as_deref(),
-            Some("https://late.share.zrok.io")
+            Some("https://late.public.example.com")
         );
         assert!(runtime.ready_reported);
         report.assert_async().await;
@@ -3582,7 +3335,7 @@ mod tests {
         let wait = tokio::spawn(async move {
             let mut state = DaemonState::new();
             state.status = "running".to_string();
-            state.active_url = Some("https://live.zrok.io".to_string());
+            state.active_url = Some("https://live.public.example.com".to_string());
             state.runtime_instance_id = Some("runtime-live".to_string());
             state.last_d1_write = std::time::Instant::now();
             let mut runtime = RunningRuntime {
@@ -3590,7 +3343,7 @@ mod tests {
                 access_token: "token-live".to_string(),
                 runtime_instance_id: "runtime-live".to_string(),
                 public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                    "https://live.zrok.io".to_string(),
+                    "https://live.public.example.com".to_string(),
                 ))),
                 ready_reported: true,
             };
@@ -3644,7 +3397,7 @@ mod tests {
         let wait = tokio::spawn(async move {
             let mut state = DaemonState::new();
             state.status = "running".to_string();
-            state.active_url = Some("https://live.zrok.io".to_string());
+            state.active_url = Some("https://live.public.example.com".to_string());
             state.runtime_instance_id = Some("runtime-live".to_string());
             state.last_d1_write = std::time::Instant::now();
             let mut runtime = RunningRuntime {
@@ -3652,7 +3405,7 @@ mod tests {
                 access_token: "token-live".to_string(),
                 runtime_instance_id: "runtime-live".to_string(),
                 public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                    "https://live.zrok.io".to_string(),
+                    "https://live.public.example.com".to_string(),
                 ))),
                 ready_reported: true,
             };
@@ -3687,7 +3440,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_wait_for_stop_with_disconnected_channel_uses_heartbeat_fallback_immediately() {
+    async fn test_wait_for_stop_with_disconnected_channel_runs_heartbeat_reconcile_immediately() {
         let mut server = mockito::Server::new_async().await;
         let heartbeat = server
             .mock("POST", "/api/v1/agent/heartbeat")
@@ -3705,7 +3458,7 @@ mod tests {
         let wait = tokio::spawn(async move {
             let mut state = DaemonState::new();
             state.status = "running".to_string();
-            state.active_url = Some("https://live.zrok.io".to_string());
+            state.active_url = Some("https://live.public.example.com".to_string());
             state.runtime_instance_id = Some("runtime-live".to_string());
             state.last_d1_write = std::time::Instant::now();
             let mut runtime = RunningRuntime {
@@ -3713,7 +3466,7 @@ mod tests {
                 access_token: "token-live".to_string(),
                 runtime_instance_id: "runtime-live".to_string(),
                 public_url_state: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                    "https://live.zrok.io".to_string(),
+                    "https://live.public.example.com".to_string(),
                 ))),
                 ready_reported: true,
             };

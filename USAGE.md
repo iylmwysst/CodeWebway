@@ -26,7 +26,7 @@ These subcommands are routed manually in `src/main.rs`, so `codewebway --help` o
 # Local-only terminal on localhost
 codewebway --pin 123456
 
-# Public share through zrok
+# Public ingress in standalone mode
 codewebway -z --pin 123456
 
 # Restrict the HTTP file/editor root
@@ -38,7 +38,7 @@ codewebway -z --terminal-only --pin 123456
 # Print one startup temp link
 codewebway -z --temp-link --temp-link-scope read-only --temp-link-ttl-minutes 15 --pin 123456
 
-# Auto-disable the zrok share after 30 minutes
+# Auto-disable public ingress after 30 minutes
 codewebway -z --public-timeout-minutes 30 --pin 123456
 
 # Register a headless machine with WebWayFleet
@@ -67,9 +67,9 @@ These are the current `codewebway --help` flags:
   --shell <SHELL>                                 Shell executable
   --cwd <PATH>                                    Working directory / file API root
   --scrollback <BYTES>                            Scrollback buffer size in bytes
-  -z, --zrok                                      Create a public URL with zrok
-  --public-timeout-minutes <N>                    Auto-disable zrok share after N minutes
-  --public-no-expiry                              Keep zrok share active until shutdown
+  -z, --zrok                                      Enable public ingress (standalone uses zrok; fleet may use Cloudflare-managed ingress)
+  --public-timeout-minutes <N>                    Auto-disable public ingress after N minutes
+  --public-no-expiry                              Keep public ingress active until shutdown
   --max-connections <N>                           Maximum concurrent WebSocket clients
   --terminal-only                                 Disable file explorer and editor routes
   --temp-link                                     Print one temporary link at startup
@@ -233,7 +233,8 @@ codewebway fleet --cwd /srv/app --scrollback 262144
 
 Important fleet-mode behavior:
 
-- `codewebway fleet` always forces `--zrok --public-no-expiry`
+- `codewebway fleet` always enables public ingress with no automatic expiry
+- current fleet-managed Cloudflare ingress is pinned to local origin `http://localhost:8080`; if you pass another `--port`, fleet mode overrides it back to `8080`
 - if `--pin` is omitted, CodeWebway loads the stored PIN from `fleet.toml`
 - healthy realtime-connected daemons use the machine channel for stop commands and only fall back to heartbeat polling when the channel is unavailable; legacy/degraded paths still heartbeat every 30 seconds
 - dashboard start/stop requests are delivered through the pending command channel
@@ -311,7 +312,7 @@ Those values are merged in WebWayFleet and sent in the `run_codewebway` command 
 
 ## Public Exposure
 
-### zrok (recommended)
+### Standalone Public Ingress (`zrok`)
 
 ```bash
 codewebway -z --pin 123456
@@ -330,6 +331,17 @@ curl -sSf https://get.zrok.io | bash
 zrok enable <token>
 ```
 
+### Fleet-Managed Public Ingress (Cloudflare)
+
+In WebWayFleet mode, public ingress is provisioned by the control plane and exposed under the configured CodeWebway domain.
+
+Current behavior:
+
+- no separate `zrok` install is required on the machine
+- the runtime starts `cloudflared` automatically when Cloudflare ingress is configured
+- fleet-managed Cloudflare ingress currently targets local origin `http://localhost:8080`
+- machine creation may seed public-ingress metadata early, but actual tunnel provisioning happens during enable / refresh, not at machine creation time
+
 ### Reverse Proxy
 
 Point your HTTPS proxy at `127.0.0.1:8080`.
@@ -344,7 +356,7 @@ CodeWebway uses them when validating WebSocket `Origin`.
 
 ### Tailscale / LAN-only
 
-Bind to a specific interface instead of using zrok:
+Bind to a specific interface instead of using standalone public ingress:
 
 ```bash
 codewebway --host <tailscale-ip> --pin 123456
@@ -355,5 +367,5 @@ codewebway --host <tailscale-ip> --pin 123456
 - File API operations only work on existing paths under the configured root.
 - Directory listings hide dotfiles, but explicit file requests can still access known dotfile paths under the root.
 - `--terminal-only` removes the file routes entirely.
-- Auto-shutdown is disabled only when `--zrok --public-no-expiry` is combined.
-- `--public-timeout-minutes` and `--public-no-expiry` only affect zrok mode.
+- Auto-shutdown is disabled only when public ingress is enabled with `--public-no-expiry`.
+- `--public-timeout-minutes` and `--public-no-expiry` only affect standalone public-ingress mode.

@@ -7,11 +7,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use flate2::read::GzDecoder;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 const PUBLIC_OWNER_DIR: &str = "codewebway";
 const CLOUDFLARE_ORIGIN_PORT: u16 = 8080;
 const CLOUDFLARED_OVERRIDE_PATH_ENV: &str = "CODEWEBWAY_CLOUDFLARED_PATH";
+const MANAGED_CLOUDFLARED_VERSION: &str = "2026.3.0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PublicExposureProvider {
@@ -55,7 +57,9 @@ enum CloudflaredDownloadKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CloudflaredDownloadSpec {
+    version: &'static str,
     url: &'static str,
+    expected_sha256: &'static str,
     kind: CloudflaredDownloadKind,
 }
 
@@ -170,12 +174,7 @@ fn start_cloudflare_exposure(
     )?;
     write_owned_public_pid(PublicExposureProvider::Cloudflare, port, process.id());
 
-    std::thread::sleep(Duration::from_secs(2));
-    if let Ok(Some(status)) = process.try_wait() {
-        clear_owned_public_pid(PublicExposureProvider::Cloudflare, port);
-        let _ = fs::remove_file(&pid_path);
-        anyhow::bail!("cloudflared exited before the tunnel became ready ({status})");
-    }
+    wait_for_cloudflared_ready(&mut process, port, &pid_path, Duration::from_secs(15))?;
 
     if let Some(url) = initial_url.clone() {
         if let Ok(mut current) = shared_url_state.lock() {
@@ -358,6 +357,34 @@ fn command_runs_successfully(binary: &Path, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+fn wait_for_cloudflared_ready(
+    process: &mut Child,
+    port: u16,
+    pid_path: &Path,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    loop {
+        if pid_path.exists() {
+            return Ok(());
+        }
+        if let Ok(Some(status)) = process.try_wait() {
+            clear_owned_public_pid(PublicExposureProvider::Cloudflare, port);
+            let _ = fs::remove_file(pid_path);
+            anyhow::bail!("cloudflared exited before the tunnel became ready ({status})");
+        }
+        if start.elapsed() >= timeout {
+            clear_owned_public_pid(PublicExposureProvider::Cloudflare, port);
+            let _ = fs::remove_file(pid_path);
+            anyhow::bail!(
+                "cloudflared did not report readiness within {}s",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn managed_cloudflared_path() -> PathBuf {
     let file_name = if cfg!(windows) {
         "cloudflared.exe"
@@ -374,25 +401,76 @@ fn managed_cloudflared_path() -> PathBuf {
 fn cloudflared_download_spec(os: &str, arch: &str) -> anyhow::Result<CloudflaredDownloadSpec> {
     match (os, arch) {
         ("linux", "x86_64") => Ok(CloudflaredDownloadSpec {
-            url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+            version: MANAGED_CLOUDFLARED_VERSION,
+            url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-linux-amd64",
+            expected_sha256: "4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30",
             kind: CloudflaredDownloadKind::RawBinary,
         }),
         ("linux", "aarch64") | ("linux", "arm64") => Ok(CloudflaredDownloadSpec {
-            url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64",
+            version: MANAGED_CLOUDFLARED_VERSION,
+            url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-linux-arm64",
+            expected_sha256: "0755ba4cbab59980e6148367fcf53a8f3ec85a97deefd63c2420cf7850769bee",
             kind: CloudflaredDownloadKind::RawBinary,
         }),
         ("macos", "x86_64") => Ok(CloudflaredDownloadSpec {
-            url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz",
+            version: MANAGED_CLOUDFLARED_VERSION,
+            url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-amd64.tgz",
+            expected_sha256: "b91dbec79a3e3809d5508b96d8b0bdfbf3ad7d51f858200228fa3e57100580d9",
             kind: CloudflaredDownloadKind::TarGz,
         }),
         ("macos", "aarch64") | ("macos", "arm64") => Ok(CloudflaredDownloadSpec {
-            url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz",
+            version: MANAGED_CLOUDFLARED_VERSION,
+            url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-arm64.tgz",
+            expected_sha256: "633cee0fd41fd2020e17498beecc54811bf4fc99f891c080dc9343eb0f449c60",
             kind: CloudflaredDownloadKind::TarGz,
         }),
         (target_os, target_arch) => anyhow::bail!(
             "Cloudflare public ingress is not yet auto-installable on {target_os}/{target_arch}"
         ),
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn verify_cloudflared_download(bytes: &[u8], spec: &CloudflaredDownloadSpec) -> anyhow::Result<()> {
+    let actual = sha256_hex(bytes);
+    if actual != spec.expected_sha256 {
+        anyhow::bail!(
+            "cloudflared checksum mismatch for {}: expected {}, got {}",
+            spec.url,
+            spec.expected_sha256,
+            actual
+        );
+    }
+    Ok(())
+}
+
+fn command_stdout_trimmed(command: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn cloudflared_version(command: &Path) -> Option<String> {
+    let stdout = command_stdout_trimmed(command, &["version"])?;
+    let mut parts = stdout.split_whitespace();
+    while let Some(part) = parts.next() {
+        if part.eq_ignore_ascii_case("version") {
+            return parts.next().map(|value| value.trim().to_string());
+        }
+    }
+    None
 }
 
 fn install_managed_cloudflared(destination: &Path) -> anyhow::Result<()> {
@@ -414,6 +492,7 @@ fn install_managed_cloudflared(destination: &Path) -> anyhow::Result<()> {
     if bytes.is_empty() {
         anyhow::bail!("downloaded cloudflared asset was empty");
     }
+    verify_cloudflared_download(&bytes, &spec)?;
 
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -475,6 +554,8 @@ fn install_managed_cloudflared(destination: &Path) -> anyhow::Result<()> {
 }
 
 fn resolve_cloudflared_binary() -> anyhow::Result<PathBuf> {
+    let managed_spec = cloudflared_download_spec(std::env::consts::OS, std::env::consts::ARCH)?;
+
     if let Ok(raw) = std::env::var(CLOUDFLARED_OVERRIDE_PATH_ENV) {
         let path = PathBuf::from(raw);
         if command_runs_successfully(&path, &["version"]) {
@@ -490,11 +571,19 @@ fn resolve_cloudflared_binary() -> anyhow::Result<PathBuf> {
 
     let managed = managed_cloudflared_path();
     if command_runs_successfully(&managed, &["version"]) {
-        return Ok(managed);
+        if cloudflared_version(&managed).as_deref() == Some(managed_spec.version) {
+            return Ok(managed);
+        }
+        eprintln!(
+            "  cloudflared: managed binary at {} is not the pinned version {}; reinstalling",
+            managed.display(),
+            managed_spec.version
+        );
     }
 
     eprintln!(
-        "  cloudflared: not found in PATH, downloading managed binary to {}",
+        "  cloudflared: installing pinned managed version {} to {}",
+        managed_spec.version,
         managed.display()
     );
     install_managed_cloudflared(&managed)?;
@@ -505,6 +594,18 @@ fn resolve_cloudflared_binary() -> anyhow::Result<PathBuf> {
             managed.display()
         );
     }
+    if cloudflared_version(&managed).as_deref() != Some(managed_spec.version) {
+        anyhow::bail!(
+            "installed managed cloudflared from {} but version did not match pinned release {}",
+            managed.display(),
+            managed_spec.version
+        );
+    }
+    eprintln!(
+        "  cloudflared: installed managed version {} at {}",
+        managed_spec.version,
+        managed.display()
+    );
 
     Ok(managed)
 }
@@ -587,7 +688,7 @@ fn release_owned_zrok_token(port: u16) {
         })
         .unwrap_or(false);
     if still_active {
-        eprintln!("  zrok   : releasing saved share {tok}");
+        eprintln!("  Public : releasing saved standalone share {tok}");
         let _ = Command::new("zrok").args(["release", &tok]).status();
     }
 }
@@ -707,7 +808,7 @@ fn release_stale_owned_zrok_share(port: u16) {
         return;
     }
 
-    eprintln!("  zrok   : found stale CodeWebway public share (pid {pid}), releasing first");
+    eprintln!("  Public : found stale standalone ingress share (pid {pid}), releasing first");
     let _ = Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status();
@@ -791,7 +892,7 @@ fn stop_zrok_child(child: &mut Option<ManagedChild>, port: u16, reason: &str) ->
     let _ = process.wait();
     clear_owned_public_pid(PublicExposureProvider::Zrok, port);
     clear_owned_zrok_token(port);
-    eprintln!("  zrok   : {reason}");
+    eprintln!("  Public : {reason}");
     true
 }
 
@@ -858,8 +959,9 @@ fn monitor_public_child(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloudflared_download_spec, resolve_cloudflare_tunnel_config_for, CloudflareTunnelConfig,
-        CloudflaredDownloadKind, CloudflaredDownloadSpec,
+        cloudflared_download_spec, resolve_cloudflare_tunnel_config_for, sha256_hex,
+        verify_cloudflared_download, CloudflareTunnelConfig, CloudflaredDownloadKind,
+        CloudflaredDownloadSpec,
     };
     use crate::config::Config;
     use crate::fleet::FleetCredentials;
@@ -931,7 +1033,9 @@ mod tests {
         assert_eq!(
             spec,
             CloudflaredDownloadSpec {
-                url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+                version: "2026.3.0",
+                url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-linux-amd64",
+                expected_sha256: "4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30",
                 kind: CloudflaredDownloadKind::RawBinary,
             }
         );
@@ -944,9 +1048,28 @@ mod tests {
         assert_eq!(
             spec,
             CloudflaredDownloadSpec {
-                url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz",
+                version: "2026.3.0",
+                url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-arm64.tgz",
+                expected_sha256: "633cee0fd41fd2020e17498beecc54811bf4fc99f891c080dc9343eb0f449c60",
                 kind: CloudflaredDownloadKind::TarGz,
             }
         );
+    }
+
+    #[test]
+    fn test_sha256_hex_matches_known_value() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn test_verify_cloudflared_download_rejects_checksum_mismatch() {
+        let spec = cloudflared_download_spec("linux", "x86_64").unwrap();
+
+        let err = verify_cloudflared_download(b"not-the-real-binary", &spec).unwrap_err();
+
+        assert!(err.to_string().contains("cloudflared checksum mismatch"));
     }
 }

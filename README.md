@@ -18,22 +18,22 @@ CodeWebway is a single Rust binary that gives you a full terminal and file edito
 
 It can run in two ways:
 
-- **Standalone:** run `codewebway -z` and open the generated URL directly.
-- **With WebWayFleet:** register the machine once, then start and stop browser terminals from the dashboard without SSH.
+- **Standalone:** run `codewebway -z` and open the generated public URL directly.
+- **With WebWayFleet:** register the machine once, then start and stop browser terminals from the dashboard without SSH. Fleet-managed ingress uses Cloudflare-managed hostnames under the CodeWebway domain.
 
 ![CodeWebway demo](.github/assets/demo.gif)
 
 ## How It Works
 
 ```text
-Browser  ──HTTPS──▶  zrok edge  ──tunnel──▶  CodeWebway  ──PTY──▶  Shell
+Browser  ──HTTPS──▶  Public ingress edge  ──tunnel──▶  CodeWebway  ──PTY──▶  Shell
 ```
 
-- The diagram above is the standalone `codewebway -z` path.
+- The diagram above is the standalone `codewebway -z` path. Fleet mode now uses Cloudflare-managed ingress instead of third-party share URLs.
 - One process serves both the backend and the web UI — no separate frontend server.
 - Terminal sessions are real server-side PTYs with scrollback replay on reconnect.
 - Works on any modern browser — desktop, tablet, or mobile (iOS and Android tested).
-- The server binds to `127.0.0.1` by default. Public access is opt-in via `--zrok` or a reverse proxy.
+- The server binds to `127.0.0.1` by default. Public access is opt-in via standalone `--zrok`, fleet-managed Cloudflare ingress, or a reverse proxy.
 
 With WebWayFleet, the same host can also be opened through dashboard-approved host login, signed launch URLs bound to the current runtime instance, and a short-lived runtime token fallback reserved for recovery.
 
@@ -124,7 +124,7 @@ The table below compares tools in the context CodeWebway is designed for:
 
 All comparisons reflect default/typical configuration. Many tools can be configured beyond their defaults (e.g. SSH over a reverse tunnel, ttyd behind a reverse proxy) — footnotes call out the most important cases.
 
-| | CodeWebway + zrok | OpenSSH¹ | SSH + VPS | Tailscale | ttyd² |
+| | CodeWebway standalone ingress | OpenSSH¹ | SSH + VPS | Tailscale | ttyd² |
 |---|---|---|---|---|---|
 | **Requires inbound port/firewall rule** | No | Yes | No | No | Yes |
 | **Requires router or firewall control** | No | Yes | No | No | Yes |
@@ -142,11 +142,11 @@ All comparisons reflect default/typical configuration. Many tools can be configu
 
 ² ttyd can run behind a reverse proxy without direct port exposure, but requires separate proxy configuration.
 
-**On outbound HTTPS:** CodeWebway + zrok uses standard outbound HTTPS, which is commonly allowed in institutional networks. No protocol is guaranteed to pass every environment — deep packet inspection can block any traffic — but HTTPS tunnels are the most likely to work where UDP-based protocols (Tailscale WireGuard, WireGuard VPN) and non-standard ports are filtered.
+**On outbound HTTPS:** CodeWebway public ingress uses standard outbound HTTPS, which is commonly allowed in institutional networks. No protocol is guaranteed to pass every environment — deep packet inspection can block any traffic — but HTTPS tunnels are the most likely to work where UDP-based protocols (Tailscale WireGuard, WireGuard VPN) and non-standard ports are filtered.
 
 **On connection stability:** The comparison is against vanilla SSH sessions, which must fully re-establish the TCP connection after a network change. CodeWebway operates at the application layer — a brief drop causes a WebSocket reconnect without tearing down the server-side PTY session. Tools like `mosh` address this for SSH specifically, but require separate installation on both ends.
 
-**On cost:** "free" tools can still require infrastructure access. Direct SSH from outside a NAT needs either port forwarding (requires router control) or a VPS as a relay. CodeWebway + zrok needs neither.
+**On cost:** "free" tools can still require infrastructure access. Direct SSH from outside a NAT needs either port forwarding (requires router control) or a VPS as a relay. CodeWebway public ingress needs neither in the common standalone or fleet-managed path.
 
 ## Tech Stack
 
