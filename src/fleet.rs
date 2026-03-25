@@ -42,7 +42,7 @@ pub struct FleetCredentials {
 
 const MACHINE_TOKEN_ROTATE_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 const CHANNEL_PING_INTERVAL_SECS: u64 = 30;
-const CHANNEL_RECONNECT_INTERVAL_SECS: u64 = 10;
+const CHANNEL_RECONNECT_INTERVAL_SECS: u64 = 3;
 const CHANNEL_STALE_AFTER_MS: u64 = 90_000;
 const CONNECTED_IDLE_FALLBACK_CHECK_INTERVAL_SECS: u64 = 60 * 60;
 const MACHINE_TOKEN_ROTATE_RETRY_INTERVAL_SECS: u64 = 5 * 60;
@@ -2148,6 +2148,10 @@ async fn handle_realtime_command(
                     state.runtime_instance_id = None;
                     try_send_channel_snapshot(channel, state, false);
                     write_status_now(creds, state, "after terminal stop").await;
+                    if channel.is_some() {
+                        eprintln!("  Fleet: recycling realtime channel after terminal stop.");
+                        *channel = None;
+                    }
                     if let RuntimeExitAction::ApplyClientUpdate(plan) = exit_action {
                         if let Err(err) = apply_client_update_plan(&plan).await {
                             report_client_update_failure(
