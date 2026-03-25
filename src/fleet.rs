@@ -2148,10 +2148,6 @@ async fn handle_realtime_command(
                     state.runtime_instance_id = None;
                     try_send_channel_snapshot(channel, state, false);
                     write_status_now(creds, state, "after terminal stop").await;
-                    if channel.is_some() {
-                        eprintln!("  Fleet: recycling realtime channel after terminal stop.");
-                        *channel = None;
-                    }
                     if let RuntimeExitAction::ApplyClientUpdate(plan) = exit_action {
                         if let Err(err) = apply_client_update_plan(&plan).await {
                             report_client_update_failure(
