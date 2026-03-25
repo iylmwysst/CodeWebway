@@ -14,6 +14,9 @@ const PUBLIC_OWNER_DIR: &str = "codewebway";
 const CLOUDFLARE_ORIGIN_PORT: u16 = 8080;
 const CLOUDFLARED_OVERRIDE_PATH_ENV: &str = "CODEWEBWAY_CLOUDFLARED_PATH";
 const MANAGED_CLOUDFLARED_VERSION: &str = "2026.3.0";
+const CLOUDFLARED_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const CLOUDFLARED_START_ATTEMPTS: u8 = 3;
+const CLOUDFLARED_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PublicExposureProvider {
@@ -166,15 +169,39 @@ fn start_cloudflare_exposure(
     let initial_url = Some(format!("https://{}", config.hostname));
 
     let child = Arc::new(Mutex::new(None));
-    let mut process = spawn_cloudflared(
-        &cloudflared_binary,
-        &config.tunnel_token,
-        &log_path,
-        &pid_path,
-    )?;
-    write_owned_public_pid(PublicExposureProvider::Cloudflare, port, process.id());
+    let mut last_err: Option<anyhow::Error> = None;
+    let mut ready_process = None;
 
-    wait_for_cloudflared_ready(&mut process, port, &pid_path, Duration::from_secs(15))?;
+    for attempt in 1..=CLOUDFLARED_START_ATTEMPTS {
+        let mut process = spawn_cloudflared(
+            &cloudflared_binary,
+            &config.tunnel_token,
+            &log_path,
+            &pid_path,
+        )?;
+        write_owned_public_pid(PublicExposureProvider::Cloudflare, port, process.id());
+
+        match wait_for_cloudflared_ready(&mut process, port, &pid_path, CLOUDFLARED_READY_TIMEOUT) {
+            Ok(()) => {
+                ready_process = Some(process);
+                break;
+            }
+            Err(err) => {
+                eprintln!(
+                    "  cloudflared: start attempt {attempt}/{CLOUDFLARED_START_ATTEMPTS} failed: {err}"
+                );
+                last_err = Some(err);
+                if attempt < CLOUDFLARED_START_ATTEMPTS {
+                    std::thread::sleep(CLOUDFLARED_RETRY_DELAY);
+                    release_stale_owned_cloudflared(port);
+                }
+            }
+        }
+    }
+
+    let process = ready_process.with_context(|| {
+        last_err.unwrap_or_else(|| anyhow::anyhow!("cloudflared failed to start"))
+    })?;
 
     if let Some(url) = initial_url.clone() {
         if let Ok(mut current) = shared_url_state.lock() {
@@ -374,6 +401,7 @@ fn wait_for_cloudflared_ready(
             anyhow::bail!("cloudflared exited before the tunnel became ready ({status})");
         }
         if start.elapsed() >= timeout {
+            terminate_failed_cloudflared_start(process);
             clear_owned_public_pid(PublicExposureProvider::Cloudflare, port);
             let _ = fs::remove_file(pid_path);
             anyhow::bail!(
@@ -383,6 +411,23 @@ fn wait_for_cloudflared_ready(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn terminate_failed_cloudflared_start(process: &mut Child) {
+    #[cfg(unix)]
+    let _ = Command::new("kill")
+        .args(["-TERM", &process.id().to_string()])
+        .status();
+
+    for _ in 0..30 {
+        if process.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = process.kill();
+    let _ = process.wait();
 }
 
 fn managed_cloudflared_path() -> PathBuf {
