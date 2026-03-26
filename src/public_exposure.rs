@@ -14,7 +14,7 @@ const PUBLIC_OWNER_DIR: &str = "codewebway";
 const CLOUDFLARE_ORIGIN_PORT: u16 = 8080;
 const CLOUDFLARED_OVERRIDE_PATH_ENV: &str = "CODEWEBWAY_CLOUDFLARED_PATH";
 const MANAGED_CLOUDFLARED_VERSION: &str = "2026.3.0";
-const CLOUDFLARED_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const CLOUDFLARED_READY_TIMEOUT: Duration = Duration::from_secs(45);
 const CLOUDFLARED_START_ATTEMPTS: u8 = 3;
 const CLOUDFLARED_RETRY_DELAY: Duration = Duration::from_secs(2);
 
@@ -181,7 +181,13 @@ fn start_cloudflare_exposure(
         )?;
         write_owned_public_pid(PublicExposureProvider::Cloudflare, port, process.id());
 
-        match wait_for_cloudflared_ready(&mut process, port, &pid_path, CLOUDFLARED_READY_TIMEOUT) {
+        match wait_for_cloudflared_ready(
+            &mut process,
+            port,
+            &log_path,
+            &pid_path,
+            CLOUDFLARED_READY_TIMEOUT,
+        ) {
             Ok(()) => {
                 ready_process = Some(process);
                 break;
@@ -387,12 +393,13 @@ fn command_runs_successfully(binary: &Path, args: &[&str]) -> bool {
 fn wait_for_cloudflared_ready(
     process: &mut Child,
     port: u16,
+    log_path: &Path,
     pid_path: &Path,
     timeout: Duration,
 ) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     loop {
-        if pid_path.exists() {
+        if pid_path.exists() || cloudflared_log_reports_ready(log_path) {
             return Ok(());
         }
         if let Ok(Some(status)) = process.try_wait() {
@@ -411,6 +418,14 @@ fn wait_for_cloudflared_ready(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn cloudflared_log_reports_ready(log_path: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(log_path) else {
+        return false;
+    };
+    contents.contains("Registered tunnel connection")
+        || contents.contains("Updated to new configuration")
 }
 
 fn terminate_failed_cloudflared_start(process: &mut Child) {
@@ -609,11 +624,6 @@ fn resolve_cloudflared_binary() -> anyhow::Result<PathBuf> {
         anyhow::bail!("{CLOUDFLARED_OVERRIDE_PATH_ENV} points to a non-working cloudflared binary");
     }
 
-    let path_binary = PathBuf::from("cloudflared");
-    if command_runs_successfully(&path_binary, &["version"]) {
-        return Ok(path_binary);
-    }
-
     let managed = managed_cloudflared_path();
     if command_runs_successfully(&managed, &["version"]) {
         if cloudflared_version(&managed).as_deref() == Some(managed_spec.version) {
@@ -631,7 +641,18 @@ fn resolve_cloudflared_binary() -> anyhow::Result<PathBuf> {
         managed_spec.version,
         managed.display()
     );
-    install_managed_cloudflared(&managed)?;
+    if let Err(err) = install_managed_cloudflared(&managed) {
+        let path_binary = PathBuf::from("cloudflared");
+        if command_runs_successfully(&path_binary, &["version"]) {
+            eprintln!(
+                "  cloudflared: failed to install pinned managed version {} ({err}); falling back to PATH binary {}",
+                managed_spec.version,
+                path_binary.display()
+            );
+            return Ok(path_binary);
+        }
+        return Err(err);
+    }
 
     if !command_runs_successfully(&managed, &["version"]) {
         anyhow::bail!(
@@ -1004,13 +1025,15 @@ fn monitor_public_child(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloudflared_download_spec, resolve_cloudflare_tunnel_config_for, sha256_hex,
-        verify_cloudflared_download, CloudflareTunnelConfig, CloudflaredDownloadKind,
-        CloudflaredDownloadSpec,
+        cloudflared_download_spec, cloudflared_log_reports_ready,
+        resolve_cloudflare_tunnel_config_for, sha256_hex, verify_cloudflared_download,
+        CloudflareTunnelConfig, CloudflaredDownloadKind, CloudflaredDownloadSpec,
     };
     use crate::config::Config;
     use crate::fleet::FleetCredentials;
     use clap::Parser;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn base_config() -> Config {
         Config::parse_from(["codewebway", "--zrok"])
@@ -1117,5 +1140,31 @@ mod tests {
         let err = verify_cloudflared_download(b"not-the-real-binary", &spec).unwrap_err();
 
         assert!(err.to_string().contains("cloudflared checksum mismatch"));
+    }
+
+    #[test]
+    fn test_cloudflared_log_reports_ready_from_registered_connection() {
+        let dir = TempDir::new().unwrap();
+        let log_path = dir.path().join("cloudflared.log");
+        fs::write(
+            &log_path,
+            "{\"message\":\"Registered tunnel connection\"}\n",
+        )
+        .unwrap();
+
+        assert!(cloudflared_log_reports_ready(&log_path));
+    }
+
+    #[test]
+    fn test_cloudflared_log_reports_ready_from_updated_configuration() {
+        let dir = TempDir::new().unwrap();
+        let log_path = dir.path().join("cloudflared.log");
+        fs::write(
+            &log_path,
+            "{\"message\":\"Updated to new configuration\"}\n",
+        )
+        .unwrap();
+
+        assert!(cloudflared_log_reports_ready(&log_path));
     }
 }
