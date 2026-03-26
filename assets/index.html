@@ -1863,6 +1863,7 @@
 
   <script src="/assets/vendor/xterm.min.js"></script>
   <script src="/assets/vendor/xterm-addon-fit.min.js"></script>
+  <script src="/assets/vendor/xterm-addon-unicode-graphemes.min.js"></script>
   <script>
     const app = document.getElementById('app');
     const login = document.getElementById('login');
@@ -1955,12 +1956,14 @@
     const sharePresetCopyEl = document.getElementById('share-preset-copy');
     const shareLinkOutputEl = document.getElementById('share-link-output');
     const tempLinksListEl = document.getElementById('temp-links-list');
+    const terminalEl = document.getElementById('terminal');
 
     let ws;
     let retries = 0;
     let wsConnectionId = 0;
     let term;
     let fitAddon;
+    let unicodeGraphemesAddon = null;
     let loggingOut = false;
     let logoutNotice = '';
 
@@ -1978,6 +1981,9 @@
     let publicTimer = null;
     let tempLinksRefreshTimer = null;
     let viewportTimer = null;
+    let terminalRecoveryHooksBound = false;
+    let terminalRecoveryTimers = [];
+    let terminalResizeObserver = null;
     let publicStatusLoaded = false;
     const fileMeta = new Map();
     const FILE_WARN_BYTES = 128 * 1024;
@@ -2389,17 +2395,89 @@
       }
     }
 
+    function clearTerminalRecoveryTimers() {
+      for (const timer of terminalRecoveryTimers) {
+        clearTimeout(timer);
+      }
+      terminalRecoveryTimers = [];
+    }
+
+    function hasTerminalViewport() {
+      if (!term || !fitAddon || !terminalEl || app.style.display === 'none') return false;
+      const rect = terminalEl.getBoundingClientRect();
+      return rect.width >= 8 && rect.height >= 8;
+    }
+
+    function refreshTerminalViewport() {
+      if (!term || term.rows <= 0) return;
+      term.refresh(0, Math.max(0, term.rows - 1));
+    }
+
+    function performTerminalRecovery() {
+      if (!hasTerminalViewport()) return false;
+      fitAddon.fit();
+      sendTerminalResize();
+      refreshTerminalViewport();
+      return true;
+    }
+
+    function scheduleTerminalRecovery(delays = [20]) {
+      if (!fitAddon || !term) return;
+      const waitList = Array.isArray(delays) ? delays : [delays];
+      clearTerminalRecoveryTimers();
+      for (const delay of waitList) {
+        const timer = setTimeout(() => {
+          terminalRecoveryTimers = terminalRecoveryTimers.filter((entry) => entry !== timer);
+          performTerminalRecovery();
+        }, delay);
+        terminalRecoveryTimers.push(timer);
+      }
+    }
+
+    function handleTerminalResume() {
+      syncMobileViewport({ scheduleRecovery: false });
+      scheduleTerminalRecovery([0, 120, 360]);
+    }
+
+    function bindTerminalRecoveryHooks() {
+      if (terminalRecoveryHooksBound) return;
+      terminalRecoveryHooksBound = true;
+      window.addEventListener('resize', syncMobileViewport);
+      window.addEventListener('pageshow', handleTerminalResume);
+      window.addEventListener('orientationchange', handleTerminalResume);
+      window.addEventListener('focus', () => scheduleTerminalRecovery([0, 120]));
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', syncMobileViewport);
+        window.visualViewport.addEventListener('scroll', syncMobileViewport);
+      }
+      document.addEventListener('focusin', syncMobileViewport);
+      document.addEventListener('focusout', () => setTimeout(syncMobileViewport, 0));
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          handleTerminalResume();
+        }
+      });
+      if ('ResizeObserver' in window) {
+        terminalResizeObserver = new ResizeObserver(() => scheduleTerminalRecovery([30, 120]));
+        terminalResizeObserver.observe(terminalEl);
+      }
+      if (document.fonts) {
+        document.fonts.ready.then(() => scheduleTerminalRecovery([0, 120]));
+        if (typeof document.fonts.addEventListener === 'function') {
+          document.fonts.addEventListener('loadingdone', () => scheduleTerminalRecovery([0, 120]));
+        }
+      }
+    }
+
     function scheduleTerminalFit() {
       if (!fitAddon || !term) return;
       if (viewportTimer) clearTimeout(viewportTimer);
       viewportTimer = setTimeout(() => {
-        if (!fitAddon || !term) return;
-        fitAddon.fit();
-        sendTerminalResize();
+        scheduleTerminalRecovery([0, 120]);
       }, 20);
     }
 
-    function syncMobileViewport() {
+    function syncMobileViewport(options = {}) {
       const vv = window.visualViewport;
       const appHeight = vv ? Math.round(vv.height) : window.innerHeight;
       document.documentElement.style.setProperty('--app-height', `${appHeight}px`);
@@ -2413,7 +2491,9 @@
         (focused.tagName === 'TEXTAREA' ||
           (focused.tagName === 'INPUT' && focused.closest('#app')));
       document.body.classList.toggle('keyboard-open', kbInset > 80 && typingIntoInput);
-      scheduleTerminalFit();
+      if (options.scheduleRecovery !== false) {
+        scheduleTerminalFit();
+      }
     }
 
     function sendKeyStripSequence(key) {
@@ -3056,6 +3136,7 @@
     function initTerminal() {
       if (term) return;
       term = new Terminal({
+        allowProposedApi: true,
         cursorBlink: true,
         theme: { background: '#131313' },
         fontFamily: '"CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
@@ -3064,22 +3145,23 @@
       });
       fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
-      term.open(document.getElementById('terminal'));
-      fitAddon.fit();
+      if (window.UnicodeGraphemesAddon && typeof window.UnicodeGraphemesAddon.UnicodeGraphemesAddon === 'function') {
+        try {
+          unicodeGraphemesAddon = new UnicodeGraphemesAddon.UnicodeGraphemesAddon();
+          term.loadAddon(unicodeGraphemesAddon);
+        } catch (err) {
+          console.warn('Failed to enable Unicode graphemes addon.', err);
+        }
+      }
+      term.open(terminalEl);
+      bindTerminalRecoveryHooks();
+      scheduleTerminalRecovery([0, 120, 320]);
 
       term.onData((data) => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(textEncoder.encode(data));
         }
       });
-
-      window.addEventListener('resize', syncMobileViewport);
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', syncMobileViewport);
-        window.visualViewport.addEventListener('scroll', syncMobileViewport);
-      }
-      document.addEventListener('focusin', syncMobileViewport);
-      document.addEventListener('focusout', () => setTimeout(syncMobileViewport, 0));
       syncMobileViewport();
     }
 
@@ -3119,7 +3201,7 @@
         if (connectionId !== wsConnectionId) return;
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
-        sendTerminalResize();
+        scheduleTerminalRecovery([0, 120]);
       };
 
       ws.onmessage = (e) => {
@@ -4008,7 +4090,7 @@
         clearInterval(usageTimer);
       }
       usageTimer = setInterval(refreshUsage, 20000);
-      if (fitAddon) fitAddon.fit();
+      if (fitAddon) scheduleTerminalRecovery([0, 120, 320]);
     }
 
     welcomeStartBtn.addEventListener('click', async () => {
@@ -4168,13 +4250,13 @@
       } else {
         workspaceEl.classList.toggle('files-hidden');
       }
-      if (fitAddon) fitAddon.fit();
+      if (fitAddon) scheduleTerminalRecovery([0, 120]);
     });
 
     mobileBackBtn.addEventListener('click', () => {
       const filesEl = document.getElementById('files');
       if (filesEl) filesEl.classList.remove('mobile-open');
-      if (fitAddon) fitAddon.fit();
+      if (fitAddon) scheduleTerminalRecovery([0, 120]);
     });
 
     navBackBtn.addEventListener('click', () => {
