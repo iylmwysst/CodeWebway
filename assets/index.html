@@ -808,6 +808,7 @@
     }
     .toolbar-button,
     #new-tab,
+    #new-agent,
     #logout {
       display: inline-flex;
       align-items: center;
@@ -825,6 +826,7 @@
     }
     .toolbar-button .toolbar-icon,
     #new-tab .toolbar-icon,
+    #new-agent .toolbar-icon,
     #logout .toolbar-icon {
       font-size: 14px;
       line-height: 1;
@@ -832,6 +834,7 @@
     }
     .toolbar-button:hover:not(:disabled),
     #new-tab:hover:not(:disabled),
+    #new-agent:hover:not(:disabled),
     #logout:hover:not(:disabled) {
       background: rgba(255,255,255,0.08);
       border-color: rgba(150, 177, 196, 0.3);
@@ -840,6 +843,7 @@
     }
     .toolbar-button:focus-visible,
     #new-tab:focus-visible,
+    #new-agent:focus-visible,
     #logout:focus-visible {
       border-color: rgba(133, 194, 226, 0.85);
       box-shadow:
@@ -1114,7 +1118,8 @@
       text-align: center;
     }
     .tab .icon-btn:disabled { cursor: default; opacity: 0.3; }
-    #new-tab {
+    #new-tab,
+    #new-agent {
       flex-shrink: 0;
     }
     #logout {
@@ -1188,7 +1193,363 @@
       color: #edf5f9;
     }
     .preview-tab .close:disabled { opacity: 0.3; cursor: default; }
-    #terminal { flex: 1; min-height: 0; padding: 6px; }
+    #terminal-workspace {
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      gap: 14px;
+      padding: 6px;
+    }
+    #terminal-main {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(120, 146, 166, 0.12);
+      border-radius: 20px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+        rgba(12, 17, 21, 0.86);
+      overflow: hidden;
+    }
+    #terminal {
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      padding: 6px;
+    }
+    #terms.agent-mode #terminal-workspace {
+      padding-right: 10px;
+    }
+    #terms.agent-mode #terminal-main {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+    #agent-launcher,
+    #agent-inspect {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      padding: 18px;
+      overflow: auto;
+      background:
+        radial-gradient(circle at top right, rgba(88, 167, 255, 0.08), transparent 32%),
+        linear-gradient(180deg, rgba(14, 19, 24, 0.96), rgba(10, 14, 18, 0.96));
+    }
+    #terms.agent-launch #agent-launcher {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #terms.agent-inspect #agent-inspect {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    #terms.agent-launch #terminal,
+    #terms.agent-inspect #terminal {
+      display: none;
+    }
+    .agent-launcher-card,
+    .agent-inspect-card {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      border: 1px solid rgba(126, 154, 176, 0.18);
+      border-radius: 24px;
+      background:
+        linear-gradient(180deg, rgba(14, 19, 25, 0.92), rgba(10, 14, 18, 0.92)),
+        radial-gradient(circle at top right, rgba(103, 169, 255, 0.08), transparent 34%);
+      padding: 22px;
+      box-shadow:
+        0 18px 50px rgba(0, 0, 0, 0.28),
+        inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .agent-launcher-card {
+      display: grid;
+      gap: 16px;
+    }
+    .agent-launcher-card h3,
+    .agent-inspect-card h3 {
+      font-size: 18px;
+      margin: 0;
+      color: #eef6fa;
+    }
+    .agent-launcher-card p,
+    .agent-inspect-card p,
+    .agent-meta {
+      color: #9fb4c2;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .agent-meta strong {
+      color: #e4eef4;
+      font-weight: 600;
+    }
+    .agent-launch-form {
+      display: grid;
+      gap: 12px;
+    }
+    .agent-launch-form label {
+      display: grid;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #88a7b8;
+    }
+    .agent-launch-form input,
+    .agent-launch-form textarea {
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(120, 146, 166, 0.18);
+      background: rgba(255,255,255,0.03);
+      color: #eef6fa;
+      padding: 14px 16px;
+      font-size: 14px;
+      font-family: "CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace;
+    }
+    .agent-launch-form input:focus-visible,
+    .agent-launch-form textarea:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.16);
+      outline: none;
+    }
+    .agent-launch-form textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+    .agent-launch-actions,
+    .agent-inspect-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .agent-inspect-actions {
+      justify-content: space-between;
+      align-items: center;
+    }
+    .agent-inspect-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .agent-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(146, 179, 201, 0.18);
+      background: rgba(255, 255, 255, 0.04);
+      color: #d6e5ee;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .agent-path {
+      color: #dce8ee;
+      font-family: "CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .agent-error {
+      min-height: 18px;
+      color: #ff8a80;
+      font-size: 12px;
+    }
+    #agent-rounds {
+      display: none;
+      width: min(340px, 36vw);
+      min-width: 260px;
+      max-width: 380px;
+      flex-shrink: 0;
+      border: 1px solid rgba(120, 146, 166, 0.12);
+      border-radius: 20px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+        rgba(12, 17, 21, 0.88);
+      overflow: hidden;
+    }
+    #terms.agent-mode #agent-rounds {
+      display: flex;
+      flex-direction: column;
+    }
+    #terms.agent-launch #agent-rounds {
+      display: none;
+    }
+    .agent-rounds-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+    }
+    .agent-rounds-head h3 {
+      font-size: 15px;
+      margin: 0;
+      color: #eef6fa;
+    }
+    .agent-rounds-head p {
+      margin: 0;
+      color: #87a0af;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    #agent-rounds-list {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .agent-round-card {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      background: rgba(255,255,255,0.03);
+      color: #dce8ee;
+      text-align: left;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+    }
+    .agent-round-card:hover:not(:disabled) {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(120, 146, 166, 0.22);
+      transform: translateY(-1px);
+    }
+    .agent-round-card.active {
+      border-color: rgba(133, 194, 226, 0.28);
+      background: rgba(77, 118, 140, 0.18);
+    }
+    .agent-round-card:focus-visible {
+      border-color: rgba(133, 194, 226, 0.85);
+      box-shadow:
+        0 0 0 1px rgba(133, 194, 226, 0.55),
+        0 0 0 4px rgba(74, 122, 146, 0.18);
+      outline: none;
+    }
+    .agent-round-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #eef6fa;
+    }
+    .agent-round-input {
+      font-family: "CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace;
+      font-size: 13px;
+      color: #d7e6ee;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .agent-round-meta,
+    .agent-round-preview {
+      color: #92aab9;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .agent-round-preview {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .agent-live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(133, 194, 226, 0.28);
+      background: rgba(77, 118, 140, 0.16);
+      padding: 4px 10px;
+      color: #dfeef5;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .tab-badge,
+    .tab-unread {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      border-radius: 999px;
+      padding: 0 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .tab-badge {
+      border: 1px solid rgba(133, 194, 226, 0.24);
+      background: rgba(77, 118, 140, 0.16);
+      color: #d9edf8;
+    }
+    .tab-unread {
+      border: 1px solid rgba(146, 179, 201, 0.18);
+      background: rgba(255,255,255,0.06);
+      color: #f1f7fa;
+    }
+    .agent-inspect-card {
+      display: grid;
+      gap: 14px;
+    }
+    .agent-inspect-section {
+      display: grid;
+      gap: 8px;
+    }
+    .agent-inspect-label {
+      color: #88a7b8;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .agent-inspect-block {
+      border-radius: 16px;
+      border: 1px solid rgba(120, 146, 166, 0.14);
+      background: rgba(255,255,255,0.03);
+      color: #d9e7ef;
+      padding: 14px;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: min(42vh, 520px);
+      font-family: "CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace;
+    }
+    .agent-empty {
+      padding: 18px;
+      border-radius: 16px;
+      border: 1px dashed rgba(120, 146, 166, 0.16);
+      color: #8ea4b3;
+      font-size: 13px;
+      line-height: 1.6;
+      background: rgba(255,255,255,0.02);
+    }
     #logout-modal {
       position: fixed;
       inset: 0;
@@ -1423,6 +1784,15 @@
         z-index: 9;
       }
       #terminal { padding-bottom: calc(var(--key-strip-height) + env(safe-area-inset-bottom)); }
+      #terminal-workspace {
+        flex-direction: column;
+      }
+      #agent-rounds {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        max-height: 42vh;
+      }
       body.keyboard-open #key-strip {
         gap: 4px;
         padding: 4px 6px;
@@ -1451,6 +1821,8 @@
       }
       #toggle-files .toolbar-label,
       #new-tab .toolbar-label,
+      #new-agent .toolbar-label,
+      #open-agent-here .toolbar-label,
       #logout .toolbar-label {
         display: none;
       }
@@ -1710,6 +2082,10 @@
               <span class="toolbar-icon" aria-hidden="true">⌨</span>
               <span class="toolbar-label">Shell Here</span>
             </button>
+            <button id="open-agent-here" class="toolbar-button" type="button" title="Open an agent session in this directory" aria-label="Open an agent session in this directory">
+              <span class="toolbar-icon" aria-hidden="true">◉</span>
+              <span class="toolbar-label">Agent Here</span>
+            </button>
             <button id="mobile-back" class="toolbar-button" type="button" title="Hide files panel" aria-label="Hide files panel">
               <span class="toolbar-icon" aria-hidden="true">✕</span>
               <span class="toolbar-label">Hide</span>
@@ -1752,6 +2128,10 @@
               <span class="toolbar-icon" aria-hidden="true">+</span>
               <span class="toolbar-label">New Tab</span>
             </button>
+            <button id="new-agent" type="button" title="New agent session tab" aria-label="Create a new agent session tab">
+              <span class="toolbar-icon" aria-hidden="true">◉</span>
+              <span class="toolbar-label">New Agent</span>
+            </button>
           </div>
           <div id="tab-fixed">
             <div id="tab-info">
@@ -1764,7 +2144,67 @@
             </button>
           </div>
         </div>
-        <div id="terminal"></div>
+        <div id="terminal-workspace">
+          <div id="terminal-main">
+            <div id="terminal"></div>
+            <div id="agent-launcher">
+              <div class="agent-launcher-card">
+                <div class="stack">
+                  <span class="eyebrow">Agent Session</span>
+                  <h3>Start an agent in this path.</h3>
+                  <p>The command is freeform. After launch, all interaction stays inside the live terminal.</p>
+                </div>
+                <div class="agent-meta"><strong>Path</strong><div id="agent-launch-path" class="agent-path"></div></div>
+                <form id="agent-launch-form" class="agent-launch-form">
+                  <label>
+                    Command
+                    <textarea id="agent-launch-command" spellcheck="false" placeholder="codex --auto-approve"></textarea>
+                  </label>
+                  <div id="agent-launch-error" class="agent-error"></div>
+                  <div class="agent-launch-actions">
+                    <button id="agent-launch-cancel" class="ghost" type="button">Cancel</button>
+                    <button id="agent-launch-start" type="submit">Start Session</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+            <div id="agent-inspect">
+              <div class="agent-inspect-card">
+                <div class="agent-inspect-actions">
+                  <div class="agent-inspect-meta">
+                    <span class="eyebrow">Round Inspect</span>
+                    <span id="agent-inspect-status" class="agent-chip">Idle</span>
+                  </div>
+                  <button id="agent-back-to-live" type="button">Back to Live</button>
+                </div>
+                <h3 id="agent-inspect-title">Round</h3>
+                <p id="agent-inspect-subtitle">Review the submitted input and preserved output from this round.</p>
+                <div class="agent-inspect-section">
+                  <div class="agent-inspect-label">Input</div>
+                  <pre id="agent-inspect-input" class="agent-inspect-block"></pre>
+                </div>
+                <div class="agent-inspect-section">
+                  <div class="agent-inspect-label">Output</div>
+                  <pre id="agent-inspect-output" class="agent-inspect-block"></pre>
+                </div>
+                <div class="agent-inspect-section">
+                  <div class="agent-inspect-label">Final Snapshot</div>
+                  <pre id="agent-inspect-snapshot" class="agent-inspect-block"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <aside id="agent-rounds" aria-label="Agent rounds history">
+            <div class="agent-rounds-head">
+              <div class="stack">
+                <p>Local Only</p>
+                <h3>Rounds</h3>
+              </div>
+              <span id="agent-rounds-mode" class="agent-live-pill">Live</span>
+            </div>
+            <div id="agent-rounds-list"></div>
+          </aside>
+        </div>
         <div id="key-strip">
           <button type="button" class="cursor-key" data-key="left" title="Move cursor left" aria-label="Move cursor left">←</button>
           <button type="button" class="cursor-key" data-key="right" title="Move cursor right" aria-label="Move cursor right">→</button>
@@ -1914,6 +2354,7 @@
     const staySignedInBtn = document.getElementById('stay-signed-in');
     const logoutBtn = document.getElementById('logout');
     const newTabBtn = document.getElementById('new-tab');
+    const newAgentBtn = document.getElementById('new-agent');
     const toggleFilesBtn = document.getElementById('toggle-files');
     const mobileBackBtn = document.getElementById('mobile-back');
     const navBackBtn = document.getElementById('nav-back');
@@ -1931,6 +2372,7 @@
     const saveFileBtn = document.getElementById('save-file');
     const cancelEditBtn = document.getElementById('cancel-edit');
     const openShellHereBtn = document.getElementById('open-shell-here');
+    const openAgentHereBtn = document.getElementById('open-agent-here');
     const refreshTreeBtn = document.getElementById('refresh-tree');
     const keyStripEl = document.getElementById('key-strip');
     const logoutModal = document.getElementById('logout-modal');
@@ -1956,7 +2398,26 @@
     const sharePresetCopyEl = document.getElementById('share-preset-copy');
     const shareLinkOutputEl = document.getElementById('share-link-output');
     const tempLinksListEl = document.getElementById('temp-links-list');
+    const termsEl = document.getElementById('terms');
+    const terminalWorkspaceEl = document.getElementById('terminal-workspace');
     const terminalEl = document.getElementById('terminal');
+    const agentLauncherEl = document.getElementById('agent-launcher');
+    const agentLaunchPathEl = document.getElementById('agent-launch-path');
+    const agentLaunchFormEl = document.getElementById('agent-launch-form');
+    const agentLaunchCommandEl = document.getElementById('agent-launch-command');
+    const agentLaunchErrorEl = document.getElementById('agent-launch-error');
+    const agentLaunchCancelBtn = document.getElementById('agent-launch-cancel');
+    const agentInspectEl = document.getElementById('agent-inspect');
+    const agentInspectTitleEl = document.getElementById('agent-inspect-title');
+    const agentInspectSubtitleEl = document.getElementById('agent-inspect-subtitle');
+    const agentInspectStatusEl = document.getElementById('agent-inspect-status');
+    const agentInspectInputEl = document.getElementById('agent-inspect-input');
+    const agentInspectOutputEl = document.getElementById('agent-inspect-output');
+    const agentInspectSnapshotEl = document.getElementById('agent-inspect-snapshot');
+    const agentBackToLiveBtn = document.getElementById('agent-back-to-live');
+    const agentRoundsEl = document.getElementById('agent-rounds');
+    const agentRoundsListEl = document.getElementById('agent-rounds-list');
+    const agentRoundsModeEl = document.getElementById('agent-rounds-mode');
 
     let ws;
     let retries = 0;
@@ -1991,7 +2452,21 @@
     const CACHE_PREFIX = 'rwtty:file:';
     const TERM_CACHE_PREFIX = 'cw:term:';
     const TERM_CACHE_MAX_CHARS = 500000;
+    const AGENT_DB_NAME = 'codewebway-agent-sessions';
+    const AGENT_DB_VERSION = 1;
+    const AGENT_KIND = 'agent';
+    const AGENT_SESSION_STORE = 'agent_sessions';
+    const AGENT_ROUND_STORE = 'agent_rounds';
+    const AGENT_OUTPUT_LIMIT_CHARS = 160000;
+    const AGENT_SNAPSHOT_LIMIT_LINES = 200;
+    const AGENT_ROUND_LIMIT = 200;
+    const AGENT_TOTAL_TEXT_LIMIT = 8 * 1024 * 1024;
     const terminalCache = new Map();
+    const agentSessions = new Map();
+    const roundsByTerminal = new Map();
+    const agentInputComposer = new Map();
+    const agentPersistTimers = new Map();
+    let agentDbPromise = null;
     const textEncoder = new TextEncoder();
     const textDecoder = new TextDecoder();
     const KEY_STRIP_SEQUENCES = {
@@ -2604,7 +3079,9 @@
       const disableTerminalOps = readOnly || Boolean(bound);
 
       newTabBtn.disabled = disableTerminalOps;
+      newAgentBtn.disabled = disableTerminalOps;
       openShellHereBtn.disabled = disableTerminalOps;
+      openAgentHereBtn.disabled = disableTerminalOps;
       if (shareBtn) {
         shareBtn.disabled = readOnly || Boolean(sessionAccess.tempLinkId);
       }
@@ -2701,6 +3178,763 @@
     function appendTerminalCache(terminalId, chunk) {
       if (!chunk) return;
       writeTerminalCache(terminalId, `${readTerminalCache(terminalId)}${chunk}`);
+    }
+
+    function openAgentDb() {
+      if (!('indexedDB' in window)) return Promise.resolve(null);
+      if (agentDbPromise) return agentDbPromise;
+      agentDbPromise = new Promise((resolve) => {
+        const request = indexedDB.open(AGENT_DB_NAME, AGENT_DB_VERSION);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(AGENT_SESSION_STORE)) {
+            db.createObjectStore(AGENT_SESSION_STORE, { keyPath: 'terminalId' });
+          }
+          if (!db.objectStoreNames.contains(AGENT_ROUND_STORE)) {
+            const store = db.createObjectStore(AGENT_ROUND_STORE, { keyPath: 'storageKey' });
+            store.createIndex('by_terminal', 'terminalId', { unique: false });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+      });
+      return agentDbPromise;
+    }
+
+    async function agentDbPut(storeName, value) {
+      const db = await openAgentDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).put(value);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      });
+    }
+
+    async function agentDbDelete(storeName, key) {
+      const db = await openAgentDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      });
+    }
+
+    async function agentDbGetAll(storeName) {
+      const db = await openAgentDb();
+      if (!db) return [];
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const request = tx.objectStore(storeName).getAll();
+        request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+        request.onerror = () => resolve([]);
+      });
+    }
+
+    async function agentDbDeleteByTerminal(terminalId) {
+      const db = await openAgentDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction([AGENT_SESSION_STORE, AGENT_ROUND_STORE], 'readwrite');
+        tx.objectStore(AGENT_SESSION_STORE).delete(terminalId);
+        const roundStore = tx.objectStore(AGENT_ROUND_STORE);
+        const index = roundStore.index('by_terminal');
+        const request = index.openCursor(IDBKeyRange.only(terminalId));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          roundStore.delete(cursor.primaryKey);
+          cursor.continue();
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      });
+    }
+
+    function folderLabelFromPath(path) {
+      if (!path || path === '.' || path === '/') return 'workspace';
+      const normalized = path.endsWith('/') && path.length > 1 ? path.slice(0, -1) : path;
+      const bits = normalized.split('/');
+      return bits[bits.length - 1] || 'workspace';
+    }
+
+    function getTerminalSummaryById(terminalId) {
+      return terminals.find((item) => item.id === terminalId) || null;
+    }
+
+    function isAgentTerminal(terminalId) {
+      return agentSessions.has(terminalId);
+    }
+
+    function getAgentSession(terminalId) {
+      return agentSessions.get(terminalId) || null;
+    }
+
+    function createAgentSessionRecord(terminalId, overrides = {}) {
+      const terminalItem = getTerminalSummaryById(terminalId);
+      return {
+        terminalId,
+        kind: AGENT_KIND,
+        phase: 'launch',
+        cwd: terminalItem?.cwd || '.',
+        launchCommand: '',
+        startedAt: null,
+        endedAt: null,
+        selectedRoundId: null,
+        liveUnreadCount: 0,
+        persistenceKey: `agent:${terminalId}`,
+        updatedAt: Date.now(),
+        replayPrefix: '',
+        pendingLaunchCommand: '',
+        ...overrides
+      };
+    }
+
+    function ensureAgentSession(terminalId, overrides = {}) {
+      const existing = getAgentSession(terminalId);
+      if (existing) {
+        Object.assign(existing, overrides);
+        existing.updatedAt = Date.now();
+        return existing;
+      }
+      const created = createAgentSessionRecord(terminalId, overrides);
+      agentSessions.set(terminalId, created);
+      return created;
+    }
+
+    function ensureRounds(terminalId) {
+      if (!roundsByTerminal.has(terminalId)) {
+        roundsByTerminal.set(terminalId, []);
+      }
+      return roundsByTerminal.get(terminalId);
+    }
+
+    function ensureComposer(terminalId) {
+      if (!agentInputComposer.has(terminalId)) {
+        agentInputComposer.set(terminalId, {
+          lineBuffer: '',
+          sawPrintableInput: false,
+          sawControlInput: false,
+          lastInputAt: 0
+        });
+      }
+      return agentInputComposer.get(terminalId);
+    }
+
+    function resetComposer(terminalId) {
+      agentInputComposer.set(terminalId, {
+        lineBuffer: '',
+        sawPrintableInput: false,
+        sawControlInput: false,
+        lastInputAt: 0
+      });
+    }
+
+    function makeRoundStorageKey(terminalId, roundId) {
+      return `${terminalId}:${roundId}`;
+    }
+
+    function sanitizeRoundRecord(terminalId, round) {
+      return {
+        storageKey: makeRoundStorageKey(terminalId, round.roundId),
+        terminalId,
+        roundId: round.roundId,
+        index: round.index,
+        status: round.status,
+        startedAt: round.startedAt,
+        endedAt: round.endedAt,
+        submittedInputText: round.submittedInputText,
+        submittedInputKind: round.submittedInputKind,
+        outputText: round.outputText,
+        outputPreview: round.outputPreview,
+        endSnapshotText: round.endSnapshotText,
+        byteCount: round.byteCount
+      };
+    }
+
+    function sanitizeSessionRecord(session) {
+      return {
+        terminalId: session.terminalId,
+        kind: session.kind,
+        phase: session.phase,
+        cwd: session.cwd,
+        launchCommand: session.launchCommand,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        selectedRoundId: session.selectedRoundId,
+        liveUnreadCount: session.liveUnreadCount || 0,
+        persistenceKey: session.persistenceKey,
+        updatedAt: Date.now()
+      };
+    }
+
+    async function persistAgentSession(terminalId) {
+      const session = getAgentSession(terminalId);
+      if (!session) return;
+      await agentDbPut(AGENT_SESSION_STORE, sanitizeSessionRecord(session));
+    }
+
+    async function persistAgentRound(terminalId, round) {
+      if (!round) return;
+      await agentDbPut(AGENT_ROUND_STORE, sanitizeRoundRecord(terminalId, round));
+    }
+
+    function schedulePersistRunningRound(terminalId) {
+      if (agentPersistTimers.has(terminalId)) return;
+      const timer = setTimeout(async () => {
+        agentPersistTimers.delete(terminalId);
+        const round = getCurrentRound(terminalId);
+        if (round) {
+          await persistAgentRound(terminalId, round);
+        }
+        await persistAgentSession(terminalId);
+      }, 500);
+      agentPersistTimers.set(terminalId, timer);
+    }
+
+    async function flushAgentPersistence(terminalId) {
+      if (agentPersistTimers.has(terminalId)) {
+        clearTimeout(agentPersistTimers.get(terminalId));
+        agentPersistTimers.delete(terminalId);
+      }
+      const round = getCurrentRound(terminalId);
+      if (round) {
+        await persistAgentRound(terminalId, round);
+      }
+      await persistAgentSession(terminalId);
+    }
+
+    function getCurrentRound(terminalId) {
+      const rounds = ensureRounds(terminalId);
+      const candidate = rounds[rounds.length - 1];
+      return candidate && candidate.status === 'running' ? candidate : null;
+    }
+
+    function nextRoundIndex(terminalId) {
+      return ensureRounds(terminalId).length + 1;
+    }
+
+    function createRound(terminalId, submittedInputText, submittedInputKind = 'unknown') {
+      const round = {
+        roundId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        index: nextRoundIndex(terminalId),
+        status: 'running',
+        startedAt: Date.now(),
+        endedAt: null,
+        submittedInputText: submittedInputText || 'Interactive input',
+        submittedInputKind,
+        outputText: '',
+        outputPreview: '',
+        endSnapshotText: '',
+        byteCount: 0
+      };
+      ensureRounds(terminalId).push(round);
+      return round;
+    }
+
+    function trimAgentText(text, limit) {
+      if (!text) return '';
+      if (text.length <= limit) return text;
+      return text.slice(text.length - limit);
+    }
+
+    function stripAnsi(text) {
+      if (!text) return '';
+      return text
+        .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1b[@-Z\\-_]/g, '')
+        .replace(/\u0000/g, '');
+    }
+
+    function normalizeTranscriptText(text) {
+      if (!text) return '';
+      return stripAnsi(text)
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n');
+    }
+
+    function deriveRoundPreview(outputText) {
+      if (!outputText) return 'No output captured yet.';
+      const lines = outputText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length === 0) return 'No output captured yet.';
+      return lines.slice(-2).join(' · ').slice(0, 180);
+    }
+
+    function formatRoundStatus(round) {
+      const started = round.startedAt || Date.now();
+      const ended = round.endedAt || Date.now();
+      const seconds = Math.max(0, Math.round((ended - started) / 1000));
+      const status = round.status || 'running';
+      if (status === 'running') return `running · ${formatSeconds(seconds)}`;
+      return `${status} · ${formatSeconds(seconds)}`;
+    }
+
+    function readTerminalSnapshotText() {
+      if (!term || !term.buffer || !term.buffer.active) return '';
+      const buffer = term.buffer.active;
+      const start = Math.max(0, buffer.length - AGENT_SNAPSHOT_LIMIT_LINES);
+      const lines = [];
+      for (let i = start; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (!line) continue;
+        lines.push(line.translateToString(true));
+      }
+      return trimAgentText(lines.join('\n'), AGENT_OUTPUT_LIMIT_CHARS);
+    }
+
+    function enforceRoundLimits(terminalId) {
+      const rounds = ensureRounds(terminalId);
+      let totalText = rounds.reduce((sum, round) => (
+        sum + (round.outputText?.length || 0) + (round.endSnapshotText?.length || 0)
+      ), 0);
+
+      while (rounds.length > AGENT_ROUND_LIMIT || totalText > AGENT_TOTAL_TEXT_LIMIT) {
+        const oldestClosedIndex = rounds.findIndex((round) => round.status !== 'running');
+        if (oldestClosedIndex === -1) break;
+        const [removed] = rounds.splice(oldestClosedIndex, 1);
+        totalText -= (removed.outputText?.length || 0) + (removed.endSnapshotText?.length || 0);
+        agentDbDelete(AGENT_ROUND_STORE, makeRoundStorageKey(terminalId, removed.roundId));
+      }
+
+      rounds.forEach((round, idx) => {
+        round.index = idx + 1;
+      });
+    }
+
+    function closeAgentRound(terminalId, reason = 'done') {
+      const current = getCurrentRound(terminalId);
+      if (!current) return null;
+      current.status = reason;
+      current.endedAt = Date.now();
+      if (activeTerminalId === terminalId) {
+        current.endSnapshotText = trimAgentText(readTerminalSnapshotText(), AGENT_OUTPUT_LIMIT_CHARS);
+      } else if (!current.endSnapshotText) {
+        current.endSnapshotText = trimAgentText(current.outputText, AGENT_OUTPUT_LIMIT_CHARS);
+      }
+      current.outputPreview = deriveRoundPreview(current.outputText || current.endSnapshotText);
+      enforceRoundLimits(terminalId);
+      persistAgentRound(terminalId, current);
+      persistAgentSession(terminalId);
+      return current;
+    }
+
+    function ensureRoundForOutput(terminalId) {
+      const current = getCurrentRound(terminalId);
+      if (current) return current;
+      return createRound(terminalId, 'Session output', 'unknown');
+    }
+
+    function composeSubmittedInput(composer, fallbackLabel = 'Interactive input') {
+      const trimmed = composer.lineBuffer.trim();
+      if (trimmed && !composer.sawControlInput) return trimmed;
+      if (trimmed && composer.sawControlInput) return trimmed;
+      if (composer.sawPrintableInput) return composer.lineBuffer.trim() || fallbackLabel;
+      if (composer.sawControlInput) return fallbackLabel;
+      return fallbackLabel;
+    }
+
+    function markAgentSessionPhase(terminalId, phase) {
+      const session = ensureAgentSession(terminalId);
+      session.phase = phase;
+      if (phase === 'live') {
+        session.liveUnreadCount = 0;
+      }
+      session.updatedAt = Date.now();
+      persistAgentSession(terminalId);
+    }
+
+    function consumeReplayPrefix(terminalId, text) {
+      const session = getAgentSession(terminalId);
+      if (!session || !session.replayPrefix || !text) return text;
+      const prefix = session.replayPrefix;
+      const max = Math.min(prefix.length, text.length);
+      let idx = 0;
+      while (idx < max && prefix.charCodeAt(idx) === text.charCodeAt(idx)) {
+        idx += 1;
+      }
+      if (idx === 0) {
+        session.replayPrefix = '';
+        return text;
+      }
+      session.replayPrefix = prefix.slice(idx);
+      if (idx >= text.length) return '';
+      return text.slice(idx);
+    }
+
+    function captureAgentInput(terminalId, data) {
+      const session = getAgentSession(terminalId);
+      if (!session || !data) return;
+      session.replayPrefix = '';
+      const composer = ensureComposer(terminalId);
+      for (const char of data) {
+        composer.lastInputAt = Date.now();
+        if (char === '\r' || char === '\n') {
+          closeAgentRound(terminalId, 'done');
+          createRound(terminalId, composeSubmittedInput(composer, 'Enter'), 'text');
+          resetComposer(terminalId);
+          continue;
+        }
+        if (char === '\u0003') {
+          closeAgentRound(terminalId, 'interrupted');
+          createRound(terminalId, '^C', 'control');
+          resetComposer(terminalId);
+          continue;
+        }
+        if (char === '\u007f' || char === '\b') {
+          composer.lineBuffer = composer.lineBuffer.slice(0, -1);
+          composer.sawControlInput = true;
+          continue;
+        }
+        if (char === '\t' || char === '\u001b') {
+          composer.sawControlInput = true;
+          continue;
+        }
+        const code = char.charCodeAt(0);
+        if (code < 32) {
+          composer.sawControlInput = true;
+          continue;
+        }
+        composer.sawPrintableInput = true;
+        composer.lineBuffer += char;
+      }
+      schedulePersistRunningRound(terminalId);
+      renderAgentRounds();
+    }
+
+    function captureAgentOutput(terminalId, text) {
+      const session = getAgentSession(terminalId);
+      if (!session || !text) return;
+      const normalized = normalizeTranscriptText(text);
+      if (!normalized) return;
+      const round = ensureRoundForOutput(terminalId);
+      round.outputText = trimAgentText(`${round.outputText}${normalized}`, AGENT_OUTPUT_LIMIT_CHARS);
+      round.outputPreview = deriveRoundPreview(round.outputText);
+      round.byteCount += normalized.length;
+      if (session.phase === 'inspect') {
+        session.liveUnreadCount += normalized.length;
+      }
+      schedulePersistRunningRound(terminalId);
+      if (activeTerminalId === terminalId) {
+        renderAgentRounds();
+        if (session.phase === 'inspect' && session.selectedRoundId === round.roundId) {
+          renderAgentInspect(round.roundId);
+        }
+      }
+    }
+
+    async function restoreAgentSessions() {
+      const ids = new Set(terminals.map((item) => item.id));
+      const [sessionRows, roundRows] = await Promise.all([
+        agentDbGetAll(AGENT_SESSION_STORE),
+        agentDbGetAll(AGENT_ROUND_STORE)
+      ]);
+      const staleIds = new Set();
+      agentSessions.clear();
+      roundsByTerminal.clear();
+      agentInputComposer.clear();
+
+      for (const row of sessionRows) {
+        if (!ids.has(row.terminalId)) {
+          staleIds.add(row.terminalId);
+          continue;
+        }
+        agentSessions.set(row.terminalId, createAgentSessionRecord(row.terminalId, {
+          ...row,
+          replayPrefix: '',
+          pendingLaunchCommand: ''
+        }));
+      }
+
+      for (const row of roundRows) {
+        if (!ids.has(row.terminalId)) {
+          staleIds.add(row.terminalId);
+          continue;
+        }
+        const rounds = ensureRounds(row.terminalId);
+        rounds.push({
+          roundId: row.roundId,
+          index: row.index,
+          status: row.status,
+          startedAt: row.startedAt,
+          endedAt: row.endedAt,
+          submittedInputText: row.submittedInputText,
+          submittedInputKind: row.submittedInputKind,
+          outputText: row.outputText || '',
+          outputPreview: row.outputPreview || '',
+          endSnapshotText: row.endSnapshotText || '',
+          byteCount: row.byteCount || 0
+        });
+      }
+
+      for (const rounds of roundsByTerminal.values()) {
+        rounds.sort((a, b) => (a.index || 0) - (b.index || 0));
+      }
+
+      for (const staleId of staleIds) {
+        agentDbDeleteByTerminal(staleId);
+      }
+    }
+
+    async function deleteAgentSessionState(terminalId) {
+      agentSessions.delete(terminalId);
+      roundsByTerminal.delete(terminalId);
+      agentInputComposer.delete(terminalId);
+      if (agentPersistTimers.has(terminalId)) {
+        clearTimeout(agentPersistTimers.get(terminalId));
+        agentPersistTimers.delete(terminalId);
+      }
+      await agentDbDeleteByTerminal(terminalId);
+    }
+
+    function renderAgentInspect(roundId) {
+      const session = getAgentSession(activeTerminalId);
+      const rounds = ensureRounds(activeTerminalId);
+      const fallback = rounds[rounds.length - 1] || null;
+      const round = rounds.find((item) => item.roundId === roundId) || fallback;
+      if (!round) {
+        agentInspectTitleEl.textContent = 'No round selected';
+        agentInspectSubtitleEl.textContent = 'Start the session and send input to build local round history.';
+        agentInspectStatusEl.textContent = 'Idle';
+        agentInspectInputEl.textContent = 'No input captured yet.';
+        agentInspectOutputEl.textContent = 'No output captured yet.';
+        agentInspectSnapshotEl.textContent = 'No snapshot captured yet.';
+        return;
+      }
+      if (session) {
+        session.selectedRoundId = round.roundId;
+      }
+      agentInspectTitleEl.textContent = `Round ${round.index}`;
+      agentInspectSubtitleEl.textContent = round.submittedInputText || 'Interactive input';
+      agentInspectStatusEl.textContent = round.status || 'running';
+      agentInspectInputEl.textContent = round.submittedInputText || 'Interactive input';
+      agentInspectOutputEl.textContent = round.outputText || 'No output captured yet.';
+      agentInspectSnapshotEl.textContent = round.endSnapshotText || round.outputText || 'No snapshot captured yet.';
+    }
+
+    function renderAgentRounds() {
+      const session = getAgentSession(activeTerminalId);
+      if (!session) {
+        agentRoundsListEl.innerHTML = '';
+        agentRoundsModeEl.textContent = 'Live';
+        return;
+      }
+
+      const rounds = [...ensureRounds(activeTerminalId)].sort((a, b) => b.index - a.index);
+      agentRoundsModeEl.textContent = session.phase === 'inspect' ? 'Inspect' : 'Live';
+      agentRoundsListEl.innerHTML = '';
+
+      const liveBtn = document.createElement('button');
+      liveBtn.type = 'button';
+      liveBtn.className = `agent-round-card ${session.phase === 'live' ? 'active' : ''}`;
+      liveBtn.onclick = () => returnAgentToLive(activeTerminalId);
+      const liveTitle = document.createElement('div');
+      liveTitle.className = 'agent-round-title';
+      liveTitle.innerHTML = `<span>Live now</span>`;
+      if (session.liveUnreadCount > 0) {
+        const unread = document.createElement('span');
+        unread.className = 'tab-unread';
+        unread.textContent = `+${Math.min(session.liveUnreadCount, 999)}`;
+        liveTitle.appendChild(unread);
+      }
+      liveBtn.appendChild(liveTitle);
+      const liveInput = document.createElement('div');
+      liveInput.className = 'agent-round-input';
+      liveInput.textContent = session.launchCommand || 'Interactive terminal';
+      liveBtn.appendChild(liveInput);
+      const liveMeta = document.createElement('div');
+      liveMeta.className = 'agent-round-meta';
+      liveMeta.textContent = 'Return to the live interactive terminal.';
+      liveBtn.appendChild(liveMeta);
+      agentRoundsListEl.appendChild(liveBtn);
+
+      if (rounds.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'agent-empty';
+        empty.textContent = 'Rounds will appear here after you launch the agent and send input in the terminal.';
+        agentRoundsListEl.appendChild(empty);
+        return;
+      }
+
+      rounds.forEach((round) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = `agent-round-card ${session.phase === 'inspect' && session.selectedRoundId === round.roundId ? 'active' : ''}`;
+        card.onclick = () => selectAgentRound(activeTerminalId, round.roundId);
+
+        const title = document.createElement('div');
+        title.className = 'agent-round-title';
+        const label = document.createElement('span');
+        label.textContent = `Round ${round.index}`;
+        title.appendChild(label);
+        const status = document.createElement('span');
+        status.className = 'agent-chip';
+        status.textContent = round.status || 'running';
+        title.appendChild(status);
+        card.appendChild(title);
+
+        const input = document.createElement('div');
+        input.className = 'agent-round-input';
+        input.textContent = round.submittedInputText || 'Interactive input';
+        card.appendChild(input);
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-round-meta';
+        meta.textContent = formatRoundStatus(round);
+        card.appendChild(meta);
+
+        const preview = document.createElement('div');
+        preview.className = 'agent-round-preview';
+        preview.textContent = round.outputPreview || deriveRoundPreview(round.outputText || round.endSnapshotText);
+        card.appendChild(preview);
+
+        agentRoundsListEl.appendChild(card);
+      });
+    }
+
+    function renderAgentSurface() {
+      const session = getAgentSession(activeTerminalId);
+      termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect');
+      keyStripEl.style.display = '';
+
+      if (!session) {
+        agentLaunchErrorEl.textContent = '';
+        return;
+      }
+
+      termsEl.classList.add('agent-mode');
+      if (session.phase === 'launch') {
+        termsEl.classList.add('agent-launch');
+        keyStripEl.style.display = 'none';
+        agentLaunchPathEl.textContent = session.cwd || getTerminalSummaryById(activeTerminalId)?.cwd || '.';
+        if (document.activeElement !== agentLaunchCommandEl) {
+          agentLaunchCommandEl.value = session.pendingLaunchCommand || session.launchCommand || '';
+        }
+      } else if (session.phase === 'inspect') {
+        termsEl.classList.add('agent-inspect');
+        keyStripEl.style.display = 'none';
+        renderAgentInspect(session.selectedRoundId);
+      }
+      renderAgentRounds();
+    }
+
+    function openAgentLauncher(terminalId) {
+      const session = ensureAgentSession(terminalId, {
+        phase: 'launch',
+        cwd: getTerminalSummaryById(terminalId)?.cwd || '.',
+        selectedRoundId: null
+      });
+      activeTerminalId = terminalId;
+      closeSocket();
+      if (term) term.clear();
+      renderTerminalTabs();
+      renderAgentSurface();
+      setStatus(`Agent ready: ${terminalId}`, '#7fb3c9');
+      requestAnimationFrame(() => {
+        agentLaunchCommandEl.focus();
+        agentLaunchCommandEl.setSelectionRange(agentLaunchCommandEl.value.length, agentLaunchCommandEl.value.length);
+      });
+      persistAgentSession(session.terminalId);
+    }
+
+    function selectAgentRound(terminalId, roundId) {
+      const session = getAgentSession(terminalId);
+      if (!session) return;
+      session.phase = 'inspect';
+      session.selectedRoundId = roundId;
+      session.updatedAt = Date.now();
+      renderAgentSurface();
+      persistAgentSession(terminalId);
+    }
+
+    function returnAgentToLive(terminalId) {
+      const session = getAgentSession(terminalId);
+      if (!session) return;
+      session.phase = 'live';
+      session.selectedRoundId = null;
+      session.liveUnreadCount = 0;
+      session.updatedAt = Date.now();
+      renderAgentSurface();
+      persistAgentSession(terminalId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        connectTerminal(terminalId, { skipScrollback: false });
+      } else {
+        scheduleTerminalRecovery([0, 120]);
+      }
+    }
+
+    function activateTerminalTab(terminalId) {
+      const session = getAgentSession(terminalId);
+      if (session && session.phase === 'launch') {
+        openAgentLauncher(terminalId);
+        return;
+      }
+
+      activeTerminalId = terminalId;
+      renderTerminalTabs();
+      if (session) {
+        renderAgentSurface();
+      } else {
+        termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect');
+      }
+      connectTerminal(terminalId, { skipScrollback: false });
+    }
+
+    async function createAgentTerminal(cwd) {
+      const created = await createTerminal(cwd, {
+        title: `agent: ${folderLabelFromPath(cwd || currentNavDir || '.')}`,
+        autoConnect: false
+      });
+      if (!created) return null;
+      ensureAgentSession(created.id, {
+        phase: 'launch',
+        cwd: created.cwd || cwd || '.',
+        launchCommand: '',
+        pendingLaunchCommand: ''
+      });
+      openAgentLauncher(created.id);
+      return created;
+    }
+
+    async function startAgentSession(terminalId, command) {
+      const trimmed = (command || '').trim();
+      if (!trimmed) {
+        agentLaunchErrorEl.textContent = 'Enter a launch command first.';
+        return;
+      }
+      const session = ensureAgentSession(terminalId, {
+        phase: 'live',
+        cwd: getTerminalSummaryById(terminalId)?.cwd || '.',
+        launchCommand: trimmed,
+        pendingLaunchCommand: '',
+        startedAt: Date.now(),
+        endedAt: null,
+        selectedRoundId: null,
+        liveUnreadCount: 0,
+        replayPrefix: ''
+      });
+      ensureRounds(terminalId).length = 0;
+      resetComposer(terminalId);
+      agentLaunchErrorEl.textContent = '';
+      const firstRound = createRound(terminalId, trimmed, 'text');
+      renderAgentSurface();
+      await persistAgentSession(terminalId);
+      await persistAgentRound(terminalId, firstRound);
+      const initialInput = `${trimmed}\r`;
+      connectTerminal(terminalId, {
+        skipScrollback: false,
+        freshAgentLaunch: true,
+        initialInput
+      });
     }
 
     function readFileCache(path, expectedSize) {
@@ -3158,6 +4392,9 @@
       scheduleTerminalRecovery([0, 120, 320]);
 
       term.onData((data) => {
+        if (isAgentTerminal(activeTerminalId)) {
+          captureAgentInput(activeTerminalId, data);
+        }
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(textEncoder.encode(data));
         }
@@ -3180,14 +4417,24 @@
       const switchingTerminal = terminalId !== activeTerminalId;
       activeTerminalId = terminalId;
       renderTerminalTabs();
+      renderAgentSurface();
       if (term && switchingTerminal) {
         term.clear();
       }
 
       const shouldSkipScrollback = options.skipScrollback === true;
+      const agentSession = getAgentSession(terminalId);
+      const preserveReplayPrefix = Boolean(agentSession && !options.freshAgentLaunch && !shouldSkipScrollback);
       if (term && !shouldSkipScrollback) {
         term.clear();
-        writeTerminalCache(terminalId, '');
+        if (preserveReplayPrefix) {
+          agentSession.replayPrefix = readTerminalCache(terminalId);
+        } else {
+          writeTerminalCache(terminalId, '');
+          if (agentSession) {
+            agentSession.replayPrefix = '';
+          }
+        }
       }
       closeSocket();
 
@@ -3201,6 +4448,9 @@
         if (connectionId !== wsConnectionId) return;
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
+        if (options.initialInput) {
+          ws.send(textEncoder.encode(options.initialInput));
+        }
         scheduleTerminalRecovery([0, 120]);
       };
 
@@ -3214,7 +4464,15 @@
         } else {
           const bytes = new Uint8Array(e.data);
           const chunkText = textDecoder.decode(bytes);
-          appendTerminalCache(terminalId, chunkText);
+          if (isAgentTerminal(terminalId)) {
+            const transcriptText = consumeReplayPrefix(terminalId, chunkText);
+            if (transcriptText) {
+              appendTerminalCache(terminalId, transcriptText);
+              captureAgentOutput(terminalId, transcriptText);
+            }
+          } else {
+            appendTerminalCache(terminalId, chunkText);
+          }
           term.write(bytes);
         }
       };
@@ -3645,16 +4903,17 @@
       const res = await api('/api/terminals');
       if (!res.ok) throw new Error('failed terminals');
       terminals = await res.json();
+      await restoreAgentSessions();
       if (terminals.length === 0) {
         await createTerminal('.');
       }
       renderTerminalTabs();
       if (!activeTerminalId || !terminals.some((t) => t.id === activeTerminalId)) {
-        connectTerminal(terminals[0].id);
+        activateTerminalTab(terminals[0].id);
       }
     }
 
-    async function createTerminal(cwd) {
+    async function createTerminal(cwd, options = {}) {
       if (sessionAccess.readOnly || sessionAccess.boundTerminalId) {
         alert('This session cannot create terminal tabs.');
         return null;
@@ -3662,7 +4921,11 @@
       const res = await api('/api/terminals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd: cwd || '.' })
+        body: JSON.stringify({
+          cwd: cwd || '.',
+          title: options.title || undefined,
+          shell: options.shell || undefined
+        })
       });
       if (!res.ok) {
         const msg = await res.text();
@@ -3672,7 +4935,9 @@
       const item = await res.json();
       terminals.push(item);
       renderTerminalTabs();
-      connectTerminal(item.id);
+      if (options.autoConnect !== false) {
+        activateTerminalTab(item.id);
+      }
       currentNavDir = cwd || '.';
       return item;
     }
@@ -3692,16 +4957,18 @@
       } catch {
         // ignore local cache failures
       }
+      await deleteAgentSessionState(id);
       terminalCache.delete(id);
       terminals = terminals.filter((t) => t.id !== id);
       if (activeTerminalId === id) {
         if (terminals.length === 0) {
           await createTerminal(currentNavDir || '.');
         } else {
-          connectTerminal(terminals[0].id);
+          activateTerminalTab(terminals[0].id);
         }
       }
       renderTerminalTabs();
+      renderAgentSurface();
     }
 
     function moveTerminalTab(index, delta) {
@@ -3746,10 +5013,11 @@
     function renderTerminalTabs() {
       tabScroll.querySelectorAll('.tab').forEach((node) => node.remove());
       terminals.forEach((item, index) => {
+        const agentSession = getAgentSession(item.id);
         const tab = document.createElement('div');
         tab.className = `tab ${item.id === activeTerminalId ? 'active' : ''}`;
         tab.title = item.title;
-        const activateTab = () => connectTerminal(item.id);
+        const activateTab = () => activateTerminalTab(item.id);
         tab.onclick = activateTab;
 
         const title = document.createElement('button');
@@ -3778,6 +5046,13 @@
         };
         tab.appendChild(leftBtn);
 
+        if (agentSession) {
+          const badge = document.createElement('span');
+          badge.className = 'tab-badge';
+          badge.textContent = 'Agent';
+          tab.appendChild(badge);
+        }
+
         const rightBtn = document.createElement('button');
         rightBtn.className = 'icon-btn';
         rightBtn.type = 'button';
@@ -3790,6 +5065,14 @@
           moveTerminalTab(index, 1);
         };
         tab.appendChild(title);
+
+        if (agentSession && agentSession.liveUnreadCount > 0) {
+          const unread = document.createElement('span');
+          unread.className = 'tab-unread';
+          unread.textContent = `+${Math.min(agentSession.liveUnreadCount, 999)}`;
+          tab.appendChild(unread);
+        }
+
         tab.appendChild(rightBtn);
 
         const closeBtn = document.createElement('button');
@@ -4241,6 +5524,7 @@
     bindPinKeypad(pinModalKeypad, pinModalInput);
 
     newTabBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
+    newAgentBtn.addEventListener('click', () => createAgentTerminal(currentNavDir || '.'));
 
     toggleFilesBtn.addEventListener('click', () => {
       const filesEl = document.getElementById('files');
@@ -4265,7 +5549,32 @@
     });
 
     openShellHereBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
+    openAgentHereBtn.addEventListener('click', () => createAgentTerminal(currentNavDir || '.'));
     refreshTreeBtn.addEventListener('click', () => renderNav());
+
+    agentLaunchFormEl.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!activeTerminalId) return;
+      await startAgentSession(activeTerminalId, agentLaunchCommandEl.value);
+    });
+
+    agentLaunchCommandEl.addEventListener('input', () => {
+      if (!activeTerminalId) return;
+      const session = getAgentSession(activeTerminalId);
+      if (!session || session.phase !== 'launch') return;
+      session.pendingLaunchCommand = agentLaunchCommandEl.value;
+      session.updatedAt = Date.now();
+    });
+
+    agentLaunchCancelBtn.addEventListener('click', async () => {
+      if (!activeTerminalId) return;
+      await deleteTerminal(activeTerminalId);
+    });
+
+    agentBackToLiveBtn.addEventListener('click', () => {
+      if (!activeTerminalId) return;
+      returnAgentToLive(activeTerminalId);
+    });
 
     editFileBtn.addEventListener('click', () => {
       if (!activeFilePath) return;
