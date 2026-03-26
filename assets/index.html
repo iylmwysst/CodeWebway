@@ -113,14 +113,14 @@
       z-index: -1;
     }
     #login-shell {
-      width: min(1160px, 100%);
+      width: min(920px, 100%);
       display: grid;
       grid-template-columns: minmax(0, 1fr);
       gap: 24px;
       align-items: stretch;
     }
     #login-shell.auth-open {
-      width: min(760px, 100%);
+      width: min(720px, 100%);
       grid-template-columns: minmax(0, 1fr);
     }
     .card {
@@ -152,11 +152,10 @@
       position: relative;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      gap: 30px;
-      min-height: min(700px, calc(var(--app-height) - 64px));
-      max-width: none;
-      padding: clamp(28px, 4vw, 42px);
+      gap: 22px;
+      max-width: 880px;
+      margin: 0 auto;
+      padding: clamp(28px, 4vw, 38px);
       background:
         linear-gradient(160deg, rgba(15, 22, 29, 0.96), rgba(9, 13, 17, 0.94)),
         radial-gradient(circle at top right, rgba(105, 161, 255, 0.16), transparent 30%);
@@ -186,53 +185,27 @@
     }
     .welcome-copy,
     .welcome-actions,
-    .welcome-grid {
+    .welcome-summary,
+    .welcome-status-grid {
       position: relative;
       z-index: 1;
     }
     .welcome-copy {
       display: grid;
-      gap: 18px;
-      max-width: 700px;
+      gap: 14px;
+      max-width: 640px;
     }
     .welcome-card h1 {
-      max-width: 11ch;
-      font-size: clamp(38px, 6vw, 62px);
-      line-height: 0.92;
+      max-width: 12ch;
+      font-size: clamp(34px, 5.4vw, 56px);
+      line-height: 0.96;
       letter-spacing: -0.045em;
     }
     .welcome-lead {
-      max-width: 54ch;
+      max-width: 50ch;
       color: #b8cad5;
-      font-size: 17px;
-      line-height: 1.65;
-    }
-    .welcome-highlights {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .welcome-chip,
-    .auth-chip,
-    .login-step,
-    .login-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      min-height: 30px;
-      padding: 0 12px;
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-    .welcome-chip,
-    .auth-chip {
-      border: 1px solid rgba(146, 179, 201, 0.18);
-      background: rgba(255, 255, 255, 0.04);
-      color: #d6e5ee;
+      font-size: 16px;
+      line-height: 1.58;
     }
     .welcome-actions {
       display: flex;
@@ -245,114 +218,29 @@
       padding: 13px 18px;
       font-size: 14px;
     }
-    .welcome-actions .ghost {
-      color: #dbe8ef;
-      border-color: rgba(150, 177, 196, 0.22);
-      background: rgba(255, 255, 255, 0.035);
-    }
-    .welcome-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.12fr) minmax(280px, 0.88fr);
-      gap: 18px;
-    }
-    .welcome-panel,
+    .welcome-summary,
     .welcome-status-card {
       border: 1px solid rgba(131, 153, 176, 0.18);
       border-radius: 18px;
-      padding: 20px;
+      padding: 18px 20px;
       background:
         linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.025)),
         rgba(255, 255, 255, 0.02);
       backdrop-filter: blur(8px);
     }
-    .welcome-panel {
-      display: grid;
-      gap: 16px;
-    }
-    .welcome-panel-title {
-      display: block;
-      color: #f3f9fc;
-      font-size: 20px;
-      letter-spacing: -0.02em;
-      font-weight: 600;
-      margin-top: 6px;
-    }
-    .welcome-panel-lead {
-      color: #aabdc9;
-      font-size: 13px;
-      line-height: 1.6;
-    }
-    .welcome-route {
-      display: grid;
-      gap: 12px;
-    }
-    .welcome-route-step {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 12px;
-      align-items: start;
-      padding: 12px 0;
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
-    }
-    .welcome-route-step:first-child {
-      padding-top: 0;
-      border-top: 0;
-    }
-    .welcome-step-index {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 42px;
-      height: 28px;
-      border-radius: 999px;
-      background: rgba(89, 150, 255, 0.14);
-      border: 1px solid rgba(89, 150, 255, 0.2);
-      color: #dbe8ff;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-    }
-    .welcome-step-copy strong {
-      display: block;
-      color: #f4fbff;
-      font-size: 14px;
-      letter-spacing: -0.01em;
-    }
-    .welcome-step-copy p {
-      margin-top: 4px;
-      color: #a6bbc7;
-      font-size: 13px;
-      line-height: 1.55;
-    }
-    .welcome-divider {
-      height: 1px;
-      background: linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
-    }
-    .welcome-list {
-      list-style: none;
+    .welcome-summary {
       display: grid;
       gap: 10px;
-      margin-top: 0;
     }
-    .welcome-list li {
-      position: relative;
-      padding-left: 18px;
-      color: #d5e0e8;
+    .welcome-summary p {
+      color: #aabdc9;
       font-size: 14px;
-      line-height: 1.5;
-    }
-    .welcome-list li::before {
-      content: '•';
-      position: absolute;
-      left: 0;
-      top: 0;
-      color: #6fe0b1;
+      line-height: 1.55;
     }
     .welcome-status-grid {
       display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
-      align-content: start;
     }
     .welcome-status-card {
       position: relative;
@@ -367,13 +255,12 @@
     }
     .welcome-status-card strong {
       display: block;
-      margin: 6px 0 8px;
+      margin: 4px 0 6px;
       color: #f5fbff;
       font-size: 15px;
       letter-spacing: -0.01em;
     }
-    .welcome-status-card p,
-    .welcome-panel p {
+    .welcome-status-card p {
       color: #aabdc9;
       font-size: 13px;
       line-height: 1.5;
@@ -381,7 +268,8 @@
     .auth-card {
       display: none;
       align-self: center;
-      max-width: none;
+      width: 100%;
+      max-width: 680px;
       background:
         linear-gradient(160deg, rgba(15, 22, 29, 0.96), rgba(9, 13, 17, 0.94)),
         radial-gradient(circle at top right, rgba(104, 154, 255, 0.12), transparent 32%);
@@ -397,7 +285,7 @@
     }
     .auth-header-copy {
       display: grid;
-      gap: 12px;
+      gap: 8px;
       max-width: 580px;
     }
     .auth-back {
@@ -410,17 +298,12 @@
       flex-shrink: 0;
       line-height: 1;
     }
-    .auth-supporting {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
     #login-subtitle {
       color: #b4c6d2;
       font-size: 15px;
-      line-height: 1.65;
-      margin-bottom: 18px;
-      max-width: 54ch;
+      line-height: 1.58;
+      margin-bottom: 16px;
+      max-width: 46ch;
     }
     .login-panel {
       border: 1px solid rgba(131, 153, 176, 0.18);
@@ -428,30 +311,12 @@
       background:
         linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018)),
         rgba(255,255,255,0.02);
-      padding: 20px;
+      padding: 18px;
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
-    }
-    .login-panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 14px;
-      flex-wrap: wrap;
-    }
-    .login-step {
-      border: 1px solid rgba(104, 161, 255, 0.24);
-      background: rgba(104, 161, 255, 0.14);
-      color: #dbe8ff;
-    }
-    .login-tag {
-      border: 1px solid rgba(150, 177, 196, 0.18);
-      background: rgba(255, 255, 255, 0.03);
-      color: #adc0cb;
     }
     .login-panel-copy {
       display: grid;
-      gap: 10px;
+      gap: 8px;
     }
     .login-panel h2 {
       font-size: 18px;
@@ -466,16 +331,7 @@
       line-height: 1.6;
     }
     .login-panel .eyebrow {
-      margin-bottom: 0;
-    }
-    .login-divider {
-      position: relative;
-      text-align: center;
-      margin: 4px 0;
-      color: #7e95a4;
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
+      margin-bottom: 2px;
     }
     .auth-field {
       display: grid;
@@ -535,16 +391,6 @@
       background: rgba(14, 21, 27, 0.94);
       border-color: rgba(143, 182, 207, 0.28);
     }
-    .login-divider::before,
-    .login-divider::after {
-      content: '';
-      position: absolute;
-      top: 50%;
-      width: 35%;
-      border-top: 1px solid rgba(123, 143, 159, 0.2);
-    }
-    .login-divider::before { left: 0; }
-    .login-divider::after { right: 0; }
     .primary-cta {
       display: inline-flex;
       align-items: center;
@@ -1375,10 +1221,7 @@
       .welcome-card {
         min-height: auto;
       }
-      .welcome-highlights {
-        gap: 8px;
-      }
-      .welcome-grid {
+      .welcome-status-grid {
         grid-template-columns: 1fr;
       }
       .welcome-actions button {
@@ -1463,15 +1306,10 @@
       <section id="welcome-screen" class="card welcome-card">
         <div class="welcome-copy">
           <span class="eyebrow">Browser Workspace</span>
-          <h1>Open this machine in the browser, with the important checks up front.</h1>
+          <h1>Open this machine in the browser.</h1>
           <p class="welcome-lead">
-            Start with account access when the host allows it, keep recovery as a fallback, and enter the machine PIN only when the runtime is ready.
+            Use the sign-in method this host allows, then enter the machine PIN to open the workspace.
           </p>
-          <div class="welcome-highlights" aria-label="Access summary">
-            <span class="welcome-chip">Account first</span>
-            <span class="welcome-chip">Recovery only if needed</span>
-            <span class="welcome-chip">Machine PIN stays required</span>
-          </div>
         </div>
         <div class="welcome-actions">
           <button id="welcome-start" class="primary-cta" type="button">Continue with account</button>
@@ -1483,76 +1321,33 @@
               aria-expanded="false"
               aria-controls="welcome-token-panel"
             >
-              <span>More sign-in options</span>
+              <span>Need another sign-in option?</span>
               <span class="chevron" aria-hidden="true">▾</span>
             </button>
             <div id="welcome-token-panel" class="login-panel login-alt-panel" style="display:none;">
-              <div class="login-panel-header">
-                <span class="login-step">Fallback</span>
-                <span class="login-tag">Use only if needed</span>
-              </div>
               <div class="login-panel-copy">
-                <span class="eyebrow">Recovery</span>
-                <h2>Need a recovery token?</h2>
-                <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+                <span class="eyebrow">Recovery token</span>
+                <h2>Use a recovery token instead</h2>
+                <p>Only use this path when account sign-in is unavailable for this host.</p>
               </div>
               <button id="welcome-token" class="primary-cta" type="button">Use recovery token</button>
             </div>
           </div>
         </div>
-        <div class="welcome-grid">
-          <div class="welcome-panel">
-            <div>
-              <span class="eyebrow">Access Route</span>
-              <strong class="welcome-panel-title">What happens next</strong>
-              <p class="welcome-panel-lead">
-                CodeWebway keeps the unlock path short and explicit so you know when identity, fallback, and PIN checks appear.
-              </p>
-            </div>
-            <div class="welcome-route">
-              <div class="welcome-route-step">
-                <span class="welcome-step-index">01</span>
-                <div class="welcome-step-copy">
-                  <strong>Use account access first</strong>
-                  <p>Preferred when this host allows dashboard-backed sign-in.</p>
-                </div>
-              </div>
-              <div class="welcome-route-step">
-                <span class="welcome-step-index">02</span>
-                <div class="welcome-step-copy">
-                  <strong>Reveal recovery only if needed</strong>
-                  <p>Fallback stays available without crowding the main unlock path.</p>
-                </div>
-              </div>
-              <div class="welcome-route-step">
-                <span class="welcome-step-index">03</span>
-                <div class="welcome-step-copy">
-                  <strong>Enter the machine PIN</strong>
-                  <p>The workspace opens only after the host-specific PIN check succeeds.</p>
-                </div>
-              </div>
-            </div>
-            <div class="welcome-divider" aria-hidden="true"></div>
-            <div>
-              <span class="eyebrow">Inside This Workspace</span>
-              <ul class="welcome-list">
-                <li>Live terminal access with reconnect support</li>
-                <li>File browser and editor beside the shell</li>
-                <li>Share preset links and session controls after sign-in</li>
-              </ul>
-            </div>
+        <div class="welcome-summary">
+          <span class="eyebrow">Access flow</span>
+          <p>Keep it simple: use the preferred sign-in path for this host, switch to recovery only if needed, and finish with the machine PIN.</p>
+        </div>
+        <div class="welcome-status-grid">
+          <div class="welcome-status-card" aria-live="polite">
+            <span class="eyebrow">Access</span>
+            <strong id="welcome-auth-title">Checking sign-in options...</strong>
+            <p id="welcome-auth-text">Loading the unlock methods for this host.</p>
           </div>
-          <div class="welcome-status-grid">
-            <div class="welcome-status-card" aria-live="polite">
-              <span class="eyebrow">Access</span>
-              <strong id="welcome-auth-title">Checking sign-in options...</strong>
-              <p id="welcome-auth-text">This host is loading its available unlock methods.</p>
-            </div>
-            <div class="welcome-status-card" aria-live="polite">
-              <span class="eyebrow">Host Policy</span>
-              <strong id="welcome-policy-title">Checking session policy...</strong>
-              <p id="welcome-policy-text">This host is loading its current idle and access rules.</p>
-            </div>
+          <div class="welcome-status-card" aria-live="polite">
+            <span class="eyebrow">Host Policy</span>
+            <strong id="welcome-policy-title">Checking session policy...</strong>
+            <p id="welcome-policy-text">Loading the current idle and access rules.</p>
           </div>
         </div>
       </section>
@@ -1562,24 +1357,16 @@
           <div class="auth-header-copy">
             <span class="eyebrow">Secure Access</span>
             <h1>Unlock This Machine</h1>
-            <div class="auth-supporting" aria-label="Auth summary">
-              <span class="auth-chip">Preferred: account</span>
-              <span class="auth-chip">Fallback: recovery token</span>
-              <span class="auth-chip">PIN still required</span>
-            </div>
           </div>
           <button id="back-to-welcome" class="ghost auth-back" type="button">Back</button>
         </div>
-        <p id="login-subtitle">Use your account first. A recovery token stays available if you need it later.</p>
+        <p id="login-subtitle">Use your account first. The machine PIN comes next.</p>
         <div id="login-primary" class="stack" style="display:none;">
           <div id="dashboard-start-wrap" class="login-panel">
-            <div class="login-panel-header">
-              <span class="login-step">Step 1</span>
-              <span class="login-tag">Recommended path</span>
-            </div>
             <div class="login-panel-copy">
-              <h2 id="login-primary-title">Unlock this machine</h2>
-              <p id="login-primary-note">Continue with your account first. You will enter the machine PIN in the next step.</p>
+              <span class="eyebrow">Preferred sign-in</span>
+              <h2 id="login-primary-title">Continue with your account</h2>
+              <p id="login-primary-note">Verify with your account first. Enter the machine PIN after approval.</p>
             </div>
             <button id="dashboard-login" class="primary-cta" type="button">Continue with account</button>
           </div>
@@ -1591,18 +1378,14 @@
               aria-expanded="false"
               aria-controls="token-disclosure-panel"
             >
-              <span>More sign-in options</span>
+              <span>Need another sign-in option?</span>
               <span class="chevron" aria-hidden="true">▾</span>
             </button>
             <div id="token-disclosure-panel" class="login-panel login-alt-panel" style="display:none;">
-              <div class="login-panel-header">
-                <span class="login-step">Fallback</span>
-                <span class="login-tag">Use only if needed</span>
-              </div>
               <div class="login-panel-copy">
-                <span class="eyebrow">Recovery</span>
-                <h2>Need a recovery token?</h2>
-                <p>Use a recovery token only when account sign-in is unavailable for this host.</p>
+                <span class="eyebrow">Recovery token</span>
+                <h2>Use a recovery token instead</h2>
+                <p>Only use this path when account sign-in is unavailable for this host.</p>
               </div>
               <button id="show-token-method" class="primary-cta" type="button">Use recovery token</button>
             </div>
@@ -1610,14 +1393,10 @@
         </div>
         <div id="token-login-wrap" class="stack" style="display:none;">
           <div class="login-panel">
-            <div class="login-panel-header">
-              <span class="login-step">Step 2</span>
-              <span class="login-tag">Fallback path</span>
-            </div>
             <div class="login-panel-copy">
               <span id="token-login-eyebrow" class="eyebrow">Recovery Access</span>
               <h2 id="token-login-title">Unlock with recovery token</h2>
-              <p id="token-login-note">Use this fallback only when account sign-in is unavailable. You still need the machine PIN.</p>
+              <p id="token-login-note">Only use this path when account sign-in is unavailable. The machine PIN is still required.</p>
             </div>
             <label class="auth-field" for="password">
               <span class="auth-field-label">Recovery token</span>
@@ -2106,41 +1885,45 @@
       welcomePolicyTextEl.textContent = text || '';
     }
 
+    function hasSignedTicketEntry() {
+      return Boolean(ssoTicket);
+    }
+
     function updateLoginSubtitle() {
       if (primaryPinMode === 'signed_ticket') {
-        loginSubtitle.textContent = 'Signed link verified. Enter the machine PIN to open the workspace.';
+        loginSubtitle.textContent = 'Signed link verified. Enter the machine PIN.';
         return;
       }
 
       if (primaryPinMode === 'dashboard_pending') {
-        loginSubtitle.textContent = 'Account approved. Enter the machine PIN to open the workspace.';
+        loginSubtitle.textContent = 'Account approved. Enter the machine PIN.';
         return;
       }
 
       if (dashboardLoginEnabled && !ssoTicket) {
         if (dashboardFlowBusy) {
-          loginSubtitle.textContent = 'Approve this sign-in from your account to continue.';
+          loginSubtitle.textContent = 'Approve this sign-in in your account. The machine PIN comes next.';
           return;
         }
         if (tokenMethodVisible) {
-          loginSubtitle.textContent = 'Recovery token access is only for cases where account sign-in is unavailable.';
+          loginSubtitle.textContent = 'Use a recovery token only if account sign-in is unavailable.';
           return;
         }
-        loginSubtitle.textContent = 'Use your account first. A recovery token stays available if you need it later.';
+        loginSubtitle.textContent = 'Use your account first. The machine PIN comes next.';
         return;
       }
 
-      if (ssoTicket) {
-        loginSubtitle.textContent = 'Signed link verified. Enter the machine PIN to open the workspace.';
+      if (hasSignedTicketEntry()) {
+        loginSubtitle.textContent = 'Signed link verified. Enter the machine PIN.';
         return;
       }
 
       if (ssoEnabled) {
-        loginSubtitle.textContent = 'Use a signed link when available, or enter the access token and machine PIN.';
+        loginSubtitle.textContent = 'Use a signed link when available, or unlock with the access token and machine PIN.';
         return;
       }
 
-      loginSubtitle.textContent = 'Enter the access token and machine PIN to continue.';
+      loginSubtitle.textContent = 'Enter the access token and machine PIN.';
     }
 
     function setDisclosureOpen(toggleBtn, panelEl, open) {
@@ -2162,19 +1945,25 @@
     function setTokenLoginMode(mode) {
       if (!tokenLoginTitle || !tokenLoginNote) return;
       if (tokenLoginEyebrow) {
-        tokenLoginEyebrow.style.display = 'none';
+        tokenLoginEyebrow.style.display = 'inline-block';
         tokenLoginEyebrow.textContent = '';
       }
       if (mode === 'signed_ticket') {
+        if (tokenLoginEyebrow) {
+          tokenLoginEyebrow.textContent = 'Signed link verified';
+        }
         tokenLoginTitle.textContent = 'Enter machine PIN';
-        tokenLoginNote.textContent = 'Signed link verified. Enter the PIN for this machine to continue.';
+        tokenLoginNote.textContent = 'Enter the PIN for this machine to open the workspace.';
         passwordInput.style.display = 'none';
         passwordInput.required = false;
         passwordInput.value = '';
         hideTokenMethodBtn.style.display = 'none';
       } else if (mode === 'dashboard_pending') {
+        if (tokenLoginEyebrow) {
+          tokenLoginEyebrow.textContent = 'Account approved';
+        }
         tokenLoginTitle.textContent = 'Enter machine PIN';
-        tokenLoginNote.textContent = 'Account approved. Enter the PIN for this machine to continue.';
+        tokenLoginNote.textContent = 'Enter the PIN for this machine to open the workspace.';
         passwordInput.style.display = 'none';
         passwordInput.required = false;
         passwordInput.value = '';
@@ -2182,19 +1971,21 @@
         hideTokenMethodBtn.style.display = 'block';
       } else if (mode === 'recovery_token') {
         if (tokenLoginEyebrow) {
-          tokenLoginEyebrow.textContent = 'Recovery Access';
-          tokenLoginEyebrow.style.display = 'inline-block';
+          tokenLoginEyebrow.textContent = 'Recovery token';
         }
         tokenLoginTitle.textContent = 'Unlock with recovery token';
-        tokenLoginNote.textContent = 'Use this fallback only when account sign-in is unavailable. You still need the machine PIN.';
+        tokenLoginNote.textContent = 'Only use this path when account sign-in is unavailable. The machine PIN is still required.';
         passwordInput.style.display = 'block';
         passwordInput.required = true;
         passwordInput.placeholder = 'Recovery token';
         hideTokenMethodBtn.textContent = 'Back to account sign-in';
         hideTokenMethodBtn.style.display = dashboardLoginEnabled ? 'block' : 'none';
       } else {
+        if (tokenLoginEyebrow) {
+          tokenLoginEyebrow.textContent = 'Direct unlock';
+        }
         tokenLoginTitle.textContent = 'Unlock with access token';
-        tokenLoginNote.textContent = 'Enter the access token and machine PIN to continue.';
+        tokenLoginNote.textContent = 'Enter the access token and machine PIN to open the workspace.';
         passwordInput.style.display = 'block';
         passwordInput.required = true;
         passwordInput.placeholder = 'Access token';
@@ -2223,7 +2014,7 @@
       if (dashboardLoginEnabled) {
         setWelcomeAuthState(
           'Account approval + machine PIN',
-          'Recommended path for this host. You can still switch to a recovery token if needed.'
+          'Recommended for this host. Recovery stays available only if you need it.'
         );
         welcomeStartBtn.textContent = 'Continue with account';
         welcomeStartBtn.disabled = false;
@@ -2239,7 +2030,7 @@
       if (ssoEnabled) {
         setWelcomeAuthState(
           'Signed link or access token + machine PIN',
-          'Use a signed system link when available, or unlock directly with the access token and machine PIN.'
+          'Use a signed link when available, or unlock directly with the access token and machine PIN.'
         );
       } else {
         setWelcomeAuthState(
@@ -2754,7 +2545,7 @@
     function updateLoginFormMode() {
       renderWelcomeState();
       const dashboardAvailable = dashboardLoginEnabled;
-      const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
+      const signedTicketMode = hasSignedTicketEntry();
       const primaryFlowAvailable = dashboardAvailable || signedTicketMode;
       const directTokenMode = !dashboardAvailable && !signedTicketMode;
 
@@ -2846,7 +2637,7 @@
     }
 
     function setTokenMethodVisible(visible) {
-      const signedTicketMode = Boolean(ssoEnabled && ssoTicket);
+      const signedTicketMode = hasSignedTicketEntry();
       const primaryFlowAvailable = dashboardLoginEnabled || signedTicketMode;
       tokenMethodVisible = visible;
       loginPrimary.style.display = primaryFlowAvailable && !visible ? 'flex' : 'none';
@@ -2907,8 +2698,8 @@
       tokenLoginWrap.style.display = 'none';
       dashboardStartWrap.style.display = 'block';
       pinInput.value = '';
-      loginPrimaryTitle.textContent = 'Unlock this machine';
-      loginPrimaryNote.textContent = 'Continue with your account first. You will enter the machine PIN in the next step.';
+      loginPrimaryTitle.textContent = 'Continue with your account';
+      loginPrimaryNote.textContent = 'Verify with your account first. Enter the machine PIN after approval.';
       setTokenLoginMode(dashboardLoginEnabled ? 'recovery_token' : 'access_token');
       dashboardLoginBtn.textContent = 'Continue with account';
       dashboardLoginBtn.disabled = false;
@@ -2925,7 +2716,7 @@
       dashboardStartWrap.style.display = 'block';
       tokenDisclosureWrap.style.display = 'none';
       loginPrimaryTitle.textContent = 'Waiting for account approval';
-      loginPrimaryNote.textContent = 'Approve this sign-in from your dashboard. The machine PIN comes next.';
+      loginPrimaryNote.textContent = 'Approve this sign-in in your account. Enter the machine PIN after that.';
       dashboardLoginBtn.textContent = 'Please wait';
       dashboardLoginBtn.disabled = true;
       showTokenMethodBtn.style.display = 'none';
@@ -4448,10 +4239,15 @@
         return;
       }
 
-      await refreshLoginMeta();
-      setLoginPolling(true, { refreshNow: false });
+      const params = new URLSearchParams(window.location.search);
+      const hasDirectAuthEntry = Boolean(
+        dashboardTicket ||
+        ssoTicket ||
+        params.get('dashboard_returned') === '1' ||
+        params.get('dashboard_challenge')
+      );
 
-      if (dashboardTicket) {
+      if (hasDirectAuthEntry) {
         clearDashboardFlowState();
         clearPendingDashboardLoginState();
         showAuthForm({
@@ -4459,28 +4255,21 @@
           preferToken: false,
           preserveDashboardState: true
         });
+      }
+
+      await refreshLoginMeta();
+      setLoginPolling(true, { refreshNow: false });
+
+      if (dashboardTicket) {
         await resumeDashboardTicketFlow(dashboardTicket);
         return;
       }
 
       if (ssoTicket) {
-        clearDashboardFlowState();
-        clearPendingDashboardLoginState();
-        showAuthForm({
-          allowBack: false,
-          preferToken: false,
-          preserveDashboardState: true
-        });
         return;
       }
 
-      const params = new URLSearchParams(window.location.search);
       if (params.get('dashboard_returned') === '1' || params.get('dashboard_challenge')) {
-        showAuthForm({
-          allowBack: false,
-          preferToken: false,
-          preserveDashboardState: true
-        });
         await resumeDashboardRedirectFlow();
         return;
       }
