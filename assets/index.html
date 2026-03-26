@@ -3489,25 +3489,26 @@
       return roundsByTerminal.get(terminalId);
     }
 
+    function createComposerState() {
+      return {
+        lineBuffer: '',
+        cursor: 0,
+        inBracketedPaste: false,
+        sawPrintableInput: false,
+        sawControlInput: false,
+        lastInputAt: 0
+      };
+    }
+
     function ensureComposer(terminalId) {
       if (!agentInputComposer.has(terminalId)) {
-        agentInputComposer.set(terminalId, {
-          lineBuffer: '',
-          sawPrintableInput: false,
-          sawControlInput: false,
-          lastInputAt: 0
-        });
+        agentInputComposer.set(terminalId, createComposerState());
       }
       return agentInputComposer.get(terminalId);
     }
 
     function resetComposer(terminalId) {
-      agentInputComposer.set(terminalId, {
-        lineBuffer: '',
-        sawPrintableInput: false,
-        sawControlInput: false,
-        lastInputAt: 0
-      });
+      agentInputComposer.set(terminalId, createComposerState());
     }
 
     function makeRoundStorageKey(terminalId, roundId) {
@@ -3629,19 +3630,210 @@
 
     function normalizeTranscriptText(text) {
       if (!text) return '';
-      return stripAnsi(text)
-        .replace(/\r\n/g, '\n');
-    }
-
-    function normalizeInputCaptureData(text) {
-      if (!text) return '';
       return text
         .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
         .replace(/\x1bP[\s\S]*?\x1b\\/g, '')
-        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-        .replace(/\x1bO./g, '')
-        .replace(/\x1b./g, '')
-        .replace(/[^\x08\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]/g, '');
+        .replace(/\u0000/g, '')
+        .replace(/\r\n/g, '\n');
+    }
+
+    function readEscapeSequence(text, start) {
+      const next = text[start + 1];
+      if (!next) {
+        return { token: '\x1b', end: start + 1 };
+      }
+      if (next === '[') {
+        let end = start + 2;
+        while (end < text.length) {
+          const code = text.charCodeAt(end);
+          if (code >= 0x40 && code <= 0x7e) {
+            return { token: text.slice(start, end + 1), end: end + 1 };
+          }
+          end += 1;
+        }
+        return { token: text.slice(start), end: text.length };
+      }
+      if (next === 'O') {
+        const end = Math.min(text.length, start + 3);
+        return { token: text.slice(start, end), end };
+      }
+      if (next === ']') {
+        let end = start + 2;
+        while (end < text.length) {
+          if (text[end] === '\x07') {
+            return { token: '', end: end + 1 };
+          }
+          if (text[end] === '\x1b' && text[end + 1] === '\\') {
+            return { token: '', end: end + 2 };
+          }
+          end += 1;
+        }
+        return { token: '', end: text.length };
+      }
+      if (next === 'P') {
+        let end = start + 2;
+        while (end < text.length) {
+          if (text[end] === '\x1b' && text[end + 1] === '\\') {
+            return { token: '', end: end + 2 };
+          }
+          end += 1;
+        }
+        return { token: '', end: text.length };
+      }
+      const end = Math.min(text.length, start + 2);
+      return { token: text.slice(start, end), end };
+    }
+
+    function tokenizeInputCaptureData(text) {
+      if (!text) return [];
+      const tokens = [];
+      let idx = 0;
+      while (idx < text.length) {
+        const char = text[idx];
+        if (char === '\u0000') {
+          idx += 1;
+          continue;
+        }
+        if (char === '\x1b') {
+          const sequence = readEscapeSequence(text, idx);
+          idx = sequence.end;
+          if (sequence.token) {
+            tokens.push(sequence.token);
+          }
+          continue;
+        }
+        const codePoint = text.codePointAt(idx);
+        const token = String.fromCodePoint(codePoint);
+        idx += token.length;
+        const code = token.charCodeAt(0);
+        if (code < 32 && !['\b', '\t', '\n', '\r', '\u0003'].includes(token)) {
+          continue;
+        }
+        tokens.push(token);
+      }
+      return tokens;
+    }
+
+    function tokenizeTerminalStream(text) {
+      if (!text) return [];
+      const tokens = [];
+      let idx = 0;
+      while (idx < text.length) {
+        const char = text[idx];
+        if (char === '\x1b') {
+          const sequence = readEscapeSequence(text, idx);
+          idx = sequence.end;
+          if (sequence.token) {
+            tokens.push(sequence.token);
+          }
+          continue;
+        }
+        const codePoint = text.codePointAt(idx);
+        const token = String.fromCodePoint(codePoint);
+        idx += token.length;
+        if (token !== '\u0000') {
+          tokens.push(token);
+        }
+      }
+      return tokens;
+    }
+
+    function parseEscapeToken(token) {
+      if (!token || token[0] !== '\x1b') return null;
+      if (token.startsWith('\x1b[')) {
+        return {
+          kind: 'csi',
+          final: token[token.length - 1],
+          params: token.slice(2, -1)
+        };
+      }
+      if (token.startsWith('\x1bO')) {
+        return {
+          kind: 'ss3',
+          final: token[token.length - 1]
+        };
+      }
+      return {
+        kind: 'escape',
+        final: token[token.length - 1]
+      };
+    }
+
+    function primaryEscapeParam(params, fallback = 1) {
+      if (!params) return fallback;
+      const primary = params.split(';')[0].replace(/^\?/, '');
+      const value = Number.parseInt(primary, 10);
+      return Number.isFinite(value) ? value : fallback;
+    }
+
+    function applyInputEditToken(composer, token) {
+      if (!composer || !token) return false;
+      if (token === '\u007f' || token === '\b') {
+        if (composer.cursor > 0) {
+          composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor - 1)}${composer.lineBuffer.slice(composer.cursor)}`;
+          composer.cursor -= 1;
+        }
+        composer.sawControlInput = true;
+        return true;
+      }
+      const escape = parseEscapeToken(token);
+      if (!escape) return false;
+      composer.sawControlInput = true;
+      if (escape.kind === 'ss3') {
+        if (escape.final === 'H') {
+          composer.cursor = 0;
+          return true;
+        }
+        if (escape.final === 'F') {
+          composer.cursor = composer.lineBuffer.length;
+          return true;
+        }
+        return true;
+      }
+      if (escape.kind !== 'csi') return true;
+      const amount = primaryEscapeParam(escape.params, 1);
+      if (escape.final === 'D') {
+        composer.cursor = Math.max(0, composer.cursor - amount);
+        return true;
+      }
+      if (escape.final === 'C') {
+        composer.cursor = Math.min(composer.lineBuffer.length, composer.cursor + amount);
+        return true;
+      }
+      if (escape.final === 'H') {
+        composer.cursor = 0;
+        return true;
+      }
+      if (escape.final === 'F') {
+        composer.cursor = composer.lineBuffer.length;
+        return true;
+      }
+      if (escape.final === '~') {
+        const code = primaryEscapeParam(escape.params, 0);
+        if (code === 200) {
+          composer.inBracketedPaste = true;
+          return true;
+        }
+        if (code === 201) {
+          composer.inBracketedPaste = false;
+          return true;
+        }
+        if (code === 1 || code === 7) {
+          composer.cursor = 0;
+          return true;
+        }
+        if (code === 4 || code === 8) {
+          composer.cursor = composer.lineBuffer.length;
+          return true;
+        }
+        if (code === 3) {
+          if (composer.cursor < composer.lineBuffer.length) {
+            composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor)}${composer.lineBuffer.slice(composer.cursor + 1)}`;
+          }
+          return true;
+        }
+      }
+      return true;
     }
 
     function normalizeWhitespaceForCompare(text) {
@@ -3665,7 +3857,7 @@
     function appendTerminalLikeOutput(existingText, chunkText) {
       const existing = Array.from(existingText || '');
       let cursor = existing.length;
-      const chunk = Array.from(chunkText || '');
+      const chunk = tokenizeTerminalStream(chunkText || '');
 
       const currentLineStart = () => {
         let idx = cursor - 1;
@@ -3676,8 +3868,16 @@
         return 0;
       };
 
+      const currentLineEnd = () => {
+        let idx = Math.min(cursor, existing.length);
+        while (idx < existing.length && existing[idx] !== '\n') {
+          idx += 1;
+        }
+        return idx;
+      };
+
       const removeCurrentLineTail = () => {
-        let start = currentLineStart();
+        const start = currentLineStart();
         let end = start;
         while (end < existing.length && existing[end] !== '\n') {
           end += 1;
@@ -3686,12 +3886,126 @@
         cursor = start;
       };
 
-      for (const char of chunk) {
-        if (char === '\r') {
+      const eraseInLine = (mode = 0) => {
+        const start = currentLineStart();
+        const end = currentLineEnd();
+        if (mode === 1) {
+          const deleteCount = Math.max(0, Math.min(cursor, end) - start);
+          existing.splice(start, deleteCount);
+          cursor = start;
+          return;
+        }
+        if (mode === 2) {
+          existing.splice(start, end - start);
+          cursor = start;
+          return;
+        }
+        existing.splice(cursor, end - cursor);
+      };
+
+      const eraseDisplay = (mode = 0) => {
+        if (mode === 1) {
+          existing.splice(0, Math.min(cursor, existing.length));
+          cursor = 0;
+          return;
+        }
+        if (mode === 2) {
+          existing.length = 0;
+          cursor = 0;
+          return;
+        }
+        existing.splice(cursor);
+      };
+
+      const moveCursorVertical = (delta) => {
+        const column = Math.max(0, cursor - currentLineStart());
+        let targetStart = currentLineStart();
+        let steps = Math.abs(delta);
+        while (steps > 0) {
+          if (delta < 0) {
+            if (targetStart === 0) break;
+            let idx = targetStart - 2;
+            while (idx >= 0 && existing[idx] !== '\n') {
+              idx -= 1;
+            }
+            targetStart = idx + 1;
+          } else {
+            let idx = targetStart;
+            while (idx < existing.length && existing[idx] !== '\n') {
+              idx += 1;
+            }
+            if (idx >= existing.length) break;
+            targetStart = idx + 1;
+          }
+          steps -= 1;
+        }
+        let targetEnd = targetStart;
+        while (targetEnd < existing.length && existing[targetEnd] !== '\n') {
+          targetEnd += 1;
+        }
+        cursor = Math.min(targetStart + column, targetEnd);
+      };
+
+      const handleEscapeToken = (token) => {
+        const escape = parseEscapeToken(token);
+        if (!escape || escape.kind !== 'csi') return;
+        const amount = primaryEscapeParam(escape.params, 1);
+        if (escape.final === 'A') {
+          moveCursorVertical(-amount);
+          return;
+        }
+        if (escape.final === 'B') {
+          moveCursorVertical(amount);
+          return;
+        }
+        if (escape.final === 'C') {
+          cursor = Math.min(existing.length, cursor + amount);
+          return;
+        }
+        if (escape.final === 'D') {
+          cursor = Math.max(0, cursor - amount);
+          return;
+        }
+        if (escape.final === 'G') {
+          const start = currentLineStart();
+          const end = currentLineEnd();
+          cursor = Math.min(start + Math.max(0, amount - 1), end);
+          return;
+        }
+        if (escape.final === 'K') {
+          eraseInLine(primaryEscapeParam(escape.params, 0));
+          return;
+        }
+        if (escape.final === 'J') {
+          eraseDisplay(primaryEscapeParam(escape.params, 0));
+          return;
+        }
+        if (escape.final === 'P') {
+          const end = currentLineEnd();
+          existing.splice(cursor, Math.min(amount, Math.max(0, end - cursor)));
+          return;
+        }
+        if (escape.final === '~') {
+          const code = primaryEscapeParam(escape.params, 0);
+          if (code === 3) {
+            const end = currentLineEnd();
+            if (cursor < end) {
+              existing.splice(cursor, 1);
+            }
+          }
+        }
+      };
+
+      for (const token of chunk) {
+        if (token.length > 1 && token[0] === '\x1b') {
+          handleEscapeToken(token);
+          continue;
+        }
+        if (token === '\r') {
           removeCurrentLineTail();
           continue;
         }
-        if (char === '\b') {
+        if (token === '\b') {
           if (cursor > 0) {
             const prev = existing[cursor - 1];
             if (prev !== '\n') {
@@ -3701,15 +4015,15 @@
           }
           continue;
         }
-        if (char === '\n') {
+        if (token === '\n') {
           existing.splice(cursor, 0, '\n');
           cursor += 1;
           continue;
         }
         if (cursor < existing.length && existing[cursor] !== '\n') {
-          existing[cursor] = char;
+          existing[cursor] = token;
         } else {
-          existing.splice(cursor, 0, char);
+          existing.splice(cursor, 0, token);
         }
         cursor += 1;
       }
@@ -3824,38 +4138,57 @@
       if (!session || !data) return;
       session.replayPrefix = '';
       const composer = ensureComposer(terminalId);
-      const sanitized = normalizeInputCaptureData(data);
-      if (!sanitized) return;
-      for (const char of sanitized) {
+      const tokens = tokenizeInputCaptureData(data);
+      if (tokens.length === 0) return;
+      for (let idx = 0; idx < tokens.length; idx += 1) {
+        const token = tokens[idx];
         composer.lastInputAt = Date.now();
-        if (char === '\r' || char === '\n') {
+        if ((token === '\r' || token === '\n') && !composer.inBracketedPaste) {
           closeAgentRound(terminalId, 'done');
           createRound(terminalId, composeSubmittedInput(composer, 'Enter'), 'text');
           resetComposer(terminalId);
           continue;
         }
-        if (char === '\u0003') {
+        if (token === '\u0003') {
           closeAgentRound(terminalId, 'interrupted');
           createRound(terminalId, '^C', 'control');
           resetComposer(terminalId);
           continue;
         }
-        if (char === '\u007f' || char === '\b') {
-          composer.lineBuffer = composer.lineBuffer.slice(0, -1);
+        if (applyInputEditToken(composer, token)) {
+          continue;
+        }
+        if (composer.inBracketedPaste) {
+          let pastedToken = token;
+          if (token === '\r') {
+            pastedToken = tokens[idx + 1] === '\n' ? '' : '\n';
+          }
+          if (token === '\n' && tokens[idx - 1] === '\r') {
+            pastedToken = '';
+          }
+          if (token === '\t') {
+            pastedToken = '\t';
+          }
+          if (!pastedToken) {
+            continue;
+          }
+          composer.sawPrintableInput = true;
+          composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor)}${pastedToken}${composer.lineBuffer.slice(composer.cursor)}`;
+          composer.cursor += pastedToken.length;
+          continue;
+        }
+        if (token === '\t') {
           composer.sawControlInput = true;
           continue;
         }
-        if (char === '\t' || char === '\u001b') {
-          composer.sawControlInput = true;
-          continue;
-        }
-        const code = char.charCodeAt(0);
+        const code = token.charCodeAt(0);
         if (code < 32) {
           composer.sawControlInput = true;
           continue;
         }
         composer.sawPrintableInput = true;
-        composer.lineBuffer += char;
+        composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor)}${token}${composer.lineBuffer.slice(composer.cursor)}`;
+        composer.cursor += token.length;
       }
       schedulePersistRunningRound(terminalId);
       renderAgentRounds();
