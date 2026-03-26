@@ -3714,6 +3714,47 @@
       return tokens;
     }
 
+    function insertComposerText(composer, text) {
+      if (!composer || !text) return;
+      composer.sawPrintableInput = true;
+      composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor)}${text}${composer.lineBuffer.slice(composer.cursor)}`;
+      composer.cursor += text.length;
+    }
+
+    function isLikelyUnwrappedMultilinePaste(tokens) {
+      if (!Array.isArray(tokens) || tokens.length < 3) return false;
+      let newlineCount = 0;
+      let visibleTokenCount = 0;
+      for (let idx = 0; idx < tokens.length; idx += 1) {
+        const token = tokens[idx];
+        const escape = parseEscapeToken(token);
+        if (escape && escape.kind === 'csi' && escape.final === '~') {
+          const code = primaryEscapeParam(escape.params, 0);
+          if (code === 200 || code === 201) {
+            return false;
+          }
+        }
+        if (token === '\r') {
+          newlineCount += 1;
+          continue;
+        }
+        if (token === '\n') {
+          if (tokens[idx - 1] !== '\r') {
+            newlineCount += 1;
+          }
+          continue;
+        }
+        if (token === '\t') {
+          visibleTokenCount += 1;
+          continue;
+        }
+        if (token.length === 1 && token.charCodeAt(0) >= 32) {
+          visibleTokenCount += 1;
+        }
+      }
+      return newlineCount > 1 && visibleTokenCount > 1;
+    }
+
     function tokenizeTerminalStream(text) {
       if (!text) return [];
       const tokens = [];
@@ -3842,6 +3883,72 @@
         .replace(/[ \t]+\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+    }
+
+    function normalizeRoundLineForCompare(line) {
+      return normalizeWhitespaceForCompare(stripAnsi(line || ''))
+        .replace(/^[›>]\s*/, '');
+    }
+
+    function isLikelyAgentStatusLine(line) {
+      const compact = normalizeRoundLineForCompare(line).replace(/\s+/g, ' ').trim();
+      if (!compact) return false;
+      if (/esc to interr?upt/i.test(compact)) return true;
+      if (/gpt-\d[\w.-]*/i.test(compact) && /\bwindow\b/i.test(compact) && /\bused\b/i.test(compact)) return true;
+      if (/Run \/\w+/i.test(compact) && (/gpt-\d/i.test(compact) || /\bweekly\b/i.test(compact) || /\bwindow\b/i.test(compact))) return true;
+      if (/working/i.test(compact) && /^[•◦·\s().:%\dworking-]+$/i.test(compact)) return true;
+      return false;
+    }
+
+    function isLikelyRoundInputEcho(line, submittedInputText) {
+      const normalizedInput = normalizeRoundLineForCompare(submittedInputText);
+      if (!normalizedInput) return false;
+      const normalizedLine = normalizeRoundLineForCompare(line);
+      if (!normalizedLine) return false;
+      if (normalizedLine === normalizedInput) return true;
+      return false;
+    }
+
+    function isLikelyRoundInputFragment(line, submittedInputText) {
+      const normalizedInput = normalizeRoundLineForCompare(submittedInputText);
+      if (!normalizedInput) return false;
+      const normalizedLine = normalizeRoundLineForCompare(line);
+      if (!normalizedLine) return false;
+      if (normalizedLine.length >= normalizedInput.length) return false;
+      if (normalizedLine.length < 2) return false;
+      return normalizedInput.startsWith(normalizedLine) || normalizedInput.endsWith(normalizedLine);
+    }
+
+    function sanitizeRoundTranscript(text, submittedInputText) {
+      if (!text) return '';
+      const lines = text.replace(/\r/g, '\n').split('\n');
+      const filtered = [];
+      let retainedNonEmptyCount = 0;
+
+      for (const line of lines) {
+        const compact = normalizeRoundLineForCompare(line);
+        const isLeading = retainedNonEmptyCount === 0;
+
+        if (compact) {
+          if (isLikelyAgentStatusLine(line)) {
+            continue;
+          }
+          if (isLeading && (isLikelyRoundInputEcho(line, submittedInputText) || isLikelyRoundInputFragment(line, submittedInputText))) {
+            continue;
+          }
+          retainedNonEmptyCount += 1;
+        }
+
+        filtered.push(line);
+      }
+
+      return trimAgentText(
+        filtered
+          .join('\n')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim(),
+        AGENT_OUTPUT_LIMIT_CHARS
+      );
     }
 
     function shouldShowSnapshot(outputText, snapshotText) {
@@ -4009,7 +4116,6 @@
           if (cursor > 0) {
             const prev = existing[cursor - 1];
             if (prev !== '\n') {
-              existing.splice(cursor - 1, 1);
               cursor -= 1;
             }
           }
@@ -4079,9 +4185,9 @@
       current.status = reason;
       current.endedAt = Date.now();
       if (activeTerminalId === terminalId) {
-        current.endSnapshotText = trimAgentText(readTerminalSnapshotText(), AGENT_OUTPUT_LIMIT_CHARS);
+        current.endSnapshotText = sanitizeRoundTranscript(readTerminalSnapshotText(), current.submittedInputText);
       } else if (!current.endSnapshotText) {
-        current.endSnapshotText = trimAgentText(normalizeWhitespaceForCompare(current.outputText), AGENT_OUTPUT_LIMIT_CHARS);
+        current.endSnapshotText = sanitizeRoundTranscript(normalizeWhitespaceForCompare(current.outputText), current.submittedInputText);
       }
       current.outputPreview = deriveRoundPreview(current.outputText || current.endSnapshotText);
       enforceRoundLimits(terminalId);
@@ -4103,6 +4209,11 @@
       if (composer.sawPrintableInput) return normalizeWhitespaceForCompare(composer.lineBuffer) || fallbackLabel;
       if (composer.sawControlInput) return fallbackLabel;
       return fallbackLabel;
+    }
+
+    function hasMeaningfulComposerInput(composer) {
+      if (!composer) return false;
+      return Boolean(normalizeWhitespaceForCompare(composer.lineBuffer));
     }
 
     function markAgentSessionPhase(terminalId, phase) {
@@ -4140,19 +4251,40 @@
       const composer = ensureComposer(terminalId);
       const tokens = tokenizeInputCaptureData(data);
       if (tokens.length === 0) return;
+      const treatAsMultilinePaste = isLikelyUnwrappedMultilinePaste(tokens);
       for (let idx = 0; idx < tokens.length; idx += 1) {
         const token = tokens[idx];
         composer.lastInputAt = Date.now();
+        if ((token === '\r' || token === '\n') && !composer.inBracketedPaste && treatAsMultilinePaste) {
+          const isCrLfFollower = token === '\n' && tokens[idx - 1] === '\r';
+          const hasMoreContent = token === '\r' && tokens[idx + 1] === '\n'
+            ? idx + 2 < tokens.length
+            : idx + 1 < tokens.length;
+          if (isCrLfFollower) {
+            if (idx + 1 < tokens.length) {
+              continue;
+            }
+          } else if (hasMoreContent) {
+            insertComposerText(composer, '\n');
+            continue;
+          }
+        }
         if ((token === '\r' || token === '\n') && !composer.inBracketedPaste) {
-          closeAgentRound(terminalId, 'done');
-          createRound(terminalId, composeSubmittedInput(composer, 'Enter'), 'text');
+          if (token === '\n' && tokens[idx - 1] === '\r') {
+            continue;
+          }
+          if (hasMeaningfulComposerInput(composer)) {
+            closeAgentRound(terminalId, 'done');
+            createRound(terminalId, composeSubmittedInput(composer, 'Enter'), 'text');
+          }
           resetComposer(terminalId);
+          renderAgentRounds();
           continue;
         }
         if (token === '\u0003') {
           closeAgentRound(terminalId, 'interrupted');
-          createRound(terminalId, '^C', 'control');
           resetComposer(terminalId);
+          renderAgentRounds();
           continue;
         }
         if (applyInputEditToken(composer, token)) {
@@ -4172,9 +4304,7 @@
           if (!pastedToken) {
             continue;
           }
-          composer.sawPrintableInput = true;
-          composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor)}${pastedToken}${composer.lineBuffer.slice(composer.cursor)}`;
-          composer.cursor += pastedToken.length;
+          insertComposerText(composer, pastedToken);
           continue;
         }
         if (token === '\t') {
@@ -4186,9 +4316,7 @@
           composer.sawControlInput = true;
           continue;
         }
-        composer.sawPrintableInput = true;
-        composer.lineBuffer = `${composer.lineBuffer.slice(0, composer.cursor)}${token}${composer.lineBuffer.slice(composer.cursor)}`;
-        composer.cursor += token.length;
+        insertComposerText(composer, token);
       }
       schedulePersistRunningRound(terminalId);
       renderAgentRounds();
@@ -4200,7 +4328,10 @@
       const normalized = normalizeTranscriptText(text);
       if (!normalized) return;
       const round = ensureRoundForOutput(terminalId);
-      round.outputText = appendTerminalLikeOutput(round.outputText, normalized);
+      round.outputText = sanitizeRoundTranscript(
+        appendTerminalLikeOutput(round.outputText, normalized),
+        round.submittedInputText
+      );
       round.outputPreview = deriveRoundPreview(round.outputText);
       round.byteCount += normalized.length;
       if (session.phase === 'inspect') {
@@ -4243,6 +4374,8 @@
           staleIds.add(row.terminalId);
           continue;
         }
+        const sanitizedOutputText = sanitizeRoundTranscript(row.outputText || '', row.submittedInputText);
+        const sanitizedSnapshotText = sanitizeRoundTranscript(row.endSnapshotText || '', row.submittedInputText);
         const rounds = ensureRounds(row.terminalId);
         rounds.push({
           roundId: row.roundId,
@@ -4252,9 +4385,9 @@
           endedAt: row.endedAt,
           submittedInputText: row.submittedInputText,
           submittedInputKind: row.submittedInputKind,
-          outputText: row.outputText || '',
-          outputPreview: row.outputPreview || '',
-          endSnapshotText: row.endSnapshotText || '',
+          outputText: sanitizedOutputText,
+          outputPreview: deriveRoundPreview(sanitizedOutputText || sanitizedSnapshotText),
+          endSnapshotText: sanitizedSnapshotText,
           byteCount: row.byteCount || 0
         });
       }
