@@ -34,7 +34,7 @@ esac
 
 # Get latest published release
 echo "Fetching latest release..."
-RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
+RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=10")
 TAG=$(printf "%s\n" "${RELEASE_JSON}" \
   | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
   | head -n1 \
