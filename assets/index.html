@@ -760,8 +760,8 @@
       background: linear-gradient(180deg, #0d1318, #0a1014);
     }
     #files {
-      width: 34%;
-      min-width: 280px;
+      width: clamp(220px, 18vw, 320px);
+      min-width: 220px;
       border-right: 1px solid rgba(120, 146, 166, 0.12);
       display: flex;
       flex-direction: column;
@@ -858,6 +858,18 @@
       display: grid;
       gap: 6px;
     }
+    #preview-dock {
+      display: none;
+      flex-direction: column;
+      min-height: 0;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.028), rgba(255,255,255,0.012)),
+        rgba(11, 16, 21, 0.94);
+    }
+    #terms.preview-open #preview-dock {
+      display: flex;
+    }
     #preview-tabs {
       display: flex;
       gap: 8px;
@@ -867,7 +879,7 @@
       background: rgba(255, 255, 255, 0.018);
     }
     #preview {
-      flex: 1;
+      max-height: min(34vh, 320px);
       overflow: auto;
       padding: 14px;
       font-family: ui-monospace, Menlo, monospace;
@@ -921,8 +933,8 @@
     }
     #editor {
       display: none;
-      flex: 1;
-      min-height: 140px;
+      min-height: 180px;
+      max-height: min(42vh, 420px);
       width: 100%;
       resize: vertical;
       background: #111;
@@ -1508,6 +1520,15 @@
       background: rgba(77, 118, 140, 0.16);
       color: #d9edf8;
     }
+    .tab-badge.icon-only {
+      min-width: 22px;
+      width: 22px;
+      padding: 0;
+      font-size: 12px;
+      letter-spacing: 0;
+      text-transform: none;
+      border-radius: 999px;
+    }
     .tab-unread {
       border: 1px solid rgba(146, 179, 201, 0.18);
       background: rgba(255,255,255,0.06);
@@ -1773,6 +1794,15 @@
       }
       #files.mobile-open { display: flex; }
       #mobile-back { display: block; }
+      #preview-dock {
+        border-bottom: 1px solid rgba(120, 146, 166, 0.1);
+      }
+      #preview {
+        max-height: 30vh;
+      }
+      #editor {
+        max-height: 40vh;
+      }
     }
     @media (max-width: 1024px) {
       #key-strip {
@@ -2093,29 +2123,6 @@
           </div>
         </div>
         <div id="tree"></div>
-        <div id="preview-tabs"></div>
-        <div id="editor-actions">
-          <div class="editor-actions-copy">
-            <span id="editor-mode-label" class="toolbar-eyebrow">Preview</span>
-            <span id="editor-mode-note" class="toolbar-support">Open a file to preview it here.</span>
-          </div>
-          <div class="editor-action-buttons" role="toolbar" aria-label="File editor controls">
-            <button id="edit-file" class="ghost" type="button" title="Edit file" aria-label="Edit the current file">
-              <span class="toolbar-icon" aria-hidden="true">✎</span>
-              <span class="toolbar-label">Edit</span>
-            </button>
-            <button id="save-file" type="button" title="Save file" aria-label="Save the current file">
-              <span class="toolbar-icon" aria-hidden="true">✓</span>
-              <span class="toolbar-label">Save</span>
-            </button>
-            <button id="cancel-edit" class="ghost" type="button" title="Cancel editing" aria-label="Cancel editing">
-              <span class="toolbar-icon" aria-hidden="true">✕</span>
-              <span class="toolbar-label">Cancel</span>
-            </button>
-          </div>
-        </div>
-        <pre id="preview">Select a file to preview</pre>
-        <textarea id="editor" spellcheck="false"></textarea>
       </section>
       <section id="terms">
         <div id="term-tabs">
@@ -2146,6 +2153,31 @@
         </div>
         <div id="terminal-workspace">
           <div id="terminal-main">
+            <div id="preview-dock">
+              <div id="preview-tabs"></div>
+              <div id="editor-actions">
+                <div class="editor-actions-copy">
+                  <span id="editor-mode-label" class="toolbar-eyebrow">Preview</span>
+                  <span id="editor-mode-note" class="toolbar-support">Open a file to preview it here.</span>
+                </div>
+                <div class="editor-action-buttons" role="toolbar" aria-label="File editor controls">
+                  <button id="edit-file" class="ghost" type="button" title="Edit file" aria-label="Edit the current file">
+                    <span class="toolbar-icon" aria-hidden="true">✎</span>
+                    <span class="toolbar-label">Edit</span>
+                  </button>
+                  <button id="save-file" type="button" title="Save file" aria-label="Save the current file">
+                    <span class="toolbar-icon" aria-hidden="true">✓</span>
+                    <span class="toolbar-label">Save</span>
+                  </button>
+                  <button id="cancel-edit" class="ghost" type="button" title="Cancel editing" aria-label="Cancel editing">
+                    <span class="toolbar-icon" aria-hidden="true">✕</span>
+                    <span class="toolbar-label">Cancel</span>
+                  </button>
+                </div>
+              </div>
+              <pre id="preview">Select a file to preview</pre>
+              <textarea id="editor" spellcheck="false"></textarea>
+            </div>
             <div id="terminal"></div>
             <div id="agent-launcher">
               <div class="agent-launcher-card">
@@ -2363,6 +2395,7 @@
     const termTabs = document.getElementById('term-tabs');
     const tabScroll = document.getElementById('tab-scroll');
     const treeEl = document.getElementById('tree');
+    const previewDockEl = document.getElementById('preview-dock');
     const previewTabsEl = document.getElementById('preview-tabs');
     const previewEl = document.getElementById('preview');
     const editorEl = document.getElementById('editor');
@@ -2414,6 +2447,7 @@
     const agentInspectInputEl = document.getElementById('agent-inspect-input');
     const agentInspectOutputEl = document.getElementById('agent-inspect-output');
     const agentInspectSnapshotEl = document.getElementById('agent-inspect-snapshot');
+    const agentInspectSnapshotSectionEl = agentInspectSnapshotEl.closest('.agent-inspect-section');
     const agentBackToLiveBtn = document.getElementById('agent-back-to-live');
     const agentRoundsEl = document.getElementById('agent-rounds');
     const agentRoundsListEl = document.getElementById('agent-rounds-list');
@@ -2542,6 +2576,13 @@
       if (!editorModeLabelEl || !editorModeNoteEl) return;
       editorModeLabelEl.textContent = label;
       editorModeNoteEl.textContent = note;
+    }
+
+    function syncPreviewDockState() {
+      if (!previewDockEl) return;
+      const hasPreviewSurface = openFiles.length > 0 || Boolean(editingPath);
+      termsEl.classList.toggle('preview-open', hasPreviewSurface);
+      previewDockEl.setAttribute('aria-hidden', hasPreviewSurface ? 'false' : 'true');
     }
 
     function showFilePreview(file) {
@@ -3037,6 +3078,7 @@
           'Preview',
           'Open a file to preview it here.'
         );
+        syncPreviewDockState();
         return;
       }
 
@@ -3045,6 +3087,7 @@
           'Edit',
           `Editing ${currentLabel}. Save changes or cancel to return to preview.`
         );
+        syncPreviewDockState();
         return;
       }
 
@@ -3053,6 +3096,7 @@
           'Preview',
           `${currentLabel} is open in read-only mode. Saving is disabled.`
         );
+        syncPreviewDockState();
         return;
       }
 
@@ -3064,6 +3108,7 @@
           'Preview',
           `${currentLabel} is preview only. ${reason}`
         );
+        syncPreviewDockState();
         return;
       }
 
@@ -3071,6 +3116,7 @@
         'Preview',
         `Previewing ${currentLabel}. Select Edit to make changes.`
       );
+      syncPreviewDockState();
     }
 
     function applySessionAccessState() {
@@ -3456,8 +3502,91 @@
     function normalizeTranscriptText(text) {
       if (!text) return '';
       return stripAnsi(text)
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n');
+        .replace(/\r\n/g, '\n');
+    }
+
+    function normalizeInputCaptureData(text) {
+      if (!text) return '';
+      return text
+        .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+        .replace(/\x1bP[\s\S]*?\x1b\\/g, '')
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1bO./g, '')
+        .replace(/\x1b./g, '')
+        .replace(/[^\x08\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]/g, '');
+    }
+
+    function normalizeWhitespaceForCompare(text) {
+      return normalizeTranscriptText(text || '')
+        .replace(/\r/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function shouldShowSnapshot(outputText, snapshotText) {
+      const output = normalizeWhitespaceForCompare(outputText);
+      const snapshot = normalizeWhitespaceForCompare(snapshotText);
+      if (!snapshot) return false;
+      if (!output) return true;
+      if (snapshot === output) return false;
+      if (snapshot.endsWith(output) || output.endsWith(snapshot)) return false;
+      return true;
+    }
+
+    function appendTerminalLikeOutput(existingText, chunkText) {
+      const existing = Array.from(existingText || '');
+      let cursor = existing.length;
+      const chunk = Array.from(chunkText || '');
+
+      const currentLineStart = () => {
+        let idx = cursor - 1;
+        while (idx >= 0) {
+          if (existing[idx] === '\n') return idx + 1;
+          idx -= 1;
+        }
+        return 0;
+      };
+
+      const removeCurrentLineTail = () => {
+        let start = currentLineStart();
+        let end = start;
+        while (end < existing.length && existing[end] !== '\n') {
+          end += 1;
+        }
+        existing.splice(start, end - start);
+        cursor = start;
+      };
+
+      for (const char of chunk) {
+        if (char === '\r') {
+          removeCurrentLineTail();
+          continue;
+        }
+        if (char === '\b') {
+          if (cursor > 0) {
+            const prev = existing[cursor - 1];
+            if (prev !== '\n') {
+              existing.splice(cursor - 1, 1);
+              cursor -= 1;
+            }
+          }
+          continue;
+        }
+        if (char === '\n') {
+          existing.splice(cursor, 0, '\n');
+          cursor += 1;
+          continue;
+        }
+        if (cursor < existing.length && existing[cursor] !== '\n') {
+          existing[cursor] = char;
+        } else {
+          existing.splice(cursor, 0, char);
+        }
+        cursor += 1;
+      }
+
+      return trimAgentText(existing.join(''), AGENT_OUTPUT_LIMIT_CHARS);
     }
 
     function deriveRoundPreview(outputText) {
@@ -3470,15 +3599,6 @@
       return lines.slice(-2).join(' · ').slice(0, 180);
     }
 
-    function formatRoundStatus(round) {
-      const started = round.startedAt || Date.now();
-      const ended = round.endedAt || Date.now();
-      const seconds = Math.max(0, Math.round((ended - started) / 1000));
-      const status = round.status || 'running';
-      if (status === 'running') return `running · ${formatSeconds(seconds)}`;
-      return `${status} · ${formatSeconds(seconds)}`;
-    }
-
     function readTerminalSnapshotText() {
       if (!term || !term.buffer || !term.buffer.active) return '';
       const buffer = term.buffer.active;
@@ -3489,7 +3609,7 @@
         if (!line) continue;
         lines.push(line.translateToString(true));
       }
-      return trimAgentText(lines.join('\n'), AGENT_OUTPUT_LIMIT_CHARS);
+      return trimAgentText(normalizeWhitespaceForCompare(lines.join('\n')), AGENT_OUTPUT_LIMIT_CHARS);
     }
 
     function enforceRoundLimits(terminalId) {
@@ -3519,7 +3639,7 @@
       if (activeTerminalId === terminalId) {
         current.endSnapshotText = trimAgentText(readTerminalSnapshotText(), AGENT_OUTPUT_LIMIT_CHARS);
       } else if (!current.endSnapshotText) {
-        current.endSnapshotText = trimAgentText(current.outputText, AGENT_OUTPUT_LIMIT_CHARS);
+        current.endSnapshotText = trimAgentText(normalizeWhitespaceForCompare(current.outputText), AGENT_OUTPUT_LIMIT_CHARS);
       }
       current.outputPreview = deriveRoundPreview(current.outputText || current.endSnapshotText);
       enforceRoundLimits(terminalId);
@@ -3535,10 +3655,10 @@
     }
 
     function composeSubmittedInput(composer, fallbackLabel = 'Interactive input') {
-      const trimmed = composer.lineBuffer.trim();
+      const trimmed = normalizeWhitespaceForCompare(composer.lineBuffer);
       if (trimmed && !composer.sawControlInput) return trimmed;
       if (trimmed && composer.sawControlInput) return trimmed;
-      if (composer.sawPrintableInput) return composer.lineBuffer.trim() || fallbackLabel;
+      if (composer.sawPrintableInput) return normalizeWhitespaceForCompare(composer.lineBuffer) || fallbackLabel;
       if (composer.sawControlInput) return fallbackLabel;
       return fallbackLabel;
     }
@@ -3576,7 +3696,9 @@
       if (!session || !data) return;
       session.replayPrefix = '';
       const composer = ensureComposer(terminalId);
-      for (const char of data) {
+      const sanitized = normalizeInputCaptureData(data);
+      if (!sanitized) return;
+      for (const char of sanitized) {
         composer.lastInputAt = Date.now();
         if (char === '\r' || char === '\n') {
           closeAgentRound(terminalId, 'done');
@@ -3617,7 +3739,7 @@
       const normalized = normalizeTranscriptText(text);
       if (!normalized) return;
       const round = ensureRoundForOutput(terminalId);
-      round.outputText = trimAgentText(`${round.outputText}${normalized}`, AGENT_OUTPUT_LIMIT_CHARS);
+      round.outputText = appendTerminalLikeOutput(round.outputText, normalized);
       round.outputPreview = deriveRoundPreview(round.outputText);
       round.byteCount += normalized.length;
       if (session.phase === 'inspect') {
@@ -3704,10 +3826,13 @@
       if (!round) {
         agentInspectTitleEl.textContent = 'No round selected';
         agentInspectSubtitleEl.textContent = 'Start the session and send input to build local round history.';
-        agentInspectStatusEl.textContent = 'Idle';
+        agentInspectStatusEl.style.display = 'none';
         agentInspectInputEl.textContent = 'No input captured yet.';
         agentInspectOutputEl.textContent = 'No output captured yet.';
         agentInspectSnapshotEl.textContent = 'No snapshot captured yet.';
+        if (agentInspectSnapshotSectionEl) {
+          agentInspectSnapshotSectionEl.style.display = '';
+        }
         return;
       }
       if (session) {
@@ -3715,10 +3840,17 @@
       }
       agentInspectTitleEl.textContent = `Round ${round.index}`;
       agentInspectSubtitleEl.textContent = round.submittedInputText || 'Interactive input';
-      agentInspectStatusEl.textContent = round.status || 'running';
+      agentInspectStatusEl.style.display = 'none';
       agentInspectInputEl.textContent = round.submittedInputText || 'Interactive input';
       agentInspectOutputEl.textContent = round.outputText || 'No output captured yet.';
-      agentInspectSnapshotEl.textContent = round.endSnapshotText || round.outputText || 'No snapshot captured yet.';
+      const snapshot = round.endSnapshotText || '';
+      const showSnapshot = shouldShowSnapshot(round.outputText, snapshot);
+      if (agentInspectSnapshotSectionEl) {
+        agentInspectSnapshotSectionEl.style.display = showSnapshot ? '' : 'none';
+      }
+      agentInspectSnapshotEl.textContent = showSnapshot
+        ? snapshot
+        : 'Snapshot matches the normalized output.';
     }
 
     function renderAgentRounds() {
@@ -3776,21 +3908,12 @@
         const label = document.createElement('span');
         label.textContent = `Round ${round.index}`;
         title.appendChild(label);
-        const status = document.createElement('span');
-        status.className = 'agent-chip';
-        status.textContent = round.status || 'running';
-        title.appendChild(status);
         card.appendChild(title);
 
         const input = document.createElement('div');
         input.className = 'agent-round-input';
         input.textContent = round.submittedInputText || 'Interactive input';
         card.appendChild(input);
-
-        const meta = document.createElement('div');
-        meta.className = 'agent-round-meta';
-        meta.textContent = formatRoundStatus(round);
-        card.appendChild(meta);
 
         const preview = document.createElement('div');
         preview.className = 'agent-round-preview';
@@ -3891,7 +4014,7 @@
 
     async function createAgentTerminal(cwd) {
       const created = await createTerminal(cwd, {
-        title: `agent: ${folderLabelFromPath(cwd || currentNavDir || '.')}`,
+        title: folderLabelFromPath(cwd || currentNavDir || '.'),
         autoConnect: false
       });
       if (!created) return null;
@@ -5014,19 +5137,22 @@
       tabScroll.querySelectorAll('.tab').forEach((node) => node.remove());
       terminals.forEach((item, index) => {
         const agentSession = getAgentSession(item.id);
+        const tabTitle = agentSession
+          ? item.title.replace(/^agent:\s*/i, '').trim() || item.title
+          : item.title;
         const tab = document.createElement('div');
         tab.className = `tab ${item.id === activeTerminalId ? 'active' : ''}`;
-        tab.title = item.title;
+        tab.title = agentSession ? `Agent session: ${tabTitle}` : tabTitle;
         const activateTab = () => activateTerminalTab(item.id);
         tab.onclick = activateTab;
 
         const title = document.createElement('button');
         title.type = 'button';
         title.className = 'title tab-title';
-        title.textContent = item.title;
-        title.setAttribute('aria-label', `Open terminal tab ${item.title}`);
+        title.textContent = tabTitle;
+        title.setAttribute('aria-label', `Open terminal tab ${tabTitle}`);
         title.setAttribute('aria-pressed', item.id === activeTerminalId ? 'true' : 'false');
-        title.title = `${item.title}. Double-click to rename this tab.`;
+        title.title = `${tabTitle}. Double-click to rename this tab.`;
         title.onclick = (e) => {
           e.stopPropagation();
           activateTab();
@@ -5048,8 +5174,10 @@
 
         if (agentSession) {
           const badge = document.createElement('span');
-          badge.className = 'tab-badge';
-          badge.textContent = 'Agent';
+          badge.className = 'tab-badge icon-only';
+          badge.textContent = '✦';
+          badge.title = 'Agent session';
+          badge.setAttribute('aria-hidden', 'true');
           tab.appendChild(badge);
         }
 
@@ -5125,6 +5253,7 @@
         previewEl.textContent = 'Select a file to preview';
         updateEditorActionState();
         syncTreeActiveState();
+        syncPreviewDockState();
         return;
       }
       openFiles.forEach((file, index) => {
@@ -5197,6 +5326,7 @@
       });
       updateEditorActionState();
       syncTreeActiveState();
+      syncPreviewDockState();
     }
 
     async function openFile(path) {
