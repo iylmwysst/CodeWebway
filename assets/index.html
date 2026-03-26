@@ -762,6 +762,7 @@
     #files {
       width: clamp(220px, 18vw, 320px);
       min-width: 220px;
+      container-type: inline-size;
       border-right: 1px solid rgba(120, 146, 166, 0.12);
       display: flex;
       flex-direction: column;
@@ -861,7 +862,11 @@
     #preview-dock {
       display: none;
       flex-direction: column;
-      min-height: 0;
+      flex: 0 0 var(--preview-dock-height, 280px);
+      min-height: 140px;
+      max-height: min(60vh, 560px);
+      min-width: 0;
+      overflow: hidden;
       border-bottom: 1px solid rgba(120, 146, 166, 0.12);
       background:
         linear-gradient(180deg, rgba(255,255,255,0.028), rgba(255,255,255,0.012)),
@@ -869,6 +874,34 @@
     }
     #terms.preview-open #preview-dock {
       display: flex;
+    }
+    #preview-resize-handle {
+      display: none;
+      position: relative;
+      height: 12px;
+      flex-shrink: 0;
+      cursor: row-resize;
+      background: linear-gradient(180deg, rgba(120, 146, 166, 0.06), rgba(120, 146, 166, 0));
+      touch-action: none;
+    }
+    #preview-resize-handle::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 72px;
+      height: 4px;
+      transform: translate(-50%, -50%);
+      border-radius: 999px;
+      background: rgba(138, 171, 192, 0.34);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
+    }
+    #terms.preview-open #preview-resize-handle {
+      display: block;
+    }
+    #preview-resize-handle:hover::before,
+    #preview-resize-handle.dragging::before {
+      background: rgba(168, 205, 229, 0.72);
     }
     #preview-tabs {
       display: flex;
@@ -879,7 +912,8 @@
       background: rgba(255, 255, 255, 0.018);
     }
     #preview {
-      max-height: min(34vh, 320px);
+      flex: 1;
+      min-height: 0;
       overflow: auto;
       padding: 14px;
       font-family: ui-monospace, Menlo, monospace;
@@ -933,10 +967,10 @@
     }
     #editor {
       display: none;
-      min-height: 180px;
-      max-height: min(42vh, 420px);
+      flex: 1;
+      min-height: 0;
       width: 100%;
-      resize: vertical;
+      resize: none;
       background: #111;
       color: #e5e5e5;
       border: 0;
@@ -1205,6 +1239,24 @@
       color: #edf5f9;
     }
     .preview-tab .close:disabled { opacity: 0.3; cursor: default; }
+    @container (max-width: 320px) {
+      #file-head {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .file-toolbar {
+        justify-content: flex-start;
+      }
+      .file-toolbar .toolbar-button {
+        flex: 1 1 calc(50% - 4px);
+        justify-content: center;
+        min-width: 0;
+        padding: 0 10px;
+      }
+      .file-toolbar .toolbar-label {
+        display: none;
+      }
+    }
     #terminal-workspace {
       flex: 1;
       min-height: 0;
@@ -1797,11 +1849,8 @@
       #preview-dock {
         border-bottom: 1px solid rgba(120, 146, 166, 0.1);
       }
-      #preview {
-        max-height: 30vh;
-      }
-      #editor {
-        max-height: 40vh;
+      #preview-dock {
+        max-height: min(46vh, 420px);
       }
     }
     @media (max-width: 1024px) {
@@ -2178,6 +2227,7 @@
               <pre id="preview">Select a file to preview</pre>
               <textarea id="editor" spellcheck="false"></textarea>
             </div>
+            <div id="preview-resize-handle" aria-hidden="true"></div>
             <div id="terminal"></div>
             <div id="agent-launcher">
               <div class="agent-launcher-card">
@@ -2433,6 +2483,8 @@
     const tempLinksListEl = document.getElementById('temp-links-list');
     const termsEl = document.getElementById('terms');
     const terminalWorkspaceEl = document.getElementById('terminal-workspace');
+    const terminalMainEl = document.getElementById('terminal-main');
+    const previewResizeHandleEl = document.getElementById('preview-resize-handle');
     const terminalEl = document.getElementById('terminal');
     const agentLauncherEl = document.getElementById('agent-launcher');
     const agentLaunchPathEl = document.getElementById('agent-launch-path');
@@ -2467,10 +2519,13 @@
     let currentNavDir = '.';
 
     const openFiles = [];
+    const PREVIEW_DOCK_HEIGHT_STORAGE_KEY = 'codewebway.previewDockHeight';
     let activeFilePath = null;
     let editingPath = null;
     let editingBaseHash = null;
     let editingOriginal = '';
+    let previewResizeDrag = null;
+    let previewResizeFrame = 0;
     let usageTimer = null;
     let sessionTimer = null;
     let publicTimer = null;
@@ -2578,11 +2633,84 @@
       editorModeNoteEl.textContent = note;
     }
 
+    function clampPreviewDockHeight(nextHeight) {
+      const mainHeight = terminalMainEl?.clientHeight || window.innerHeight || 0;
+      const minHeight = 140;
+      const maxHeight = mainHeight > 0
+        ? Math.max(minHeight, Math.min(Math.floor(mainHeight * 0.7), mainHeight - 140))
+        : 560;
+      return Math.max(minHeight, Math.min(nextHeight, maxHeight));
+    }
+
+    function persistPreviewDockHeight(height) {
+      try {
+        window.localStorage.setItem(PREVIEW_DOCK_HEIGHT_STORAGE_KEY, String(Math.round(height)));
+      } catch {}
+    }
+
+    function applyPreviewDockHeight(height, { persist = false, fit = false } = {}) {
+      if (!previewDockEl || !terminalMainEl) return;
+      const clamped = clampPreviewDockHeight(height);
+      terminalMainEl.style.setProperty('--preview-dock-height', `${clamped}px`);
+      if (persist) persistPreviewDockHeight(clamped);
+      if (fit && fitAddon) {
+        if (previewResizeFrame) cancelAnimationFrame(previewResizeFrame);
+        previewResizeFrame = requestAnimationFrame(() => {
+          previewResizeFrame = 0;
+          scheduleTerminalRecovery([0]);
+        });
+      }
+    }
+
+    function restorePreviewDockHeight() {
+      const existingHeight = Number.parseFloat(terminalMainEl?.style.getPropertyValue('--preview-dock-height') || '');
+      if (Number.isFinite(existingHeight) && existingHeight > 0) {
+        applyPreviewDockHeight(existingHeight, { fit: false });
+        return;
+      }
+      let initialHeight = 280;
+      try {
+        const stored = Number(window.localStorage.getItem(PREVIEW_DOCK_HEIGHT_STORAGE_KEY));
+        if (Number.isFinite(stored) && stored > 0) initialHeight = stored;
+      } catch {}
+      applyPreviewDockHeight(initialHeight, { fit: false });
+    }
+
     function syncPreviewDockState() {
       if (!previewDockEl) return;
       const hasPreviewSurface = openFiles.length > 0 || Boolean(editingPath);
       termsEl.classList.toggle('preview-open', hasPreviewSurface);
       previewDockEl.setAttribute('aria-hidden', hasPreviewSurface ? 'false' : 'true');
+      if (hasPreviewSurface) {
+        restorePreviewDockHeight();
+      }
+    }
+
+    function stopPreviewResize() {
+      if (!previewResizeDrag) return;
+      previewResizeDrag = null;
+      if (previewResizeHandleEl) {
+        previewResizeHandleEl.classList.remove('dragging');
+      }
+      scheduleTerminalRecovery([0, 120]);
+    }
+
+    function handlePreviewResizeMove(event) {
+      if (!previewResizeDrag) return;
+      const delta = event.clientY - previewResizeDrag.startY;
+      applyPreviewDockHeight(previewResizeDrag.startHeight + delta, { persist: true, fit: true });
+    }
+
+    function startPreviewResize(event) {
+      if (!previewDockEl || !previewResizeHandleEl) return;
+      if (!termsEl.classList.contains('preview-open')) return;
+      if (window.matchMedia('(max-width: 767px)').matches) return;
+      event.preventDefault();
+      previewResizeDrag = {
+        startY: event.clientY,
+        startHeight: previewDockEl.getBoundingClientRect().height
+      };
+      previewResizeHandleEl.classList.add('dragging');
     }
 
     function showFilePreview(file) {
@@ -5953,10 +6081,22 @@
     keyStripEl.addEventListener('pointerup', (e) => stopKeyStripRepeat(e.pointerId));
     keyStripEl.addEventListener('pointercancel', (e) => stopKeyStripRepeat(e.pointerId));
     keyStripEl.addEventListener('lostpointercapture', (e) => stopKeyStripRepeat(e.pointerId));
+    if (previewResizeHandleEl) {
+      previewResizeHandleEl.addEventListener('pointerdown', startPreviewResize);
+    }
+    window.addEventListener('pointermove', handlePreviewResizeMove);
+    window.addEventListener('pointerup', stopPreviewResize);
+    window.addEventListener('pointercancel', stopPreviewResize);
     window.addEventListener('pointerup', (e) => stopKeyStripRepeat(e.pointerId));
     window.addEventListener('blur', () => stopKeyStripRepeat());
+    window.addEventListener('blur', stopPreviewResize);
+    window.addEventListener('resize', () => {
+      if (!previewDockEl || !termsEl.classList.contains('preview-open')) return;
+      applyPreviewDockHeight(previewDockEl.getBoundingClientRect().height, { persist: false, fit: true });
+    });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) stopKeyStripRepeat();
+      if (document.hidden) stopPreviewResize();
     });
 
     async function initializeEntryView() {
