@@ -51,6 +51,45 @@ pub struct SharedSession {
 
 pub type Session = Arc<Mutex<SharedSession>>;
 
+fn is_utf8_locale(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains("utf-8") || lower.contains("utf8")
+}
+
+fn utf8_locale_overrides<'a>(
+    lc_all: Option<&'a str>,
+    lc_ctype: Option<&'a str>,
+    lang: Option<&'a str>,
+) -> Vec<(&'static str, &'static str)> {
+    let locale_chain = [lc_all, lc_ctype, lang];
+    if locale_chain.into_iter().flatten().any(is_utf8_locale) {
+        return Vec::new();
+    }
+
+    let mut overrides = Vec::with_capacity(2);
+    if lc_all.is_some_and(|value| !value.trim().is_empty()) {
+        overrides.push(("LC_ALL", "UTF-8"));
+    }
+    overrides.push(("LC_CTYPE", "UTF-8"));
+    overrides
+}
+
+fn apply_utf8_locale(cmd: &mut CommandBuilder) {
+    let lc_all = std::env::var("LC_ALL").ok();
+    let lc_ctype = std::env::var("LC_CTYPE").ok();
+    let lang = std::env::var("LANG").ok();
+
+    for (key, value) in
+        utf8_locale_overrides(lc_all.as_deref(), lc_ctype.as_deref(), lang.as_deref())
+    {
+        cmd.env(key, value);
+    }
+}
+
 pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow::Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -62,6 +101,7 @@ pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow:
 
     let mut cmd = CommandBuilder::new(shell);
     cmd.env("TERM", "xterm-256color");
+    apply_utf8_locale(&mut cmd);
     cmd.cwd(cwd);
     let child = pair.slave.spawn_command(cmd)?;
 
@@ -145,5 +185,45 @@ mod tests {
         sb.push(b"hello");
         assert_eq!(sb.len(), 0);
         assert_eq!(sb.snapshot(), b"");
+    }
+
+    #[test]
+    fn test_utf8_locale_detection_accepts_common_spellings() {
+        assert!(is_utf8_locale("UTF-8"));
+        assert!(is_utf8_locale("en_US.UTF-8"));
+        assert!(is_utf8_locale("C.UTF8"));
+        assert!(!is_utf8_locale("C"));
+        assert!(!is_utf8_locale(""));
+    }
+
+    #[test]
+    fn test_utf8_locale_overrides_when_locale_missing() {
+        assert_eq!(
+            utf8_locale_overrides(None, None, None),
+            vec![("LC_CTYPE", "UTF-8")]
+        );
+    }
+
+    #[test]
+    fn test_utf8_locale_overrides_when_only_non_utf8_lang_exists() {
+        assert_eq!(
+            utf8_locale_overrides(None, None, Some("C")),
+            vec![("LC_CTYPE", "UTF-8")]
+        );
+    }
+
+    #[test]
+    fn test_utf8_locale_overrides_when_lc_all_blocks_utf8() {
+        assert_eq!(
+            utf8_locale_overrides(Some("C"), None, Some("en_US.ISO8859-1")),
+            vec![("LC_ALL", "UTF-8"), ("LC_CTYPE", "UTF-8")]
+        );
+    }
+
+    #[test]
+    fn test_utf8_locale_overrides_skip_when_utf8_already_present() {
+        assert!(utf8_locale_overrides(None, Some("en_US.UTF-8"), None).is_empty());
+        assert!(utf8_locale_overrides(Some("C.UTF-8"), None, None).is_empty());
+        assert!(utf8_locale_overrides(None, None, Some("th_TH.UTF8")).is_empty());
     }
 }
