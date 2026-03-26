@@ -35,7 +35,10 @@ esac
 # Get latest published release
 echo "Fetching latest release..."
 RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
-TAG=$(printf "%s\n" "${RELEASE_JSON}" | grep '"tag_name"' | head -n1 | sed 's/.*"tag_name": "\(.*\)".*/\1/')
+TAG=$(printf "%s\n" "${RELEASE_JSON}" \
+  | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+  | head -n1 \
+  | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
 
 if [ -z "$TAG" ]; then
   echo "Error: could not find any release."
