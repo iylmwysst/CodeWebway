@@ -358,6 +358,8 @@ fn spawn_cloudflared(
     let child = Command::new(cloudflared_binary)
         .arg("tunnel")
         .arg("--no-autoupdate")
+        .arg("--protocol")
+        .arg("http2")
         .arg("--loglevel")
         .arg("info")
         .arg("--logfile")
@@ -475,13 +477,13 @@ fn cloudflared_download_spec(os: &str, arch: &str) -> anyhow::Result<Cloudflared
         ("macos", "x86_64") => Ok(CloudflaredDownloadSpec {
             version: MANAGED_CLOUDFLARED_VERSION,
             url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-amd64.tgz",
-            expected_sha256: "b91dbec79a3e3809d5508b96d8b0bdfbf3ad7d51f858200228fa3e57100580d9",
+            expected_sha256: "0f30140c4a5e213d22f951ef4c964cac5fb6a5f061ba6eba5ea932999f7c0394",
             kind: CloudflaredDownloadKind::TarGz,
         }),
         ("macos", "aarch64") | ("macos", "arm64") => Ok(CloudflaredDownloadSpec {
             version: MANAGED_CLOUDFLARED_VERSION,
             url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-arm64.tgz",
-            expected_sha256: "633cee0fd41fd2020e17498beecc54811bf4fc99f891c080dc9343eb0f449c60",
+            expected_sha256: "2aae4f69b0fc1c671b8353b4f594cbd902cd1e360c8eed2b8cad4602cb1546fb",
             kind: CloudflaredDownloadKind::TarGz,
         }),
         (target_os, target_arch) => anyhow::bail!(
@@ -1119,7 +1121,22 @@ mod tests {
             CloudflaredDownloadSpec {
                 version: "2026.3.0",
                 url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-arm64.tgz",
-                expected_sha256: "633cee0fd41fd2020e17498beecc54811bf4fc99f891c080dc9343eb0f449c60",
+                expected_sha256: "2aae4f69b0fc1c671b8353b4f594cbd902cd1e360c8eed2b8cad4602cb1546fb",
+                kind: CloudflaredDownloadKind::TarGz,
+            }
+        );
+    }
+
+    #[test]
+    fn test_cloudflared_download_spec_macos_x86_64_uses_tgz() {
+        let spec = cloudflared_download_spec("macos", "x86_64").unwrap();
+
+        assert_eq!(
+            spec,
+            CloudflaredDownloadSpec {
+                version: "2026.3.0",
+                url: "https://github.com/cloudflare/cloudflared/releases/download/2026.3.0/cloudflared-darwin-amd64.tgz",
+                expected_sha256: "0f30140c4a5e213d22f951ef4c964cac5fb6a5f061ba6eba5ea932999f7c0394",
                 kind: CloudflaredDownloadKind::TarGz,
             }
         );

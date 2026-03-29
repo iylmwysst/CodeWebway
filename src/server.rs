@@ -33,7 +33,7 @@ const MAX_ACTIVE_TEMP_LINKS: usize = 2;
 const DEFAULT_TEMP_LINK_TTL_MINUTES: u64 = 15;
 const TEMP_LINK_GRACE_SECS: u64 = 120;
 const WS_HEARTBEAT_PAYLOAD: &str = "{\"type\":\"heartbeat\"}";
-pub const DASHBOARD_PENDING_LOGIN_TTL_SECS: u64 = 180;
+pub const DASHBOARD_PENDING_LOGIN_TTL_SECS: u64 = 15 * 60;
 pub const DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS: usize = 5;
 const CREDENTIAL_ATTEMPT_MAX: usize = 5;
 const PIN_ATTEMPT_MAX: usize = 8;
@@ -3907,7 +3907,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_pending_login_reuses_same_challenge() {
-        let mut store = DashboardPendingLoginStore::new(Duration::from_secs(180), 5);
+        let mut store = DashboardPendingLoginStore::new(Duration::from_secs(15 * 60), 5);
         let now = Instant::now();
         let first = store.create("challenge-1".to_string(), now);
         let second = store.create("challenge-1".to_string(), now + Duration::from_secs(1));
@@ -3917,7 +3917,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_pending_login_expires_after_pin_failures() {
-        let mut store = DashboardPendingLoginStore::new(Duration::from_secs(180), 2);
+        let mut store = DashboardPendingLoginStore::new(Duration::from_secs(15 * 60), 2);
         let now = Instant::now();
         let pending = store.create("challenge-2".to_string(), now);
         assert!(store.record_pin_failure(&pending, now + Duration::from_secs(1)));
