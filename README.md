@@ -91,6 +91,15 @@ What it does:
 - builds the four installer assets expected by `install.sh`
 - commits, tags, pushes, and creates the GitHub release
 
+Remote build/release path:
+
+```bash
+git tag -a v1.1.0-beta.65 -m v1.1.0-beta.65
+git push origin v1.1.0-beta.65
+```
+
+That tag triggers `.github/workflows/release.yml`, which builds the same four installer assets on GitHub Actions and publishes the GitHub release remotely. You can also dispatch the workflow manually with a `tag` and `ref` when you need to rebuild or publish an existing version from a specific commit.
+
 Use the next version number when you run it again.
 
 ## When to Use CodeWebway
