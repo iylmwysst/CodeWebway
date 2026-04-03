@@ -129,7 +129,7 @@ jobs:
 
       - name: Install Zig
         if: matrix.use_zigbuild
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
 
       - name: Install cargo-zigbuild
         if: matrix.use_zigbuild
