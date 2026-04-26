@@ -719,10 +719,107 @@
     #upload-status.active {
       display: block;
     }
+    #selection-actions {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 8px 10px 0;
+      padding: 8px 10px;
+      border: 1px solid rgba(133, 194, 226, 0.22);
+      border-radius: 10px;
+      background: rgba(77, 118, 140, 0.14);
+      color: #d8e8ef;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    #selection-actions.active {
+      display: flex;
+    }
+    .selection-buttons {
+      display: inline-flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .selection-buttons button,
+    .staged-remove {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      border: 1px solid rgba(120, 146, 166, 0.16);
+      background: rgba(255,255,255,0.035);
+      color: #d7e6ee;
+      font-size: 13px;
+    }
+    .selection-buttons button:hover:not(:disabled),
+    .staged-remove:hover:not(:disabled) {
+      background: rgba(255,255,255,0.09);
+      border-color: rgba(150, 177, 196, 0.3);
+    }
     #tree.drop-target,
-    .tree-item.drop-target {
+    .tree-item.drop-target,
+    #staged-uploads.drop-target {
       border-color: rgba(116, 204, 160, 0.62);
       background: rgba(70, 155, 112, 0.14);
+    }
+    #staged-uploads {
+      flex-shrink: 0;
+      margin: 0;
+      padding: 10px;
+      border-top: 1px solid rgba(120, 146, 166, 0.1);
+      background: rgba(255,255,255,0.018);
+      display: grid;
+      gap: 8px;
+    }
+    .staged-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: #8ca3b1;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    #staged-drop-copy {
+      color: #78909f;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    #staged-list {
+      display: grid;
+      gap: 6px;
+      max-height: 132px;
+      overflow: auto;
+    }
+    .staged-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid rgba(120, 146, 166, 0.12);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.025);
+      color: #d5e3ea;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 12px;
+      cursor: grab;
+    }
+    .staged-item:active {
+      cursor: grabbing;
+    }
+    .staged-item-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .staged-empty {
+      padding: 8px 2px;
+      color: #627987;
+      font-size: 12px;
+      line-height: 1.4;
     }
     #preview-dock {
       display: none;
@@ -872,7 +969,8 @@
       border-color: rgba(120, 146, 166, 0.14);
       transform: translateX(1px);
     }
-    .tree-item.active {
+    .tree-item.active,
+    .tree-item.selected {
       background: rgba(77, 118, 140, 0.18);
       border-color: rgba(133, 194, 226, 0.24);
       color: #eef5f8;
@@ -914,6 +1012,15 @@
       background: rgba(255,255,255,0.035);
       color: #d7e6ee;
       font-size: 13px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.14s ease, background 0.18s ease, border-color 0.18s ease;
+    }
+    .tree-item:hover .tree-item-action,
+    .tree-item:focus-within .tree-item-action,
+    .tree-item.selected .tree-item-action {
+      opacity: 1;
+      pointer-events: auto;
     }
     .tree-item-action:hover {
       background: rgba(255,255,255,0.09);
@@ -1999,14 +2106,6 @@
               <span class="toolbar-icon" aria-hidden="true">↺</span>
               <span class="toolbar-label">Refresh</span>
             </button>
-            <button id="upload-file" class="toolbar-button" type="button" title="Upload files" aria-label="Upload files">
-              <span class="toolbar-icon" aria-hidden="true">⇧</span>
-              <span class="toolbar-label">Upload</span>
-            </button>
-            <button id="download-folder" class="toolbar-button" type="button" title="Download this folder" aria-label="Download this folder">
-              <span class="toolbar-icon" aria-hidden="true">⇩</span>
-              <span class="toolbar-label">Download</span>
-            </button>
             <button id="open-shell-here" class="toolbar-button" type="button" title="Open a shell in this directory" aria-label="Open a shell in this directory">
               <span class="toolbar-icon" aria-hidden="true">⌨</span>
               <span class="toolbar-label">Shell Here</span>
@@ -2023,7 +2122,22 @@
         </div>
         <input id="upload-input" type="file" multiple hidden />
         <div id="upload-status" role="status" aria-live="polite"></div>
+        <div id="selection-actions" aria-live="polite">
+          <span id="selection-count">0 selected</span>
+          <div class="selection-buttons">
+            <button id="selection-download" type="button" title="Download selected files" aria-label="Download selected files">⇩</button>
+            <button id="selection-delete" type="button" title="Delete selected files" aria-label="Delete selected files">⌫</button>
+          </div>
+        </div>
         <div id="tree"></div>
+        <div id="staged-uploads" aria-label="Staged uploads">
+          <div class="staged-head">
+            <span>Staged Uploads</span>
+            <span>/uploaded</span>
+          </div>
+          <div id="staged-drop-copy">Drop here to stage files before choosing a folder.</div>
+          <div id="staged-list"></div>
+        </div>
       </section>
       <section id="terms">
         <div id="term-tabs">
@@ -2313,10 +2427,14 @@
     const openShellHereBtn = document.getElementById('open-shell-here');
     const openAgentHereBtn = document.getElementById('open-agent-here');
     const refreshTreeBtn = document.getElementById('refresh-tree');
-    const uploadFileBtn = document.getElementById('upload-file');
     const uploadInputEl = document.getElementById('upload-input');
     const uploadStatusEl = document.getElementById('upload-status');
-    const downloadFolderBtn = document.getElementById('download-folder');
+    const selectionActionsEl = document.getElementById('selection-actions');
+    const selectionCountEl = document.getElementById('selection-count');
+    const selectionDownloadBtn = document.getElementById('selection-download');
+    const selectionDeleteBtn = document.getElementById('selection-delete');
+    const stagedUploadsEl = document.getElementById('staged-uploads');
+    const stagedListEl = document.getElementById('staged-list');
     const terminalHistoryEl = document.getElementById('terminal-history');
     const terminalHistoryStatusEl = document.getElementById('terminal-history-status');
     const terminalHistoryContentEl = document.getElementById('terminal-history-content');
@@ -2399,6 +2517,9 @@
     let terminalResizeObserver = null;
     let publicStatusLoaded = false;
     const fileMeta = new Map();
+    const selectedPaths = new Set();
+    const stagedUploads = [];
+    let lastSelectedPath = null;
     const FILE_WARN_BYTES = 128 * 1024;
     const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
     const CACHE_PREFIX = 'rwtty:file:';
@@ -2491,7 +2612,139 @@
       if (!treeEl) return;
       treeEl.querySelectorAll('.tree-item[data-path]').forEach((node) => {
         node.classList.toggle('active', node.dataset.path === activeFilePath);
+        node.classList.toggle('selected', selectedPaths.has(node.dataset.path));
       });
+    }
+
+    function selectedEntries() {
+      return Array.from(selectedPaths)
+        .map((path) => fileMeta.get(path))
+        .filter(Boolean);
+    }
+
+    function updateSelectionActions() {
+      const count = selectedPaths.size;
+      selectionActionsEl.classList.toggle('active', count > 0);
+      selectionCountEl.textContent = count === 1 ? '1 selected' : `${count} selected`;
+      const disabled = count === 0;
+      selectionDownloadBtn.disabled = disabled;
+      selectionDeleteBtn.disabled = disabled || sessionAccess.readOnly === true;
+      syncTreeActiveState();
+    }
+
+    function clearSelection() {
+      selectedPaths.clear();
+      lastSelectedPath = null;
+      updateSelectionActions();
+    }
+
+    function selectTreeEntry(path, event) {
+      const orderedPaths = Array.from(fileMeta.keys());
+      if (event && event.shiftKey && lastSelectedPath) {
+        const start = orderedPaths.indexOf(lastSelectedPath);
+        const end = orderedPaths.indexOf(path);
+        if (start >= 0 && end >= 0) {
+          selectedPaths.clear();
+          const [from, to] = start < end ? [start, end] : [end, start];
+          orderedPaths.slice(from, to + 1).forEach((item) => selectedPaths.add(item));
+        } else {
+          selectedPaths.add(path);
+        }
+      } else if (event && (event.ctrlKey || event.metaKey)) {
+        if (selectedPaths.has(path)) {
+          selectedPaths.delete(path);
+        } else {
+          selectedPaths.add(path);
+        }
+        lastSelectedPath = path;
+      } else {
+        selectedPaths.clear();
+        selectedPaths.add(path);
+        lastSelectedPath = path;
+      }
+      updateSelectionActions();
+    }
+
+    function cleanOpenFilesForPaths(paths) {
+      const affected = new Set(paths);
+      for (let i = openFiles.length - 1; i >= 0; i--) {
+        if (affected.has(openFiles[i].path)) {
+          openFiles.splice(i, 1);
+        }
+      }
+      if (activeFilePath && affected.has(activeFilePath)) {
+        activeFilePath = openFiles[0]?.path || null;
+        previewEl.textContent = openFiles[0]
+          ? openFiles[0].content + (openFiles[0].truncated ? '\n\n[truncated]' : '')
+          : 'Select a file to preview';
+      }
+      renderPreviewTabs();
+    }
+
+    function dragPayloadForPaths(paths, source = 'tree') {
+      return JSON.stringify({ kind: 'codewebway-paths', source, paths });
+    }
+
+    function readDragPayload(event) {
+      const raw = event.dataTransfer.getData('application/x-codewebway-paths')
+        || event.dataTransfer.getData('text/plain');
+      if (!raw) return null;
+      try {
+        const payload = JSON.parse(raw);
+        if (payload && payload.kind === 'codewebway-paths' && Array.isArray(payload.paths)) {
+          return payload;
+        }
+      } catch {}
+      return null;
+    }
+
+    function hasDroppedFiles(event) {
+      return event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length > 0;
+    }
+
+    async function movePaths(paths, targetDir) {
+      const uniquePaths = Array.from(new Set(paths || [])).filter(Boolean);
+      if (uniquePaths.length === 0) return;
+      if (sessionAccess.readOnly) {
+        alert('Read-only session cannot move files.');
+        return;
+      }
+      const res = await api('/api/fs/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: uniquePaths, target_dir: targetDir || '.' })
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        alert(msg || 'Cannot move files');
+        return;
+      }
+      uniquePaths.forEach((path) => selectedPaths.delete(path));
+      for (let i = stagedUploads.length - 1; i >= 0; i--) {
+        if (uniquePaths.includes(stagedUploads[i].path)) {
+          stagedUploads.splice(i, 1);
+        }
+      }
+      cleanOpenFilesForPaths(uniquePaths);
+      renderStagedUploads();
+      await renderNav();
+      setUploadStatus(`Moved ${uniquePaths.length} item${uniquePaths.length === 1 ? '' : 's'}.`);
+      setTimeout(() => setUploadStatus(''), 2600);
+    }
+
+    async function handleTreeDrop(event, targetDir) {
+      event.preventDefault();
+      event.stopPropagation();
+      treeEl.classList.remove('drop-target');
+      treeEl.querySelectorAll('.drop-target').forEach((node) => node.classList.remove('drop-target'));
+      if (hasDroppedFiles(event)) {
+        await uploadFiles(event.dataTransfer.files, targetDir || currentNavDir || '.');
+        return;
+      }
+      const payload = readDragPayload(event);
+      if (payload) {
+        await movePaths(payload.paths, targetDir || currentNavDir || '.');
+      }
     }
 
     function setEditorModeCopy(label, note) {
@@ -5818,14 +6071,15 @@
       uploadStatusEl.classList.toggle('active', Boolean(text));
     }
 
-    async function uploadFiles(fileList, targetDir = currentNavDir) {
+    async function uploadFiles(fileList, targetDir = currentNavDir, options = {}) {
       if (sessionAccess.readOnly) {
         alert('Read-only session cannot upload files.');
-        return;
+        return [];
       }
       const files = Array.from(fileList || []).filter(Boolean);
-      if (files.length === 0) return;
+      if (files.length === 0) return [];
       let done = 0;
+      const uploaded = [];
       for (const file of files) {
         const relativeName = file.webkitRelativePath || file.name;
         const path = joinPath(targetDir, relativeName.replace(/^\/+/, ''));
@@ -5850,11 +6104,30 @@
           alert(msg || `Cannot upload ${relativeName}`);
           continue;
         }
+        const payload = await res.json();
+        uploaded.push({
+          path: payload.path,
+          name: relativeName.split('/').pop() || payload.path.split('/').pop() || relativeName,
+          size_bytes: payload.size_bytes
+        });
         done += 1;
+      }
+      if (options.stage) {
+        uploaded.forEach((item) => {
+          const existing = stagedUploads.find((staged) => staged.path === item.path);
+          if (existing) {
+            existing.name = item.name;
+            existing.size_bytes = item.size_bytes;
+          } else {
+            stagedUploads.unshift(item);
+          }
+        });
+        renderStagedUploads();
       }
       setUploadStatus(done > 0 ? `Uploaded ${done}/${files.length} file${files.length === 1 ? '' : 's'}.` : '');
       await renderNav();
       setTimeout(() => setUploadStatus(''), 3200);
+      return uploaded;
     }
 
     function downloadPath(path, archive = false) {
@@ -5879,6 +6152,110 @@
       document.body.appendChild(a);
       a.click();
       a.remove();
+    }
+
+    function renderStagedUploads() {
+      stagedListEl.innerHTML = '';
+      if (stagedUploads.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'staged-empty';
+        empty.textContent = 'No staged uploads yet.';
+        stagedListEl.appendChild(empty);
+        return;
+      }
+      stagedUploads.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'staged-item';
+        row.draggable = true;
+        row.title = item.path;
+
+        const handle = document.createElement('span');
+        handle.textContent = '≡';
+        handle.setAttribute('aria-hidden', 'true');
+        row.appendChild(handle);
+
+        const label = document.createElement('span');
+        label.className = 'staged-item-label';
+        label.textContent = item.name || item.path.split('/').pop() || item.path;
+        row.appendChild(label);
+
+        const meta = document.createElement('span');
+        meta.className = 'tree-item-meta';
+        meta.textContent = typeof item.size_bytes === 'number' ? formatBytes(item.size_bytes) : 'File';
+        row.appendChild(meta);
+
+        const remove = document.createElement('button');
+        remove.className = 'staged-remove';
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.title = 'Remove from staged list';
+        remove.setAttribute('aria-label', `Remove ${label.textContent} from staged list`);
+        remove.onclick = (event) => {
+          event.stopPropagation();
+          stagedUploads.splice(index, 1);
+          renderStagedUploads();
+        };
+        row.appendChild(remove);
+
+        row.ondragstart = (event) => {
+          event.dataTransfer.effectAllowed = 'move';
+          const payload = dragPayloadForPaths([item.path], 'staged');
+          event.dataTransfer.setData('application/x-codewebway-paths', payload);
+          event.dataTransfer.setData('text/plain', payload);
+        };
+
+        stagedListEl.appendChild(row);
+      });
+    }
+
+    async function downloadSelectedPaths() {
+      const entries = selectedEntries();
+      if (entries.length === 0) return;
+      if (entries.length === 1 && !entries[0].is_dir) {
+        downloadPath(entries[0].path, false);
+        return;
+      }
+      api('/api/fs/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: entries.map((entry) => entry.path) })
+      })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(await res.text());
+          return res.blob();
+        })
+        .then((blob) => saveBlob(blob, 'codewebway-selection.tar.gz'))
+        .catch((err) => alert(err.message || 'Cannot download selected files'));
+    }
+
+    async function deleteSelectedPaths() {
+      const paths = Array.from(selectedPaths);
+      if (paths.length === 0) return;
+      if (sessionAccess.readOnly) {
+        alert('Read-only session cannot delete files.');
+        return;
+      }
+      const pin = await requestPinWithKeypad({
+        title: 'Delete files',
+        message: `Enter the machine PIN to delete ${paths.length} selected item${paths.length === 1 ? '' : 's'}.`,
+        confirmLabel: 'Delete'
+      });
+      if (pin === null) return;
+      const res = await api('/api/fs/delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths, pin })
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        alert(msg || 'Cannot delete selected files');
+        return;
+      }
+      cleanOpenFilesForPaths(paths);
+      clearSelection();
+      await renderNav();
+      setUploadStatus(`Deleted ${paths.length} item${paths.length === 1 ? '' : 's'}.`);
+      setTimeout(() => setUploadStatus(''), 2600);
     }
 
     function saveBlob(blob, filename) {
@@ -6097,6 +6474,8 @@
         const row = document.createElement('div');
         row.className = 'tree-item';
         row.tabIndex = 0;
+        row.draggable = true;
+        row.dataset.path = entry.path;
         row.setAttribute('role', 'button');
         row.setAttribute('aria-label', entry.is_dir ? `Open folder ${entry.name}` : `Open file ${entry.name}`);
         row.title = entry.path;
@@ -6130,33 +6509,54 @@
         };
         row.appendChild(action);
 
+        row.ondragstart = (event) => {
+          const paths = selectedPaths.has(entry.path) ? Array.from(selectedPaths) : [entry.path];
+          event.dataTransfer.effectAllowed = 'move';
+          const payload = dragPayloadForPaths(paths, 'tree');
+          event.dataTransfer.setData('application/x-codewebway-paths', payload);
+          event.dataTransfer.setData('text/plain', payload);
+        };
+
         if (entry.is_dir) {
           row.ondragover = (event) => {
             event.preventDefault();
+            event.stopPropagation();
             row.classList.add('drop-target');
           };
           row.ondragleave = () => row.classList.remove('drop-target');
-          row.ondrop = (event) => {
-            event.preventDefault();
+          row.ondrop = async (event) => {
             row.classList.remove('drop-target');
-            uploadFiles(event.dataTransfer.files, entry.path);
+            await handleTreeDrop(event, entry.path);
           };
-          row.onclick = () => {
+          row.onclick = (event) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey) {
+              selectTreeEntry(entry.path, event);
+              return;
+            }
             currentNavDir = entry.path;
+            clearSelection();
             renderNav();
           };
           row.onkeydown = (event) => activateWithKeyboard(event, () => {
             currentNavDir = entry.path;
+            clearSelection();
             renderNav();
           });
         } else {
-          row.dataset.path = entry.path;
           row.classList.toggle('active', entry.path === activeFilePath);
-          row.onclick = () => openFile(entry.path);
+          row.classList.toggle('selected', selectedPaths.has(entry.path));
+          row.onclick = (event) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey) {
+              selectTreeEntry(entry.path, event);
+              return;
+            }
+            openFile(entry.path);
+          };
           row.onkeydown = (event) => activateWithKeyboard(event, () => openFile(entry.path));
         }
         treeEl.appendChild(row);
       }
+      updateSelectionActions();
       syncTreeActiveState();
     }
 
@@ -6365,28 +6765,31 @@
     openShellHereBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
     openAgentHereBtn.addEventListener('click', () => createAgentTerminal(currentNavDir || '.'));
     refreshTreeBtn.addEventListener('click', () => renderNav());
-    uploadFileBtn.addEventListener('click', () => {
-      if (sessionAccess.readOnly) {
-        alert('Read-only session cannot upload files.');
-        return;
-      }
-      uploadInputEl.click();
-    });
     uploadInputEl.addEventListener('change', async () => {
       await uploadFiles(uploadInputEl.files, currentNavDir || '.');
       uploadInputEl.value = '';
     });
-    downloadFolderBtn.addEventListener('click', () => downloadPath(currentNavDir || '.', true));
+    selectionDownloadBtn.addEventListener('click', () => downloadSelectedPaths());
+    selectionDeleteBtn.addEventListener('click', () => deleteSelectedPaths());
     treeEl.addEventListener('dragover', (event) => {
       event.preventDefault();
       treeEl.classList.add('drop-target');
     });
     treeEl.addEventListener('dragleave', () => treeEl.classList.remove('drop-target'));
-    treeEl.addEventListener('drop', (event) => {
+    treeEl.addEventListener('drop', (event) => handleTreeDrop(event, currentNavDir || '.'));
+    stagedUploadsEl.addEventListener('dragover', (event) => {
+      if (!hasDroppedFiles(event)) return;
       event.preventDefault();
-      treeEl.classList.remove('drop-target');
-      uploadFiles(event.dataTransfer.files, currentNavDir || '.');
+      stagedUploadsEl.classList.add('drop-target');
     });
+    stagedUploadsEl.addEventListener('dragleave', () => stagedUploadsEl.classList.remove('drop-target'));
+    stagedUploadsEl.addEventListener('drop', async (event) => {
+      if (!hasDroppedFiles(event)) return;
+      event.preventDefault();
+      stagedUploadsEl.classList.remove('drop-target');
+      await uploadFiles(event.dataTransfer.files, 'uploaded', { stage: true });
+    });
+    renderStagedUploads();
 
     agentLaunchFormEl.addEventListener('submit', async (event) => {
       event.preventDefault();

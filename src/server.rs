@@ -231,6 +231,18 @@ pub struct ArchiveRequest {
 }
 
 #[derive(Deserialize)]
+pub struct MovePathsRequest {
+    paths: Vec<String>,
+    target_dir: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeletePathsRequest {
+    paths: Vec<String>,
+    pin: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct SaveFileRequest {
     path: String,
     content: String,
@@ -1086,7 +1098,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             .route("/api/fs/file/diff", patch(save_file_diff))
             .route("/api/fs/upload", post(upload_file))
             .route("/api/fs/download", get(download_file))
-            .route("/api/fs/archive", post(download_archive));
+            .route("/api/fs/archive", post(download_archive))
+            .route("/api/fs/move", post(move_paths))
+            .route("/api/fs/delete", delete(delete_paths));
     }
 
     r.with_state(state).layer(CompressionLayer::new())
@@ -3097,6 +3111,132 @@ async fn download_archive(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+async fn move_paths(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MovePathsRequest>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if is_session_read_only(&state, &session_token) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Read-only sessions cannot move files",
+        )
+            .into_response();
+    }
+    if req.paths.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no paths selected").into_response();
+    }
+
+    let target_dir = match resolve_user_path(&state.root_dir, Some(&req.target_dir)) {
+        Ok(path) => path,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    if !target_dir.is_dir() {
+        return (StatusCode::BAD_REQUEST, "target must be a directory").into_response();
+    }
+
+    let mut moves = Vec::new();
+    for requested in req.paths.iter().take(256) {
+        let source = match resolve_user_path(&state.root_dir, Some(requested)) {
+            Ok(path) => path,
+            Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+        };
+        if source == target_dir {
+            return (
+                StatusCode::BAD_REQUEST,
+                "cannot move a directory into itself",
+            )
+                .into_response();
+        }
+        if source.is_dir() && target_dir.starts_with(&source) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "cannot move a directory into one of its children",
+            )
+                .into_response();
+        }
+        let Some(file_name) = source.file_name() else {
+            return (StatusCode::BAD_REQUEST, "invalid source path").into_response();
+        };
+        let dest = target_dir.join(file_name);
+        if dest.exists() {
+            return (StatusCode::CONFLICT, "destination already exists").into_response();
+        }
+        moves.push((source, dest));
+    }
+
+    let mut moved = 0usize;
+    for (source, dest) in moves {
+        if let Err(err) = std::fs::rename(&source, &dest) {
+            tracing::warn!("failed to move file: {err}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "unable to move file").into_response();
+        }
+        moved += 1;
+    }
+    let payload = serde_json::json!({ "moved": moved });
+    count_tx_json(&state, &payload);
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
+async fn delete_paths(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DeletePathsRequest>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if is_session_read_only(&state, &session_token) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Read-only sessions cannot delete files",
+        )
+            .into_response();
+    }
+    if !verify_pin(req.pin.as_deref(), state.pin.as_deref()) {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "pin_invalid",
+            "Incorrect machine PIN.",
+        );
+    }
+    if req.paths.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no paths selected").into_response();
+    }
+
+    let mut paths = Vec::new();
+    for requested in req.paths.iter().take(256) {
+        let path = match resolve_user_path(&state.root_dir, Some(requested)) {
+            Ok(path) => path,
+            Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+        };
+        if path == state.root_dir {
+            return (StatusCode::BAD_REQUEST, "cannot delete workspace root").into_response();
+        }
+        paths.push(path);
+    }
+
+    let mut deleted = 0usize;
+    for path in paths {
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(err) = result {
+            tracing::warn!("failed to delete file: {err}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "unable to delete file").into_response();
+        }
+        deleted += 1;
+    }
+    let payload = serde_json::json!({ "deleted": deleted });
+    count_tx_json(&state, &payload);
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
 async fn usage_stats(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
     if has_valid_session_cookie(&headers, &state, false).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -4099,17 +4239,23 @@ fn resolve_user_write_path(root_dir: &Path, requested: &str) -> Result<PathBuf, 
         return Err("parent path segments are not allowed");
     }
     let parent = rel_path.parent().unwrap_or_else(|| Path::new("."));
-    let canonical_parent = root_dir
-        .join(parent)
+    let requested_parent = root_dir.join(parent);
+    let mut existing_parent = requested_parent.as_path();
+    while !existing_parent.exists() {
+        existing_parent = existing_parent
+            .parent()
+            .ok_or("parent path does not exist")?;
+    }
+    let canonical_parent = existing_parent
         .canonicalize()
         .map_err(|_| "parent path does not exist")?;
-    if !canonical_parent.starts_with(root_dir) {
+    if !canonical_parent.starts_with(root_dir) || !requested_parent.starts_with(root_dir) {
         return Err("path is outside allowed root");
     }
     let Some(file_name) = rel_path.file_name() else {
         return Err("path must include a file name");
     };
-    Ok(canonical_parent.join(file_name))
+    Ok(requested_parent.join(file_name))
 }
 
 fn append_archive_path(
@@ -4364,6 +4510,28 @@ mod tests {
     fn test_verify_pin_when_not_required() {
         assert!(verify_pin(None, None));
         assert!(verify_pin(Some("anything"), None));
+    }
+
+    #[test]
+    fn test_write_path_allows_missing_upload_parent_inside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = resolve_user_write_path(&root, "uploaded/photo.png").unwrap();
+        assert_eq!(path, root.join("uploaded/photo.png"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_path_rejects_missing_child_under_symlink_escape() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let outside = outside_dir.path().canonicalize().unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("outside")).unwrap();
+        assert_eq!(
+            resolve_user_write_path(&root, "outside/new/file.txt"),
+            Err("path is outside allowed root")
+        );
     }
 
     #[test]
