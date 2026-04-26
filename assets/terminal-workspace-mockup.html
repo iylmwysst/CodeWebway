@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeWebway Terminal Workspace Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: oklch(0.19 0.01 95);
+      --bg-elevated: oklch(0.23 0.012 95);
+      --bg-panel: oklch(0.27 0.014 95);
+      --bg-panel-strong: oklch(0.31 0.018 95);
+      --bg-terminal: oklch(0.15 0.008 95);
+      --line: oklch(0.37 0.02 95 / 0.55);
+      --line-soft: oklch(0.34 0.012 95 / 0.36);
+      --text: oklch(0.9 0.01 95);
+      --text-soft: oklch(0.72 0.012 95);
+      --text-dim: oklch(0.58 0.01 95);
+      --accent: oklch(0.74 0.08 155);
+      --accent-soft: oklch(0.42 0.045 155 / 0.35);
+      --warn: oklch(0.72 0.1 70);
+      --shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+      --radius: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top left, rgba(121, 167, 147, 0.08), transparent 28%),
+        linear-gradient(180deg, oklch(0.21 0.01 95), oklch(0.17 0.008 95));
+      color: var(--text);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    }
+
+    body {
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .app {
+      min-height: calc(100vh - 40px);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      border: 1px solid var(--line-soft);
+      border-radius: 22px;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
+      gap: 24px;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.008)),
+        rgba(17, 19, 17, 0.72);
+    }
+
+    .brand {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .eyebrow {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--text-dim);
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .brand-row strong {
+      font-size: clamp(20px, 2vw, 26px);
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .brand-row span {
+      color: var(--text-soft);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .status-pill,
+    .action-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      color: var(--text-soft);
+      white-space: nowrap;
+    }
+
+    .status-pill strong,
+    .action-pill strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .status-pill.live::before,
+    .status-pill.agent::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(117, 170, 144, 0.16);
+      flex-shrink: 0;
+    }
+
+    .action-pill {
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: clamp(280px, 24vw, 360px) minmax(0, 1fr);
+    }
+
+    .sidebar {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      border-right: 1px solid var(--line-soft);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.005)),
+        rgba(31, 32, 29, 0.88);
+    }
+
+    .sidebar-head,
+    .sidebar-tools,
+    .staged {
+      padding-inline: 16px;
+    }
+
+    .sidebar-head {
+      padding-top: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+      display: grid;
+      gap: 6px;
+    }
+
+    .path {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 14px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .copy {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text-soft);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .sidebar-tools {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-top: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .tool {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 0 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line-soft);
+      background: rgba(255, 255, 255, 0.026);
+      color: var(--text-soft);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .tool.primary {
+      background: color-mix(in oklab, var(--accent-soft) 56%, rgba(255, 255, 255, 0.03));
+      border-color: rgba(118, 166, 144, 0.4);
+      color: var(--text);
+    }
+
+    .tree {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+      display: grid;
+      align-content: start;
+      gap: 4px;
+    }
+
+    .group-label {
+      margin: 10px 0 4px;
+      padding: 0 6px;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-dim);
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      color: var(--text-soft);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+    }
+
+    .item.active {
+      border-color: rgba(118, 166, 144, 0.34);
+      background: rgba(117, 170, 144, 0.12);
+      color: var(--text);
+    }
+
+    .item.selected {
+      background: rgba(255, 255, 255, 0.034);
+      border-color: var(--line-soft);
+    }
+
+    .item.dim {
+      opacity: 0.86;
+    }
+
+    .item .name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .item .meta {
+      color: var(--text-dim);
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .indent-1 {
+      padding-left: 22px;
+    }
+
+    .indent-2 {
+      padding-left: 34px;
+    }
+
+    .staged {
+      border-top: 1px solid var(--line-soft);
+      padding-top: 14px;
+      padding-bottom: 14px;
+      display: grid;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .staged-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .staged-head strong {
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .staged-head span {
+      color: var(--text-dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .dropzone {
+      border: 1px dashed rgba(118, 166, 144, 0.42);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(117, 170, 144, 0.08);
+      color: var(--text-soft);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .staged-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .stage-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 10px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.028);
+      border: 1px solid var(--line-soft);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+    }
+
+    .stage-row span:first-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.008), rgba(255, 255, 255, 0)),
+        rgba(24, 24, 21, 0.9);
+    }
+
+    .tabbar,
+    .subbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .tabbar {
+      justify-content: space-between;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      min-width: 0;
+      overflow: auto;
+    }
+
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line-soft);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text-soft);
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: rgba(117, 170, 144, 0.12);
+      border-color: rgba(118, 166, 144, 0.34);
+    }
+
+    .tab .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .subbar {
+      justify-content: space-between;
+      color: var(--text-soft);
+      font-size: 12px;
+      background: rgba(255, 255, 255, 0.014);
+    }
+
+    .subbar-left,
+    .subbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .terminal-shell {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      padding: 14px 16px 16px;
+      gap: 14px;
+    }
+
+    .terminal-panel {
+      min-height: 0;
+      border: 1px solid rgba(84, 91, 84, 0.64);
+      border-radius: 18px;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.016), rgba(255, 255, 255, 0)),
+        var(--bg-terminal);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    }
+
+    .terminal-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(84, 91, 84, 0.6);
+      background: rgba(255, 255, 255, 0.018);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      color: var(--text-soft);
+    }
+
+    .terminal-copy {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .terminal-copy strong {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .terminal-copy span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .terminal-body {
+      height: 100%;
+      min-height: 420px;
+      padding: 18px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      color: oklch(0.91 0.01 95);
+    }
+
+    .terminal-body pre {
+      margin: 0 0 18px;
+      white-space: pre-wrap;
+    }
+
+    .banner {
+      color: oklch(0.85 0.015 95);
+    }
+
+    .muted {
+      color: oklch(0.7 0.01 95);
+    }
+
+    .accent {
+      color: oklch(0.82 0.07 155);
+    }
+
+    .preview {
+      border: 1px solid var(--line-soft);
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+    }
+
+    .preview-head strong {
+      font-size: 13px;
+    }
+
+    .preview-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: start;
+      padding: 14px;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text-soft);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .preview-code {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: var(--text);
+    }
+
+    .preview-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .outline {
+      border: 1px solid var(--line-soft);
+      border-radius: 10px;
+      min-height: 34px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 12px;
+      color: var(--text-soft);
+    }
+
+    @media (max-width: 1180px) {
+      body {
+        padding: 12px;
+      }
+
+      .app {
+        min-height: calc(100vh - 24px);
+      }
+
+      .workspace {
+        grid-template-columns: 300px minmax(0, 1fr);
+      }
+    }
+
+    @media (max-width: 940px) {
+      .topbar,
+      .workspace {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .status-strip {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 0;
+      }
+
+      .app {
+        min-height: 100vh;
+        border-radius: 0;
+        border-inline: 0;
+      }
+
+      .terminal-body {
+        font-size: 12px;
+      }
+
+      .preview-body {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="eyebrow">CodeWebway terminal workspace mockup</span>
+        <div class="brand-row">
+          <strong>Calmer shell-first layout with a cleaner file workspace</strong>
+          <span>Session 7f3a / machine `lab-east-2`</span>
+        </div>
+      </div>
+      <div class="status-strip">
+        <div class="status-pill live"><strong>Connected</strong><span>42 ms</span></div>
+        <div class="status-pill agent"><strong>2 tabs</strong><span>1 agent attached</span></div>
+        <div class="status-pill"><strong>2.4 MB</strong><span>history loaded</span></div>
+        <div class="action-pill"><strong>Leave</strong></div>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <span class="eyebrow">Workspace</span>
+          <div class="path">~/projects/codewebway/runtime/sessions</div>
+          <div class="copy">Browse, stage, preview, and open a shell in context without pushing the terminal out of focus.</div>
+        </div>
+
+        <div class="sidebar-tools">
+          <div class="tool">Up</div>
+          <div class="tool">Refresh</div>
+          <div class="tool primary">Shell Here</div>
+          <div class="tool">New Agent</div>
+        </div>
+
+        <div class="tree">
+          <div class="group-label">Pinned</div>
+          <div class="item active">
+            <span>▾</span>
+            <span class="name">runtime</span>
+            <span class="meta">cwd</span>
+          </div>
+          <div class="item indent-1">
+            <span>▸</span>
+            <span class="name">assets</span>
+            <span class="meta">dir</span>
+          </div>
+          <div class="item indent-1 selected">
+            <span>▸</span>
+            <span class="name">sessions</span>
+            <span class="meta">12</span>
+          </div>
+          <div class="item indent-2 dim">
+            <span>·</span>
+            <span class="name">fleet-terminal-resume-investigation-notes-with-extra-long-filename-example.md</span>
+            <span class="meta">md</span>
+          </div>
+          <div class="item indent-2">
+            <span>·</span>
+            <span class="name">terminal-surface-redesign-checklist.txt</span>
+            <span class="meta">txt</span>
+          </div>
+          <div class="item indent-2">
+            <span>·</span>
+            <span class="name">upload-regression-repro.mov</span>
+            <span class="meta">mov</span>
+          </div>
+          <div class="group-label">Recent</div>
+          <div class="item">
+            <span>▸</span>
+            <span class="name">docs</span>
+            <span class="meta">dir</span>
+          </div>
+          <div class="item">
+            <span>·</span>
+            <span class="name">README.md</span>
+            <span class="meta">md</span>
+          </div>
+          <div class="item">
+            <span>·</span>
+            <span class="name">Cargo.toml</span>
+            <span class="meta">toml</span>
+          </div>
+          <div class="item">
+            <span>·</span>
+            <span class="name">assets/index.html</span>
+            <span class="meta">html</span>
+          </div>
+        </div>
+
+        <div class="staged">
+          <div class="staged-head">
+            <strong>Staged uploads</strong>
+            <span>/uploaded</span>
+          </div>
+          <div class="dropzone">Drop files here before choosing a target folder. This area should accept drag-and-drop directly and stay visually distinct from the tree.</div>
+          <div class="staged-list">
+            <div class="stage-row">
+              <span>design-critique-round-2.png</span>
+              <span>14 MB</span>
+            </div>
+            <div class="stage-row">
+              <span>terminal-refresh-proposal-v5-final-final.pdf</span>
+              <span>2 MB</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="main">
+        <div class="tabbar">
+          <div class="tabs">
+            <div class="tab active"><span class="dot"></span><span>terminal / runtime</span></div>
+            <div class="tab"><span class="dot"></span><span>agent / logs</span></div>
+            <div class="tab">+</div>
+          </div>
+          <div class="subbar-right">
+            <div class="outline">Files</div>
+            <div class="outline">History</div>
+          </div>
+        </div>
+
+        <div class="subbar">
+          <div class="subbar-left">
+            <span class="eyebrow">Active path</span>
+            <span>/Users/Lab/Desktop/WebWay/CodeWebway</span>
+          </div>
+          <div class="subbar-right">
+            <span class="outline">UTF-8</span>
+            <span class="outline">Tail 800 lines</span>
+            <span class="outline">Read-write</span>
+          </div>
+        </div>
+
+        <div class="terminal-shell">
+          <div class="terminal-panel">
+            <div class="terminal-toolbar">
+              <div class="terminal-copy">
+                <strong>Primary terminal</strong>
+                <span>Session-start banner appears once here, not on reconnect or new browser tab attach.</span>
+              </div>
+              <div class="subbar-right">
+                <span class="outline">Open shell here</span>
+                <span class="outline">Stop terminal</span>
+              </div>
+            </div>
+
+            <div class="terminal-body">
+              <pre class="banner">╔██████╗ ██████╗ ██████╗ ███████╗██╗    ██╗███████╗██████╗ ██╗    ██╗ █████╗ ██╗   ██╗
+██╔════╝██╔═══██╗██╔══██╗██╔════╝██║    ██║██╔════╝██╔══██╗██║    ██║██╔══██╗╚██╗ ██╔╝
+██║     ██║   ██║██║  ██║█████╗  ██║ █╗ ██║█████╗  ██████╔╝██║ █╗ ██║███████║ ╚████╔╝
+██║     ██║   ██║██║  ██║██╔══╝  ██║███╗██║██╔══╝  ██╔══██╗██║███╗██║██╔══██║  ╚██╔╝
+╚██████╗╚██████╔╝██████╔╝███████╗╚███╔███╔╝███████╗██████╔╝╚███╔███╔╝██║  ██║   ██║
+ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝ ╚══╝╚══╝ ╚══════╝╚═════╝  ╚══╝╚══╝ ╚═╝  ╚═╝   ╚═╝
+
+Secure terminal access from anywhere</pre>
+
+              <pre><span class="muted">lab@codewebway</span><span class="accent"> ~/Desktop/WebWay/CodeWebway</span> $ cargo run -- --pin 123456
+<span class="muted">[server]</span> listening on http://127.0.0.1:8443
+<span class="muted">[fleet]</span> machine heartbeat healthy
+<span class="muted">[files]</span> staged uploads ready in /uploaded
+
+<span class="muted">lab@codewebway</span><span class="accent"> ~/Desktop/WebWay/CodeWebway</span> $ git status --short
+ M assets/index.html
+?? assets/terminal-workspace-mockup.html
+
+<span class="muted">lab@codewebway</span><span class="accent"> ~/Desktop/WebWay/CodeWebway</span> $ _</pre>
+            </div>
+          </div>
+
+          <section class="preview">
+            <div class="preview-head">
+              <div>
+                <span class="eyebrow">Preview dock</span>
+                <strong>File preview stays secondary to the terminal</strong>
+              </div>
+              <div class="preview-actions">
+                <span class="outline">Edit</span>
+                <span class="outline">Save</span>
+                <span class="outline">Cancel</span>
+              </div>
+            </div>
+            <div class="preview-body">
+              <div>
+                <div class="preview-code">fleet-terminal-resume-investigation-notes-with-extra-long-filename-example.md</div>
+                <p>This dock is meant to feel like a deliberate workspace mode rather than a separate developer utility panel. It should be easy to ignore until needed, then expand cleanly without visually crushing the terminal.</p>
+              </div>
+              <div class="copy">Read-write preview<br>Markdown</div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

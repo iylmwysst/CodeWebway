@@ -64,11 +64,26 @@
       --app-height: 100vh;
       --kb-inset: 0px;
       --key-strip-height: 44px;
+      --cw-bg: oklch(0.16 0.012 255);
+      --cw-bg-2: oklch(0.14 0.01 252);
+      --cw-panel: oklch(0.2 0.014 252);
+      --cw-panel-strong: oklch(0.24 0.016 248);
+      --cw-terminal: oklch(0.11 0.01 250);
+      --cw-line: oklch(0.54 0.015 240 / 0.34);
+      --cw-line-soft: oklch(0.42 0.012 240 / 0.22);
+      --cw-text: oklch(0.93 0.008 245);
+      --cw-text-soft: oklch(0.76 0.01 245);
+      --cw-text-dim: oklch(0.63 0.01 245);
+      --cw-accent: oklch(0.81 0.015 235);
+      --cw-accent-soft: oklch(0.7 0.01 235 / 0.16);
+      --cw-radius: 16px;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #131313;
-      color: #ddd;
+      background:
+        radial-gradient(circle at top left, rgba(148, 170, 198, 0.1), transparent 28%),
+        linear-gradient(180deg, var(--cw-bg), var(--cw-bg-2));
+      color: var(--cw-text);
       font-family: "CWTextSplit", "Noto Sans", "Noto Sans Thai", ui-sans-serif, -apple-system, Segoe UI, sans-serif, "Apple Color Emoji";
       height: var(--app-height);
       overflow: hidden;
@@ -562,7 +577,15 @@
       line-height: 1.55;
     }
 
-    #app { display: none; height: var(--app-height); flex-direction: column; }
+    #app {
+      display: none;
+      height: var(--app-height);
+      flex-direction: column;
+      padding: clamp(10px, 1.8vw, 20px);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(148, 170, 198, 0.09), transparent 32%),
+        linear-gradient(180deg, var(--cw-bg), var(--cw-bg-2));
+    }
     #session-warning {
       display: none;
       align-items: center;
@@ -603,17 +626,26 @@
       flex: 1;
       display: flex;
       min-height: 0;
-      background: linear-gradient(180deg, #0d1318, #0a1014);
+      overflow: hidden;
+      border: 1px solid var(--cw-line-soft);
+      border-radius: 22px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0)),
+        rgba(13, 17, 24, 0.86);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(12px);
     }
     #files {
-      width: clamp(220px, 18vw, 320px);
-      min-width: 220px;
+      width: clamp(280px, 24vw, 360px);
+      min-width: 260px;
       container-type: inline-size;
-      border-right: 1px solid rgba(120, 146, 166, 0.12);
+      border-right: 1px solid var(--cw-line-soft);
       display: flex;
       flex-direction: column;
       min-height: 0;
-      background: linear-gradient(180deg, #11191f, #0c1217);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005)),
+        rgba(20, 24, 31, 0.9);
       box-shadow: inset -1px 0 0 rgba(255,255,255,0.015);
     }
     #file-head {
@@ -621,9 +653,11 @@
       gap: 12px;
       align-items: flex-start;
       justify-content: space-between;
-      padding: 12px;
-      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
-      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
+      padding: 16px;
+      border-bottom: 1px solid var(--cw-line-soft);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.008)),
+        rgba(13, 17, 24, 0.42);
     }
     .file-head-copy,
     .editor-actions-copy {
@@ -633,14 +667,14 @@
       flex: 1;
     }
     .toolbar-eyebrow {
-      color: #718a99;
+      color: var(--cw-text-dim);
       font-size: 10px;
       font-weight: 600;
       letter-spacing: 0.16em;
       text-transform: uppercase;
     }
     .toolbar-support {
-      color: #8ca3b1;
+      color: var(--cw-text-soft);
       font-size: 12px;
       line-height: 1.5;
     }
@@ -699,11 +733,14 @@
     }
     #tree {
       flex: 1;
-      overflow: auto;
-      padding: 10px;
-      border-bottom: 1px solid rgba(120, 146, 166, 0.1);
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px;
+      border-bottom: 1px solid var(--cw-line-soft);
       display: grid;
-      gap: 6px;
+      align-content: start;
+      gap: 4px;
+      min-width: 0;
     }
     #upload-status {
       display: none;
@@ -759,17 +796,17 @@
     #tree.drop-target,
     .tree-item.drop-target,
     #staged-uploads.drop-target {
-      border-color: rgba(116, 204, 160, 0.62);
-      background: rgba(70, 155, 112, 0.14);
+      border-color: rgba(166, 181, 199, 0.52);
+      background: rgba(161, 177, 198, 0.12);
     }
     #staged-uploads {
       flex-shrink: 0;
       margin: 0;
-      padding: 10px;
-      border-top: 1px solid rgba(120, 146, 166, 0.1);
+      padding: 14px 16px;
+      border-top: 1px solid var(--cw-line-soft);
       background: rgba(255,255,255,0.018);
       display: grid;
-      gap: 8px;
+      gap: 10px;
     }
     .staged-head {
       display: flex;
@@ -782,9 +819,13 @@
       text-transform: uppercase;
     }
     #staged-drop-copy {
-      color: #78909f;
+      border: 1px dashed rgba(166, 181, 199, 0.36);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(161, 177, 198, 0.08);
+      color: var(--cw-text-soft);
       font-size: 12px;
-      line-height: 1.4;
+      line-height: 1.45;
     }
     #staged-list {
       display: grid;
@@ -793,14 +834,16 @@
       overflow: auto;
     }
     .staged-item {
-      display: flex;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 8px;
+      min-width: 0;
       padding: 8px 10px;
-      border: 1px solid rgba(120, 146, 166, 0.12);
+      border: 1px solid var(--cw-line-soft);
       border-radius: 10px;
-      background: rgba(255,255,255,0.025);
-      color: #d5e3ea;
+      background: rgba(255,255,255,0.028);
+      color: var(--cw-text);
       font-family: ui-monospace, Menlo, monospace;
       font-size: 12px;
       cursor: grab;
@@ -952,28 +995,31 @@
         0 0 0 4px rgba(74, 122, 146, 0.16);
     }
     .tree-item {
-      display: flex;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 10px;
-      padding: 10px 12px;
-      border-radius: 14px;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 38px;
+      padding: 0 10px;
+      border-radius: 12px;
       border: 1px solid transparent;
       cursor: pointer;
       font-size: 13px;
       font-family: ui-monospace, Menlo, monospace;
-      color: #d5e3ea;
+      color: var(--cw-text-soft);
       transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
     }
     .tree-item:hover {
-      background: rgba(255,255,255,0.05);
-      border-color: rgba(120, 146, 166, 0.14);
-      transform: translateX(1px);
+      background: rgba(255,255,255,0.034);
+      border-color: var(--cw-line-soft);
     }
     .tree-item.active,
     .tree-item.selected {
-      background: rgba(77, 118, 140, 0.18);
-      border-color: rgba(133, 194, 226, 0.24);
-      color: #eef5f8;
+      background: rgba(161, 177, 198, 0.1);
+      border-color: rgba(166, 181, 199, 0.28);
+      color: var(--cw-text);
     }
     .tree-item:focus-visible {
       border-color: rgba(133, 194, 226, 0.85);
@@ -989,7 +1035,6 @@
       flex-shrink: 0;
     }
     .tree-item-label {
-      flex: 1;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1001,7 +1046,11 @@
       font-weight: 600;
       letter-spacing: 0.14em;
       text-transform: uppercase;
-      flex-shrink: 0;
+      min-width: 0;
+      max-width: 78px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .tree-item-action {
       flex-shrink: 0;
@@ -1028,16 +1077,26 @@
     }
     .indent { margin-left: 8px; }
 
-    #terms { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+    #terms {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.008), rgba(255,255,255,0)),
+        rgba(16, 20, 28, 0.92);
+    }
 
     #workspace:not(:has(#files)) #terms { flex: 1; }
     #term-tabs {
       display: flex;
       align-items: center;
       gap: 10px;
-      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
-      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
-      padding: 10px 12px;
+      border-bottom: 1px solid var(--cw-line-soft);
+      background: rgba(255,255,255,0.014);
+      padding: 12px 16px;
     }
     #tab-scroll {
       display: flex;
@@ -1249,7 +1308,7 @@
       min-width: 0;
       display: flex;
       gap: 14px;
-      padding: 6px;
+      padding: 14px 16px 16px;
     }
     #terminal-main {
       position: relative;
@@ -1258,18 +1317,19 @@
       min-width: 0;
       display: flex;
       flex-direction: column;
-      border: 1px solid rgba(120, 146, 166, 0.12);
-      border-radius: 20px;
+      border: 1px solid rgba(97, 111, 128, 0.44);
+      border-radius: 18px;
       background:
-        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
-        rgba(12, 17, 21, 0.86);
+        linear-gradient(180deg, rgba(255,255,255,0.016), rgba(255,255,255,0)),
+        var(--cw-terminal);
       overflow: hidden;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
     }
     #terminal {
       flex: 1;
       min-height: 0;
       min-width: 0;
-      padding: 6px;
+      padding: 10px;
     }
     #terminal-history {
       display: none;
@@ -1818,6 +1878,13 @@
       font-weight: 600;
     }
     @media (max-width: 767px) {
+      #app {
+        padding: 0;
+      }
+      #workspace {
+        border-inline: 0;
+        border-radius: 0;
+      }
       #login-shell.auth-open,
       #login-shell {
         grid-template-columns: 1fr;
@@ -2540,6 +2607,18 @@
     const TERMINAL_REPLAY_HISTORY_CHUNKS = 2;
     const TERMINAL_HISTORY_MAX_CHUNKS = 24;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
+    const STARTUP_BANNER = [
+      '╔██████╗ ██████╗ ██████╗ ███████╗██╗    ██╗███████╗██████╗ ██╗    ██╗ █████╗ ██╗   ██╗',
+      '██╔════╝██╔═══██╗██╔══██╗██╔════╝██║    ██║██╔════╝██╔══██╗██║    ██║██╔══██╗╚██╗ ██╔╝',
+      '██║     ██║   ██║██║  ██║█████╗  ██║ █╗ ██║█████╗  ██████╔╝██║ █╗ ██║███████║ ╚████╔╝',
+      '██║     ██║   ██║██║  ██║██╔══╝  ██║███╗██║██╔══╝  ██╔══██╗██║███╗██║██╔══██║  ╚██╔╝',
+      '╚██████╗╚██████╔╝██████╔╝███████╗╚███╔███╔╝███████╗██████╔╝╚███╔███╔╝██║  ██║   ██║',
+      ' ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝ ╚══╝╚══╝ ╚══════╝╚═════╝  ╚══╝╚══╝ ╚═╝  ╚═╝   ╚═╝',
+      '',
+      'Secure terminal access from anywhere',
+      ''
+    ].join('\r\n');
+    const pendingStartupBanners = new Set();
     const agentSessions = new Map();
     const roundsByTerminal = new Map();
     const agentInputComposer = new Map();
@@ -2701,6 +2780,11 @@
 
     function hasDroppedFiles(event) {
       return event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length > 0;
+    }
+
+    function hasDraggedFiles(event) {
+      if (!event.dataTransfer) return false;
+      return Array.from(event.dataTransfer.types || []).includes('Files') || hasDroppedFiles(event);
     }
 
     async function movePaths(paths, targetDir) {
@@ -4743,7 +4827,7 @@
       }
     }
 
-    function activateTerminalTab(terminalId) {
+    function activateTerminalTab(terminalId, options = {}) {
       const session = getAgentSession(terminalId);
       if (session && session.phase === 'launch') {
         openAgentLauncher(terminalId);
@@ -4757,7 +4841,7 @@
       } else {
         termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect');
       }
-      connectTerminal(terminalId, { skipScrollback: false });
+      connectTerminal(terminalId, { skipScrollback: false, ...options });
     }
 
     async function createAgentTerminal(cwd) {
@@ -5462,6 +5546,10 @@
             // Live output should continue even if bounded replay metadata is unavailable.
           }
           replayReady = true;
+          if (options.startupBanner || pendingStartupBanners.has(terminalId)) {
+            pendingStartupBanners.delete(terminalId);
+            term.write(STARTUP_BANNER);
+          }
           while (queuedLiveBytes.length > 0) {
             writeLiveBytes(queuedLiveBytes.shift());
           }
@@ -5949,9 +6037,10 @@
       }
       const item = await res.json();
       terminals.push(item);
+      pendingStartupBanners.add(item.id);
       renderTerminalTabs();
       if (options.autoConnect !== false) {
-        activateTerminalTab(item.id);
+        activateTerminalTab(item.id, { startupBanner: true });
       }
       currentNavDir = cwd || '.';
       return item;
@@ -6834,8 +6923,9 @@
     treeEl.addEventListener('dragleave', () => treeEl.classList.remove('drop-target'));
     treeEl.addEventListener('drop', (event) => handleTreeDrop(event, currentNavDir || '.'));
     stagedUploadsEl.addEventListener('dragover', (event) => {
-      if (!hasDroppedFiles(event)) return;
+      if (!hasDraggedFiles(event)) return;
       event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
       stagedUploadsEl.classList.add('drop-target');
     });
     stagedUploadsEl.addEventListener('dragleave', () => stagedUploadsEl.classList.remove('drop-target'));
