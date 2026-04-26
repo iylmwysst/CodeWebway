@@ -5373,7 +5373,13 @@
         }
       });
       term.onScroll((ydisp) => {
-        if (ydisp <= 2 && activeTerminalId) {
+        if (!activeTerminalId) return;
+        const state = terminalHistoryState.get(activeTerminalId);
+        const previousYdisp = Number(state?.lastYdisp ?? ydisp);
+        if (state) {
+          state.lastYdisp = ydisp;
+        }
+        if (ydisp <= 2 && previousYdisp > 2) {
           loadOlderTerminalHistory(activeTerminalId);
         }
       });
@@ -5396,7 +5402,8 @@
         tailText: '',
         bannerText: '',
         trimmed: false,
-        tailBeforeSeq: null
+        tailBeforeSeq: null,
+        lastYdisp: 0
       });
       terminalHistoryEl.classList.remove('open');
       terminalHistoryContentEl.textContent = '';
@@ -5426,6 +5433,7 @@
       state.tailBeforeSeq = null;
       state.hasMore = true;
       state.trimmed = false;
+      state.lastYdisp = 0;
     }
 
     function trimOlderTerminalHistoryWindow(state) {
@@ -5500,7 +5508,7 @@
     async function loadOlderTerminalHistory(terminalId) {
       let state = terminalHistoryState.get(terminalId);
       if (!state) {
-        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], tailText: '', bannerText: '', trimmed: false, tailBeforeSeq: null };
+        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], tailText: '', bannerText: '', trimmed: false, tailBeforeSeq: null, lastYdisp: 0 };
         terminalHistoryState.set(terminalId, state);
       }
       if (state.loading || !state.hasMore) return;
