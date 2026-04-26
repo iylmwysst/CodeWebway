@@ -2607,9 +2607,9 @@
     const terminalHistoryState = new Map();
     const TERMINAL_HISTORY_PAGE_LIMIT = 1;
     const TERMINAL_REPLAY_HISTORY_CHUNKS = 1;
-    const TERMINAL_REPLAY_MAX_CHARS = 8 * 1024;
-    const TERMINAL_HISTORY_MAX_LOADED_BYTES = 48 * 1024;
-    const TERMINAL_HISTORY_MAX_OLDER_BYTES = 32 * 1024;
+    const TERMINAL_HISTORY_PAGE_ROWS = 300;
+    const TERMINAL_HISTORY_MAX_LOADED_ROWS = 900;
+    const TERMINAL_HISTORY_MAX_OLDER_ROWS = 600;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
     const TERMINAL_RESET_SEQUENCE = '\x1bc';
     const STARTUP_BANNER = [
@@ -5416,20 +5416,6 @@
       terminalHistoryStatusEl.textContent = 'Scrollback history';
     }
 
-    function historyChunkByteLen(chunk) {
-      if (!chunk) return 0;
-      const explicitLen = Number(chunk.byte_len || 0);
-      if (Number.isFinite(explicitLen) && explicitLen > 0) return explicitLen;
-      if (typeof chunk.data_b64 === 'string') {
-        return Math.ceil(chunk.data_b64.length * 3 / 4);
-      }
-      return 0;
-    }
-
-    function historyChunksByteLen(chunks) {
-      return (chunks || []).reduce((total, chunk) => total + historyChunkByteLen(chunk), 0);
-    }
-
     function resetTerminalHistoryWindowForReplay(terminalId) {
       const state = terminalHistoryState.get(terminalId);
       if (!state) return;
@@ -5442,20 +5428,142 @@
       state.lastYdisp = 0;
     }
 
+    function countTerminalRows(text, cols = term?.cols || 80) {
+      if (!text) return 0;
+      let rows = 1;
+      let col = 0;
+      let escape = '';
+      const width = Math.max(1, Number(cols) || 80);
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (escape) {
+          escape += ch;
+          if (
+            (escape.startsWith('\x1b[') && /[\x40-\x7e]$/.test(escape))
+            || (escape.startsWith('\x1b]') && (ch === '\x07' || escape.endsWith('\x1b\\')))
+            || (!escape.startsWith('\x1b[') && !escape.startsWith('\x1b]') && escape.length >= 2)
+          ) {
+            escape = '';
+          }
+          continue;
+        }
+        if (ch === '\x1b') {
+          escape = ch;
+          continue;
+        }
+        if (ch === '\r') {
+          col = 0;
+          continue;
+        }
+        if (ch === '\n') {
+          rows++;
+          col = 0;
+          continue;
+        }
+        if (ch === '\b') {
+          col = Math.max(0, col - 1);
+          continue;
+        }
+        if (ch === '\t') {
+          col += 8 - (col % 8);
+        } else if (ch >= ' ') {
+          col++;
+        }
+        while (col >= width) {
+          rows++;
+          col -= width;
+        }
+      }
+      return rows;
+    }
+
+    function trimTerminalTextToRows(text, maxRows, side = 'tail') {
+      if (!text || !Number.isFinite(maxRows) || maxRows <= 0) return '';
+      const width = Math.max(1, Number(term?.cols) || 80);
+      const markers = [0];
+      let row = 0;
+      let col = 0;
+      let escape = '';
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (escape) {
+          escape += ch;
+          if (
+            (escape.startsWith('\x1b[') && /[\x40-\x7e]$/.test(escape))
+            || (escape.startsWith('\x1b]') && (ch === '\x07' || escape.endsWith('\x1b\\')))
+            || (!escape.startsWith('\x1b[') && !escape.startsWith('\x1b]') && escape.length >= 2)
+          ) {
+            escape = '';
+          }
+          continue;
+        }
+        if (ch === '\x1b') {
+          escape = ch;
+          continue;
+        }
+        if (ch === '\r') {
+          col = 0;
+          continue;
+        }
+        if (ch === '\n') {
+          row++;
+          col = 0;
+          markers[row] = i + 1;
+          continue;
+        }
+        if (ch === '\b') {
+          col = Math.max(0, col - 1);
+          continue;
+        }
+        if (ch === '\t') {
+          col += 8 - (col % 8);
+        } else if (ch >= ' ') {
+          col++;
+        }
+        while (col >= width) {
+          row++;
+          col -= width;
+          markers[row] = i + 1;
+        }
+      }
+      const totalRows = row + 1;
+      if (totalRows <= maxRows) return stripLeadingAnsiReplayFragment(text);
+      if (side === 'head') {
+        return stripLeadingAnsiReplayFragment(text.slice(0, markers[maxRows] ?? text.length));
+      }
+      const startRow = Math.max(0, totalRows - maxRows);
+      return stripLeadingAnsiReplayFragment(text.slice(markers[startRow] ?? 0));
+    }
+
+    function makeTrimmedHistoryChunk(chunk, side = 'tail') {
+      if (!chunk || typeof chunk.data_b64 !== 'string') return chunk;
+      const decoded = textDecoder.decode(b64ToBytes(chunk.data_b64));
+      const text = trimTerminalTextToRows(decoded, TERMINAL_HISTORY_PAGE_ROWS, side);
+      const bytes = textEncoder.encode(text);
+      return { ...chunk, data_b64: bytesToB64(bytes), byte_len: bytes.length };
+    }
+
+    function historyChunksRows(chunks) {
+      return (chunks || []).reduce((total, chunk) => {
+        if (!chunk || typeof chunk.data_b64 !== 'string') return total;
+        return total + countTerminalRows(textDecoder.decode(b64ToBytes(chunk.data_b64)));
+      }, 0);
+    }
+
     function trimOlderTerminalHistoryWindow(state) {
       if (!state || !Array.isArray(state.chunks)) return;
-      let olderBytes = historyChunksByteLen(state.chunks);
-      while (state.chunks.length > 0 && olderBytes > TERMINAL_HISTORY_MAX_OLDER_BYTES) {
+      let olderRows = historyChunksRows(state.chunks);
+      while (state.chunks.length > 0 && olderRows > TERMINAL_HISTORY_MAX_OLDER_ROWS) {
         const removed = state.chunks.shift();
-        olderBytes -= historyChunkByteLen(removed);
+        olderRows -= historyChunksRows([removed]);
       }
-      const tailBytes = textEncoder.encode(state.tailText || '').length;
+      const tailRows = countTerminalRows(state.tailText || '');
       while (
         state.chunks.length > 0
-        && olderBytes + tailBytes > TERMINAL_HISTORY_MAX_LOADED_BYTES
+        && olderRows + tailRows > TERMINAL_HISTORY_MAX_LOADED_ROWS
       ) {
         const removed = state.chunks.shift();
-        olderBytes -= historyChunkByteLen(removed);
+        olderRows -= historyChunksRows([removed]);
       }
       state.beforeSeq = state.chunks.length > 0
         ? state.chunks[0].seq
@@ -5484,12 +5592,7 @@
       if (!text) return '';
       // History chunks can begin in the middle of a CSI sequence. Drop the visible
       // tail, for example "36;24H", before replaying the bounded window.
-      return text.replace(/^(?:\?[\d;]{1,32}[hl]|[\d;]{1,48}[;][\d;]{0,48}[HfABCDGJKSTm])/, '');
-    }
-
-    function trimRecentReplayText(text) {
-      if (!text || text.length <= TERMINAL_REPLAY_MAX_CHARS) return text || '';
-      return stripLeadingAnsiReplayFragment(text.slice(text.length - TERMINAL_REPLAY_MAX_CHARS));
+      return text.replace(/^(?:\[?\??[\d;]{1,96}[A-Za-z@`~]|\][^\x07]*(?:\x07|\x1b\\))/, '');
     }
 
     function maybeLoadOlderTerminalHistoryFromTop() {
@@ -5508,7 +5611,7 @@
       if (connectionId !== wsConnectionId || !res.ok) return '';
       const body = await res.json();
       applyTerminalHistoryMetadata(terminalId, body);
-      const text = trimRecentReplayText(stripLeadingAnsiReplayFragment(decodeHistoryChunks(body.chunks)));
+      const text = trimTerminalTextToRows(decodeHistoryChunks(body.chunks), TERMINAL_HISTORY_PAGE_ROWS, 'tail');
       const state = terminalHistoryState.get(terminalId);
       if (state) {
         state.tailText = text || '';
@@ -5556,10 +5659,11 @@
           rebuildTerminalBuffer(terminalId);
           return;
         }
+        const normalizedChunks = body.chunks.map((chunk) => makeTrimmedHistoryChunk(chunk, 'tail'));
         state.beforeSeq = body.chunks[0].seq;
         state.hasMore = Boolean(body.has_more);
         state.trimmed = Boolean(body.trimmed);
-        state.chunks = [...body.chunks, ...state.chunks];
+        state.chunks = [...normalizedChunks, ...state.chunks];
         trimOlderTerminalHistoryWindow(state);
         rebuildTerminalBuffer(terminalId);
       } catch {
