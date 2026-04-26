@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket},
         Json, Path as AxumPath, Query, State, WebSocketUpgrade,
@@ -14,7 +15,10 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use hmac::{Hmac, Mac};
 use portable_pty::PtySize;
 use rand::distributions::Alphanumeric;
@@ -29,6 +33,9 @@ use crate::session::{self, Session};
 
 const MAX_FILE_PREVIEW_BYTES: usize = 256 * 1024;
 const MAX_FILE_EDIT_BYTES: usize = 512 * 1024;
+const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 const MAX_ACTIVE_TEMP_LINKS: usize = 2;
 const DEFAULT_TEMP_LINK_TTL_MINUTES: u64 = 15;
 const TEMP_LINK_GRACE_SECS: u64 = 120;
@@ -206,6 +213,24 @@ pub struct FsQuery {
 }
 
 #[derive(Deserialize)]
+pub struct TerminalHistoryQuery {
+    before_seq: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub struct UploadFileRequest {
+    path: String,
+    data_b64: String,
+    overwrite: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct ArchiveRequest {
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub struct SaveFileRequest {
     path: String,
     content: String,
@@ -351,6 +376,41 @@ struct FsFileResponse {
 struct SaveFileResponse {
     hash: String,
     size_bytes: usize,
+}
+
+#[derive(Serialize)]
+struct TerminalHistoryChunkResponse {
+    seq: u64,
+    data_b64: String,
+    byte_len: usize,
+}
+
+#[derive(Serialize)]
+struct TerminalHistoryResponse {
+    terminal_id: String,
+    chunks: Vec<TerminalHistoryChunkResponse>,
+    has_more: bool,
+    first_seq: Option<u64>,
+    next_seq: u64,
+    total_bytes: usize,
+    trimmed: bool,
+}
+
+#[derive(Serialize)]
+struct TerminalTailResponse {
+    terminal_id: String,
+    data_b64: String,
+    first_seq: Option<u64>,
+    next_seq: u64,
+    total_bytes: usize,
+    trimmed: bool,
+}
+
+#[derive(Serialize)]
+struct UploadFileResponse {
+    path: String,
+    size_bytes: usize,
+    overwritten: bool,
 }
 
 #[derive(Serialize)]
@@ -1014,6 +1074,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/terminals/:id",
             delete(delete_terminal).patch(rename_terminal),
         )
+        .route("/api/terminals/:id/history", get(terminal_history))
+        .route("/api/terminals/:id/tail", get(terminal_tail))
         .route("/api/usage", get(usage_stats))
         .route("/ws", get(ws_handler));
 
@@ -1021,7 +1083,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         r = r
             .route("/api/fs/tree", get(fs_tree))
             .route("/api/fs/file", get(fs_file).put(save_file))
-            .route("/api/fs/file/diff", patch(save_file_diff));
+            .route("/api/fs/file/diff", patch(save_file_diff))
+            .route("/api/fs/upload", post(upload_file))
+            .route("/api/fs/download", get(download_file))
+            .route("/api/fs/archive", post(download_archive));
     }
 
     r.with_state(state).layer(CompressionLayer::new())
@@ -2535,6 +2600,91 @@ async fn rename_terminal(
     }
 }
 
+async fn terminal_history(
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TerminalHistoryQuery>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if let Some(bound_id) = session_bound_terminal_id(&state, &session_token) {
+        if bound_id != id {
+            return (
+                StatusCode::FORBIDDEN,
+                "Session is bound to another terminal",
+            )
+                .into_response();
+        }
+    }
+    let Some(session) = state.terminals.lock().unwrap().get_session(&id) else {
+        return (StatusCode::NOT_FOUND, "Terminal not found").into_response();
+    };
+    let page = {
+        let mut session = session.lock().unwrap();
+        session
+            .history
+            .page_before(query.before_seq, query.limit.unwrap_or(12))
+    };
+    let chunks: Vec<TerminalHistoryChunkResponse> = page
+        .chunks
+        .into_iter()
+        .map(|chunk| TerminalHistoryChunkResponse {
+            seq: chunk.seq,
+            byte_len: chunk.bytes.len(),
+            data_b64: STANDARD.encode(&chunk.bytes),
+        })
+        .collect();
+    let payload = TerminalHistoryResponse {
+        terminal_id: id,
+        chunks,
+        has_more: page.has_more,
+        first_seq: page.first_seq,
+        next_seq: page.next_seq,
+        total_bytes: page.total_bytes,
+        trimmed: page.trimmed,
+    };
+    count_tx_json(&state, &payload);
+    Json(payload).into_response()
+}
+
+async fn terminal_tail(
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if let Some(bound_id) = session_bound_terminal_id(&state, &session_token) {
+        if bound_id != id {
+            return (
+                StatusCode::FORBIDDEN,
+                "Session is bound to another terminal",
+            )
+                .into_response();
+        }
+    }
+    let Some(session) = state.terminals.lock().unwrap().get_session(&id) else {
+        return (StatusCode::NOT_FOUND, "Terminal not found").into_response();
+    };
+    let tail = {
+        let mut session = session.lock().unwrap();
+        session.history.live_tail()
+    };
+    let payload = TerminalTailResponse {
+        terminal_id: id,
+        data_b64: STANDARD.encode(&tail.bytes),
+        first_seq: tail.first_seq,
+        next_seq: tail.next_seq,
+        total_bytes: tail.total_bytes,
+        trimmed: tail.trimmed,
+    };
+    count_tx_json(&state, &payload);
+    Json(payload).into_response()
+}
+
 async fn fs_tree(
     headers: HeaderMap,
     Query(query): Query<FsQuery>,
@@ -2770,6 +2920,183 @@ async fn save_file_diff(
     }
 }
 
+async fn upload_file(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UploadFileRequest>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if is_session_read_only(&state, &session_token) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Read-only sessions cannot upload files",
+        )
+            .into_response();
+    }
+    let bytes = match STANDARD.decode(req.data_b64.as_bytes()) {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid upload payload").into_response(),
+    };
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return (StatusCode::BAD_REQUEST, "upload is too large").into_response();
+    }
+    count_rx(&state, bytes.len() as u64);
+
+    let path = match resolve_user_write_path(&state.root_dir, &req.path) {
+        Ok(path) => path,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    if path.is_dir() {
+        return (StatusCode::BAD_REQUEST, "path must be a file").into_response();
+    }
+    let existed = path.exists();
+    if existed && !req.overwrite.unwrap_or(false) {
+        return (StatusCode::CONFLICT, "file already exists").into_response();
+    }
+    let Some(parent) = path.parent() else {
+        return (StatusCode::BAD_REQUEST, "invalid upload path").into_response();
+    };
+    if let Err(err) = std::fs::create_dir_all(parent) {
+        tracing::warn!("failed to create upload directory: {err}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "unable to create upload directory",
+        )
+            .into_response();
+    }
+    let temp_name = format!(
+        ".codewebway-upload-{}",
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect::<String>()
+    );
+    let temp_path = parent.join(temp_name);
+    if let Err(err) = std::fs::write(&temp_path, &bytes) {
+        tracing::warn!("failed to write upload temp file: {err}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "unable to write upload").into_response();
+    }
+    if let Err(err) = std::fs::rename(&temp_path, &path) {
+        let _ = std::fs::remove_file(&temp_path);
+        tracing::warn!("failed to finalize upload: {err}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "unable to finalize upload",
+        )
+            .into_response();
+    }
+    let rel_path = rel_path_string(&state.root_dir, &path);
+    let payload = UploadFileResponse {
+        path: rel_path,
+        size_bytes: bytes.len(),
+        overwritten: existed,
+    };
+    count_tx_json(&state, &payload);
+    (StatusCode::CREATED, Json(payload)).into_response()
+}
+
+async fn download_file(
+    headers: HeaderMap,
+    Query(query): Query<FsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    if has_valid_session_cookie(&headers, &state, true).is_none() {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    let path = match resolve_user_path(&state.root_dir, query.path.as_deref()) {
+        Ok(path) => path,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    if path.is_dir() {
+        return (StatusCode::BAD_REQUEST, "path must be a file").into_response();
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::BAD_REQUEST, "unable to read file").into_response(),
+    };
+    count_tx(&state, bytes.len() as u64);
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download.bin")
+        .replace('"', "'");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn download_archive(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ArchiveRequest>,
+) -> Response {
+    if has_valid_session_cookie(&headers, &state, true).is_none() {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    if req.paths.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no paths selected").into_response();
+    }
+    let mut archive_bytes = Vec::new();
+    {
+        let encoder =
+            flate2::write::GzEncoder::new(&mut archive_bytes, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let mut total_bytes = 0u64;
+        let mut entry_count = 0usize;
+        for requested in req.paths.iter().take(256) {
+            let path = match resolve_user_path(&state.root_dir, Some(requested)) {
+                Ok(path) => path,
+                Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+            };
+            if let Err(err) = append_archive_path(
+                &state.root_dir,
+                &path,
+                &mut builder,
+                &mut total_bytes,
+                &mut entry_count,
+            ) {
+                return (StatusCode::BAD_REQUEST, err).into_response();
+            }
+        }
+        let encoder = match builder.into_inner() {
+            Ok(encoder) => encoder,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "unable to finish archive",
+                )
+                    .into_response()
+            }
+        };
+        if encoder.finish().is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "unable to finish archive",
+            )
+                .into_response();
+        }
+    }
+    count_tx(&state, archive_bytes.len() as u64);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/gzip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"codewebway-files.tar.gz\"",
+        )
+        .body(Body::from(archive_bytes))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 async fn usage_stats(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
     if has_valid_session_cookie(&headers, &state, false).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -2856,13 +3183,13 @@ async fn handle_socket(
     skip_scrollback: bool,
     terminal_id: String,
 ) {
-    let (scrollback, mut rx) = {
-        let s = terminal.lock().unwrap();
-        (s.scrollback.snapshot(), s.tx.subscribe())
+    let (tail, mut rx) = {
+        let mut s = terminal.lock().unwrap();
+        (s.history.live_tail(), s.tx.subscribe())
     };
-    if !skip_scrollback && !scrollback.is_empty() {
-        count_tx(&state, scrollback.len() as u64);
-        let _ = socket.send(Message::Binary(scrollback)).await;
+    if !skip_scrollback && !tail.bytes.is_empty() {
+        count_tx(&state, tail.bytes.len() as u64);
+        let _ = socket.send(Message::Binary(tail.bytes)).await;
     }
 
     let mut session_tick = tokio::time::interval(Duration::from_secs(15));
@@ -3721,6 +4048,14 @@ fn hash_bytes_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn rel_path_string(root_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(root_dir)
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| ".".to_string())
+}
+
 fn resolve_user_path(root_dir: &Path, requested: Option<&str>) -> Result<PathBuf, &'static str> {
     let relative = requested.unwrap_or(".");
     let rel_path = Path::new(relative);
@@ -3747,6 +4082,73 @@ fn resolve_user_path(root_dir: &Path, requested: Option<&str>) -> Result<PathBuf
         return Err("path is outside allowed root");
     }
     Ok(canonical)
+}
+
+fn resolve_user_write_path(root_dir: &Path, requested: &str) -> Result<PathBuf, &'static str> {
+    let rel_path = Path::new(requested);
+    if requested.trim().is_empty() {
+        return Err("path is required");
+    }
+    if rel_path.is_absolute() {
+        return Err("absolute paths are not allowed");
+    }
+    if rel_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("parent path segments are not allowed");
+    }
+    let parent = rel_path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_parent = root_dir
+        .join(parent)
+        .canonicalize()
+        .map_err(|_| "parent path does not exist")?;
+    if !canonical_parent.starts_with(root_dir) {
+        return Err("path is outside allowed root");
+    }
+    let Some(file_name) = rel_path.file_name() else {
+        return Err("path must include a file name");
+    };
+    Ok(canonical_parent.join(file_name))
+}
+
+fn append_archive_path(
+    root_dir: &Path,
+    path: &Path,
+    builder: &mut tar::Builder<flate2::write::GzEncoder<&mut Vec<u8>>>,
+    total_bytes: &mut u64,
+    entry_count: &mut usize,
+) -> Result<(), &'static str> {
+    if *entry_count >= MAX_ARCHIVE_ENTRIES {
+        return Err("archive has too many entries");
+    }
+    let rel = path
+        .strip_prefix(root_dir)
+        .map_err(|_| "path is outside allowed root")?;
+    let meta = std::fs::metadata(path).map_err(|_| "unable to read archive path")?;
+    if meta.is_file() {
+        *total_bytes = total_bytes.saturating_add(meta.len());
+        if *total_bytes > MAX_ARCHIVE_BYTES {
+            return Err("archive is too large");
+        }
+        builder
+            .append_path_with_name(path, rel)
+            .map_err(|_| "unable to add file to archive")?;
+        *entry_count += 1;
+        return Ok(());
+    }
+    if meta.is_dir() {
+        builder
+            .append_dir(rel, path)
+            .map_err(|_| "unable to add directory to archive")?;
+        *entry_count += 1;
+        let read_dir = std::fs::read_dir(path).map_err(|_| "unable to read directory")?;
+        for entry in read_dir.filter_map(Result::ok) {
+            append_archive_path(root_dir, &entry.path(), builder, total_bytes, entry_count)?;
+        }
+        return Ok(());
+    }
+    Err("unsupported archive path")
 }
 
 #[cfg(test)]

@@ -6,43 +6,182 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
-pub struct Scrollback {
-    buf: VecDeque<u8>,
-    max: usize,
+const HISTORY_CHUNK_TARGET: usize = 32 * 1024;
+const HISTORY_MIN_BYTES: usize = 2 * 1024 * 1024;
+const HISTORY_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct HistoryChunk {
+    pub seq: u64,
+    pub bytes: Bytes,
 }
 
-impl Scrollback {
-    pub fn new(max: usize) -> Self {
+#[derive(Clone, Debug)]
+pub struct HistoryTail {
+    pub bytes: Vec<u8>,
+    pub first_seq: Option<u64>,
+    pub next_seq: u64,
+    pub total_bytes: usize,
+    pub trimmed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct HistoryPage {
+    pub chunks: Vec<HistoryChunk>,
+    pub has_more: bool,
+    pub first_seq: Option<u64>,
+    pub next_seq: u64,
+    pub total_bytes: usize,
+    pub trimmed: bool,
+}
+
+pub struct TerminalHistory {
+    chunks: VecDeque<HistoryChunk>,
+    pending: Vec<u8>,
+    live_tail: VecDeque<u8>,
+    live_tail_max: usize,
+    history_max: usize,
+    history_bytes: usize,
+    next_seq: u64,
+    trimmed: bool,
+}
+
+impl TerminalHistory {
+    pub fn new(live_tail_max: usize) -> Self {
+        let history_max = live_tail_max
+            .saturating_mul(16)
+            .clamp(HISTORY_MIN_BYTES, HISTORY_MAX_BYTES);
         Self {
-            buf: VecDeque::new(),
-            max,
+            chunks: VecDeque::new(),
+            pending: Vec::new(),
+            live_tail: VecDeque::new(),
+            live_tail_max,
+            history_max,
+            history_bytes: 0,
+            next_seq: 0,
+            trimmed: false,
         }
     }
 
     pub fn push(&mut self, data: &[u8]) {
-        if self.max == 0 {
+        if data.is_empty() {
             return;
         }
         for &b in data {
-            if self.buf.len() >= self.max {
-                self.buf.pop_front();
+            if self.live_tail_max > 0 {
+                if self.live_tail.len() >= self.live_tail_max {
+                    self.live_tail.pop_front();
+                }
+                self.live_tail.push_back(b);
             }
-            self.buf.push_back(b);
+            self.pending.push(b);
+            if self.pending.len() >= HISTORY_CHUNK_TARGET {
+                self.flush_pending();
+            }
         }
     }
 
-    pub fn snapshot(&self) -> Vec<u8> {
-        self.buf.iter().copied().collect()
+    pub fn flush_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let split_at = safe_utf8_prefix_len(&self.pending);
+        if split_at == 0 && self.pending.len() < HISTORY_CHUNK_TARGET * 2 {
+            return;
+        }
+        let chunk_bytes = if split_at == 0 {
+            std::mem::take(&mut self.pending)
+        } else {
+            let remainder = self.pending.split_off(split_at);
+            std::mem::replace(&mut self.pending, remainder)
+        };
+        self.push_chunk(Bytes::from(chunk_bytes));
+    }
+
+    fn push_chunk(&mut self, bytes: Bytes) {
+        if bytes.is_empty() {
+            return;
+        }
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.history_bytes = self.history_bytes.saturating_add(bytes.len());
+        self.chunks.push_back(HistoryChunk { seq, bytes });
+        self.trim_history();
+    }
+
+    fn trim_history(&mut self) {
+        while self.history_bytes > self.history_max {
+            let Some(chunk) = self.chunks.pop_front() else {
+                break;
+            };
+            self.history_bytes = self.history_bytes.saturating_sub(chunk.bytes.len());
+            self.trimmed = true;
+        }
+    }
+
+    pub fn live_tail(&mut self) -> HistoryTail {
+        self.flush_pending();
+        HistoryTail {
+            bytes: self.live_tail.iter().copied().collect(),
+            first_seq: self.chunks.front().map(|chunk| chunk.seq),
+            next_seq: self.next_seq,
+            total_bytes: self.history_bytes.saturating_add(self.pending.len()),
+            trimmed: self.trimmed,
+        }
+    }
+
+    pub fn page_before(&mut self, before_seq: Option<u64>, limit: usize) -> HistoryPage {
+        self.flush_pending();
+        let limit = limit.clamp(1, 64);
+        let before = before_seq.unwrap_or(self.next_seq);
+        let mut selected = Vec::new();
+        for chunk in self.chunks.iter().rev() {
+            if chunk.seq >= before {
+                continue;
+            }
+            selected.push(chunk.clone());
+            if selected.len() >= limit {
+                break;
+            }
+        }
+        selected.reverse();
+        let first_selected = selected.first().map(|chunk| chunk.seq);
+        let has_more = match (self.chunks.front(), first_selected) {
+            (Some(front), Some(first)) => front.seq < first,
+            _ => false,
+        };
+        HistoryPage {
+            chunks: selected,
+            has_more,
+            first_seq: self.chunks.front().map(|chunk| chunk.seq),
+            next_seq: self.next_seq,
+            total_bytes: self.history_bytes.saturating_add(self.pending.len()),
+            trimmed: self.trimmed,
+        }
     }
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.history_bytes
+            .saturating_add(self.pending.len())
+            .saturating_add(self.live_tail.len())
     }
 }
 
+fn safe_utf8_prefix_len(bytes: &[u8]) -> usize {
+    if std::str::from_utf8(bytes).is_ok() {
+        return bytes.len();
+    }
+    for idx in (0..bytes.len()).rev().take(4) {
+        if std::str::from_utf8(&bytes[..idx]).is_ok() {
+            return idx;
+        }
+    }
+    bytes.len()
+}
+
 pub struct SharedSession {
-    pub scrollback: Scrollback,
+    pub history: TerminalHistory,
     pub tx: broadcast::Sender<Bytes>,
     pub pty_writer: Box<dyn Write + Send>,
     pub pty_master: Box<dyn portable_pty::MasterPty + Send>,
@@ -112,7 +251,7 @@ pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow:
     let mut reader = pair.master.try_clone_reader()?;
 
     let session = Arc::new(Mutex::new(SharedSession {
-        scrollback: Scrollback::new(scrollback_size),
+        history: TerminalHistory::new(scrollback_size),
         tx: tx.clone(),
         pty_writer,
         pty_master: pair.master,
@@ -129,7 +268,7 @@ pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow:
                 Ok(n) => {
                     let data = Bytes::copy_from_slice(&buf[..n]);
                     let mut s = session_clone.lock().unwrap();
-                    s.scrollback.push(&data);
+                    s.history.push(&data);
                     let _ = s.tx.send(data);
                 }
             }
@@ -151,40 +290,53 @@ mod tests {
 
     #[test]
     fn test_push_and_snapshot() {
-        let mut sb = Scrollback::new(100);
+        let mut sb = TerminalHistory::new(100);
         sb.push(b"hello");
-        assert_eq!(sb.snapshot(), b"hello");
+        assert_eq!(sb.live_tail().bytes, b"hello");
     }
 
     #[test]
     fn test_max_capacity_evicts_oldest() {
-        let mut sb = Scrollback::new(5);
+        let mut sb = TerminalHistory::new(5);
         sb.push(b"123456789"); // 9 bytes into 5-byte buffer
-        assert_eq!(sb.len(), 5);
-        assert_eq!(sb.snapshot(), b"56789");
+        assert_eq!(sb.live_tail().bytes, b"56789");
     }
 
     #[test]
     fn test_empty_snapshot() {
-        let sb = Scrollback::new(100);
-        assert_eq!(sb.snapshot(), b"");
+        let mut sb = TerminalHistory::new(100);
+        assert_eq!(sb.live_tail().bytes, b"");
     }
 
     #[test]
     fn test_exact_capacity() {
-        let mut sb = Scrollback::new(3);
+        let mut sb = TerminalHistory::new(3);
         sb.push(b"abc");
-        assert_eq!(sb.len(), 3);
         sb.push(b"d");
-        assert_eq!(sb.snapshot(), b"bcd");
+        assert_eq!(sb.live_tail().bytes, b"bcd");
     }
 
     #[test]
     fn test_zero_capacity_stores_nothing() {
-        let mut sb = Scrollback::new(0);
+        let mut sb = TerminalHistory::new(0);
         sb.push(b"hello");
-        assert_eq!(sb.len(), 0);
-        assert_eq!(sb.snapshot(), b"");
+        assert_eq!(sb.live_tail().bytes, b"");
+    }
+
+    #[test]
+    fn test_history_pages_before_sequence() {
+        let mut history = TerminalHistory::new(16);
+        history.push(b"first");
+        history.flush_pending();
+        history.push(b"second");
+        history.flush_pending();
+        history.push(b"third");
+        history.flush_pending();
+
+        let page = history.page_before(Some(2), 2);
+        assert_eq!(page.chunks.len(), 2);
+        assert_eq!(page.chunks[0].bytes, Bytes::from_static(b"first"));
+        assert_eq!(page.chunks[1].bytes, Bytes::from_static(b"second"));
     }
 
     #[test]

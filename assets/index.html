@@ -705,6 +705,25 @@
       display: grid;
       gap: 6px;
     }
+    #upload-status {
+      display: none;
+      margin: 8px 10px 0;
+      padding: 8px 10px;
+      border: 1px solid rgba(120, 146, 166, 0.16);
+      border-radius: 10px;
+      color: #b8ccd8;
+      background: rgba(255,255,255,0.035);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    #upload-status.active {
+      display: block;
+    }
+    #tree.drop-target,
+    .tree-item.drop-target {
+      border-color: rgba(116, 204, 160, 0.62);
+      background: rgba(70, 155, 112, 0.14);
+    }
     #preview-dock {
       display: none;
       flex-direction: column;
@@ -885,6 +904,20 @@
       letter-spacing: 0.14em;
       text-transform: uppercase;
       flex-shrink: 0;
+    }
+    .tree-item-action {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      border: 1px solid rgba(120, 146, 166, 0.16);
+      background: rgba(255,255,255,0.035);
+      color: #d7e6ee;
+      font-size: 13px;
+    }
+    .tree-item-action:hover {
+      background: rgba(255,255,255,0.09);
+      border-color: rgba(150, 177, 196, 0.3);
     }
     .indent { margin-left: 8px; }
 
@@ -1130,6 +1163,36 @@
       min-height: 0;
       min-width: 0;
       padding: 6px;
+    }
+    #terminal-history {
+      display: none;
+      flex: 0 0 min(32vh, 260px);
+      min-height: 120px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+      background: #0e151b;
+      color: #dce8ee;
+      overflow: hidden;
+    }
+    #terminal-history.open {
+      display: flex;
+      flex-direction: column;
+    }
+    #terminal-history-status {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.1);
+      color: #8fa7b7;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    #terminal-history-content {
+      flex: 1;
+      margin: 0;
+      padding: 10px 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: "CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace;
+      font-size: 12px;
+      line-height: 1.45;
     }
     #terms.agent-mode #terminal-workspace {
       padding-right: 10px;
@@ -1936,6 +1999,14 @@
               <span class="toolbar-icon" aria-hidden="true">↺</span>
               <span class="toolbar-label">Refresh</span>
             </button>
+            <button id="upload-file" class="toolbar-button" type="button" title="Upload files" aria-label="Upload files">
+              <span class="toolbar-icon" aria-hidden="true">⇧</span>
+              <span class="toolbar-label">Upload</span>
+            </button>
+            <button id="download-folder" class="toolbar-button" type="button" title="Download this folder" aria-label="Download this folder">
+              <span class="toolbar-icon" aria-hidden="true">⇩</span>
+              <span class="toolbar-label">Download</span>
+            </button>
             <button id="open-shell-here" class="toolbar-button" type="button" title="Open a shell in this directory" aria-label="Open a shell in this directory">
               <span class="toolbar-icon" aria-hidden="true">⌨</span>
               <span class="toolbar-label">Shell Here</span>
@@ -1950,6 +2021,8 @@
             </button>
           </div>
         </div>
+        <input id="upload-input" type="file" multiple hidden />
+        <div id="upload-status" role="status" aria-live="polite"></div>
         <div id="tree"></div>
       </section>
       <section id="terms">
@@ -2007,6 +2080,10 @@
               <textarea id="editor" spellcheck="false"></textarea>
             </div>
             <div id="preview-resize-handle" aria-hidden="true"></div>
+            <div id="terminal-history" aria-live="polite">
+              <div id="terminal-history-status">Scrollback history</div>
+              <pre id="terminal-history-content"></pre>
+            </div>
             <div id="terminal"></div>
             <div id="agent-launcher">
               <div class="agent-launcher-card">
@@ -2236,6 +2313,13 @@
     const openShellHereBtn = document.getElementById('open-shell-here');
     const openAgentHereBtn = document.getElementById('open-agent-here');
     const refreshTreeBtn = document.getElementById('refresh-tree');
+    const uploadFileBtn = document.getElementById('upload-file');
+    const uploadInputEl = document.getElementById('upload-input');
+    const uploadStatusEl = document.getElementById('upload-status');
+    const downloadFolderBtn = document.getElementById('download-folder');
+    const terminalHistoryEl = document.getElementById('terminal-history');
+    const terminalHistoryStatusEl = document.getElementById('terminal-history-status');
+    const terminalHistoryContentEl = document.getElementById('terminal-history-content');
     const keyStripEl = document.getElementById('key-strip');
     const logoutModal = document.getElementById('logout-modal');
     const logoutOnlyBtn = document.getElementById('logout-only');
@@ -2319,7 +2403,7 @@
     const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
     const CACHE_PREFIX = 'rwtty:file:';
     const TERM_CACHE_PREFIX = 'cw:term:';
-    const TERM_CACHE_MAX_CHARS = 500000;
+    const TERM_CACHE_MAX_CHARS = 64000;
     const AGENT_DB_NAME = 'codewebway-agent-sessions';
     const AGENT_DB_VERSION = 1;
     const AGENT_KIND = 'agent';
@@ -2330,6 +2414,10 @@
     const AGENT_ROUND_LIMIT = 200;
     const AGENT_TOTAL_TEXT_LIMIT = 8 * 1024 * 1024;
     const terminalCache = new Map();
+    const terminalHistoryState = new Map();
+    const TERMINAL_HISTORY_PAGE_LIMIT = 12;
+    const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
+    const TERMINAL_RECENT_HISTORY_CHUNKS = 4;
     const agentSessions = new Map();
     const roundsByTerminal = new Map();
     const agentInputComposer = new Map();
@@ -3089,6 +3177,27 @@
       if (bytes < 1024) return `${bytes} B`;
       if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
       return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
+    function b64ToBytes(value) {
+      const bin = atob(value || '');
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+
+    function bytesToB64(bytes) {
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    function joinPath(base, name) {
+      if (!base || base === '.') return name;
+      return `${base.replace(/\/+$/, '')}/${name}`;
     }
 
     async function refreshUsage() {
@@ -4883,7 +4992,8 @@
         theme: { background: '#131313' },
         fontFamily: '"CWTermSplit","Noto Sans Mono","Noto Sans Thai",ui-monospace,Menlo,monospace',
         lineHeight: 1.25,
-        letterSpacing: 0
+        letterSpacing: 0,
+        scrollback: TERMINAL_LIVE_SCROLLBACK_LINES
       });
       fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
@@ -4907,6 +5017,11 @@
           ws.send(textEncoder.encode(data));
         }
       });
+      term.onScroll((ydisp) => {
+        if (ydisp <= 2 && activeTerminalId) {
+          loadOlderTerminalHistory(activeTerminalId);
+        }
+      });
       syncMobileViewport();
     }
 
@@ -4915,6 +5030,83 @@
         ws.close();
       }
       ws = null;
+    }
+
+    function resetTerminalHistoryView(terminalId) {
+      terminalHistoryState.set(terminalId, {
+        beforeSeq: null,
+        loading: false,
+        hasMore: true,
+        chunks: [],
+        trimmed: false
+      });
+      terminalHistoryEl.classList.remove('open');
+      terminalHistoryContentEl.textContent = '';
+      terminalHistoryStatusEl.textContent = 'Scrollback history';
+    }
+
+    async function seedTerminalHistoryCursor(terminalId) {
+      const state = terminalHistoryState.get(terminalId);
+      if (!state || state.beforeSeq !== null) return;
+      try {
+        const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/tail`);
+        if (!res.ok) return;
+        const body = await res.json();
+        state.beforeSeq = Math.max(0, Number(body.next_seq || 0) - TERMINAL_RECENT_HISTORY_CHUNKS);
+        state.trimmed = Boolean(body.trimmed);
+      } catch {
+        // Live terminal still works if history metadata is unavailable.
+      }
+    }
+
+    function renderTerminalHistory(terminalId) {
+      const state = terminalHistoryState.get(terminalId);
+      if (!state || state.chunks.length === 0) {
+        terminalHistoryEl.classList.remove('open');
+        return;
+      }
+      terminalHistoryEl.classList.add('open');
+      terminalHistoryStatusEl.textContent = state.hasMore
+        ? 'Older scrollback loaded on demand'
+        : (state.trimmed ? 'Oldest retained scrollback loaded; earlier output was trimmed' : 'Start of retained scrollback');
+      terminalHistoryContentEl.textContent = state.chunks
+        .map((chunk) => textDecoder.decode(b64ToBytes(chunk.data_b64)))
+        .join('');
+    }
+
+    async function loadOlderTerminalHistory(terminalId) {
+      let state = terminalHistoryState.get(terminalId);
+      if (!state) {
+        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], trimmed: false };
+        terminalHistoryState.set(terminalId, state);
+      }
+      if (state.loading || !state.hasMore) return;
+      state.loading = true;
+      terminalHistoryStatusEl.textContent = 'Loading older scrollback...';
+      try {
+        const qs = new URLSearchParams({ limit: String(TERMINAL_HISTORY_PAGE_LIMIT) });
+        if (state.beforeSeq !== null && state.beforeSeq !== undefined) {
+          qs.set('before_seq', String(state.beforeSeq));
+        }
+        const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (!body.chunks || body.chunks.length === 0) {
+          state.hasMore = false;
+          state.trimmed = Boolean(body.trimmed);
+          renderTerminalHistory(terminalId);
+          return;
+        }
+        state.beforeSeq = body.chunks[0].seq;
+        state.hasMore = Boolean(body.has_more);
+        state.trimmed = Boolean(body.trimmed);
+        state.chunks = [...body.chunks, ...state.chunks].slice(0, 128);
+        renderTerminalHistory(terminalId);
+      } catch {
+        terminalHistoryStatusEl.textContent = 'Cannot load older scrollback';
+      } finally {
+        state.loading = false;
+      }
     }
 
     function connectTerminal(terminalId, options = {}) {
@@ -4926,6 +5118,11 @@
       activeTerminalId = terminalId;
       renderTerminalTabs();
       renderAgentSurface();
+      if (!terminalHistoryState.has(terminalId)) {
+        resetTerminalHistoryView(terminalId);
+      } else {
+        renderTerminalHistory(terminalId);
+      }
       if (term && switchingTerminal) {
         term.clear();
       }
@@ -4956,6 +5153,7 @@
         if (connectionId !== wsConnectionId) return;
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
+        seedTerminalHistoryCursor(terminalId);
         if (options.initialInput) {
           ws.send(textEncoder.encode(options.initialInput));
         }
@@ -5615,6 +5813,85 @@
       return res.json();
     }
 
+    function setUploadStatus(text) {
+      uploadStatusEl.textContent = text || '';
+      uploadStatusEl.classList.toggle('active', Boolean(text));
+    }
+
+    async function uploadFiles(fileList, targetDir = currentNavDir) {
+      if (sessionAccess.readOnly) {
+        alert('Read-only session cannot upload files.');
+        return;
+      }
+      const files = Array.from(fileList || []).filter(Boolean);
+      if (files.length === 0) return;
+      let done = 0;
+      for (const file of files) {
+        const relativeName = file.webkitRelativePath || file.name;
+        const path = joinPath(targetDir, relativeName.replace(/^\/+/, ''));
+        setUploadStatus(`Uploading ${done + 1}/${files.length}: ${relativeName}`);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let res = await api('/api/fs/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, data_b64: bytesToB64(bytes), overwrite: false })
+        });
+        if (res.status === 409) {
+          const overwrite = window.confirm(`${path} already exists. Overwrite it?`);
+          if (!overwrite) continue;
+          res = await api('/api/fs/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, data_b64: bytesToB64(bytes), overwrite: true })
+          });
+        }
+        if (!res.ok) {
+          const msg = await res.text();
+          alert(msg || `Cannot upload ${relativeName}`);
+          continue;
+        }
+        done += 1;
+      }
+      setUploadStatus(done > 0 ? `Uploaded ${done}/${files.length} file${files.length === 1 ? '' : 's'}.` : '');
+      await renderNav();
+      setTimeout(() => setUploadStatus(''), 3200);
+    }
+
+    function downloadPath(path, archive = false) {
+      if (archive) {
+        api('/api/fs/archive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths: [path] })
+        })
+          .then(async (res) => {
+            if (!res.ok) throw new Error(await res.text());
+            return res.blob();
+          })
+          .then((blob) => saveBlob(blob, `${(path === '.' ? 'workspace' : path.split('/').pop()) || 'files'}.tar.gz`))
+          .catch((err) => alert(err.message || 'Cannot download archive'));
+        return;
+      }
+      const url = `/api/fs/download?path=${encodeURIComponent(path)}`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = path.split('/').pop() || 'download';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    function saveBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     function parentPath(path) {
       if (!path || path === '.') return '.';
       const idx = path.lastIndexOf('/');
@@ -5841,7 +6118,29 @@
           : (typeof entry.size_bytes === 'number' ? formatBytes(entry.size_bytes) : 'File');
         row.appendChild(meta);
 
+        const action = document.createElement('button');
+        action.className = 'tree-item-action';
+        action.type = 'button';
+        action.textContent = '⇩';
+        action.title = entry.is_dir ? 'Download folder archive' : 'Download file';
+        action.setAttribute('aria-label', action.title);
+        action.onclick = (event) => {
+          event.stopPropagation();
+          downloadPath(entry.path, entry.is_dir);
+        };
+        row.appendChild(action);
+
         if (entry.is_dir) {
+          row.ondragover = (event) => {
+            event.preventDefault();
+            row.classList.add('drop-target');
+          };
+          row.ondragleave = () => row.classList.remove('drop-target');
+          row.ondrop = (event) => {
+            event.preventDefault();
+            row.classList.remove('drop-target');
+            uploadFiles(event.dataTransfer.files, entry.path);
+          };
           row.onclick = () => {
             currentNavDir = entry.path;
             renderNav();
@@ -6066,6 +6365,28 @@
     openShellHereBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
     openAgentHereBtn.addEventListener('click', () => createAgentTerminal(currentNavDir || '.'));
     refreshTreeBtn.addEventListener('click', () => renderNav());
+    uploadFileBtn.addEventListener('click', () => {
+      if (sessionAccess.readOnly) {
+        alert('Read-only session cannot upload files.');
+        return;
+      }
+      uploadInputEl.click();
+    });
+    uploadInputEl.addEventListener('change', async () => {
+      await uploadFiles(uploadInputEl.files, currentNavDir || '.');
+      uploadInputEl.value = '';
+    });
+    downloadFolderBtn.addEventListener('click', () => downloadPath(currentNavDir || '.', true));
+    treeEl.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      treeEl.classList.add('drop-target');
+    });
+    treeEl.addEventListener('dragleave', () => treeEl.classList.remove('drop-target'));
+    treeEl.addEventListener('drop', (event) => {
+      event.preventDefault();
+      treeEl.classList.remove('drop-target');
+      uploadFiles(event.dataTransfer.files, currentNavDir || '.');
+    });
 
     agentLaunchFormEl.addEventListener('submit', async (event) => {
       event.preventDefault();
