@@ -649,10 +649,8 @@
       box-shadow: inset -1px 0 0 rgba(255,255,255,0.015);
     }
     #file-head {
-      display: flex;
+      display: grid;
       gap: 12px;
-      align-items: flex-start;
-      justify-content: space-between;
       padding: 16px;
       border-bottom: 1px solid var(--cw-line-soft);
       background:
@@ -680,12 +678,16 @@
     }
     .file-toolbar,
     .editor-action-buttons {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
       align-items: center;
+      min-width: 0;
+    }
+    .editor-action-buttons {
+      display: flex;
       flex-wrap: wrap;
       justify-content: flex-end;
-      flex-shrink: 0;
     }
     .toolbar-button,
     #new-tab,
@@ -872,7 +874,7 @@
       max-height: min(60vh, 560px);
       min-width: 0;
       overflow: hidden;
-      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+      border-top: 1px solid rgba(120, 146, 166, 0.12);
       background:
         linear-gradient(180deg, rgba(255,255,255,0.028), rgba(255,255,255,0.012)),
         rgba(11, 16, 21, 0.94);
@@ -886,7 +888,7 @@
       height: 12px;
       flex-shrink: 0;
       cursor: row-resize;
-      background: linear-gradient(180deg, rgba(120, 146, 166, 0.06), rgba(120, 146, 166, 0));
+      background: linear-gradient(180deg, rgba(120, 146, 166, 0), rgba(120, 146, 166, 0.06));
       touch-action: none;
     }
     #preview-resize-handle::before {
@@ -1095,8 +1097,11 @@
       align-items: center;
       gap: 10px;
       border-bottom: 1px solid var(--cw-line-soft);
-      background: rgba(255,255,255,0.014);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.018), rgba(255,255,255,0)),
+        var(--cw-terminal);
       padding: 12px 16px;
+      flex-shrink: 0;
     }
     #tab-scroll {
       display: flex;
@@ -1286,14 +1291,12 @@
     .preview-tab .close:disabled { opacity: 0.3; cursor: default; }
     @container (max-width: 320px) {
       #file-head {
-        flex-direction: column;
         align-items: stretch;
       }
       .file-toolbar {
-        justify-content: flex-start;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .file-toolbar .toolbar-button {
-        flex: 1 1 calc(50% - 4px);
         justify-content: center;
         min-width: 0;
         padding: 0 10px;
@@ -1901,7 +1904,6 @@
       #workspace { position: relative; overflow: hidden; }
       #file-head,
       #editor-actions {
-        flex-direction: column;
         align-items: stretch;
       }
       .file-toolbar,
@@ -2207,34 +2209,40 @@
         </div>
       </section>
       <section id="terms">
-        <div id="term-tabs">
-          <button id="toggle-files" class="toolbar-button" type="button" title="Toggle files panel" aria-label="Toggle files panel">
-            <span class="toolbar-icon" aria-hidden="true">≡</span>
-            <span class="toolbar-label">Files</span>
-          </button>
-          <div id="tab-scroll">
-            <button id="new-tab" type="button" title="New terminal tab" aria-label="Create a new terminal tab">
-              <span class="toolbar-icon" aria-hidden="true">+</span>
-              <span class="toolbar-label">New Tab</span>
-            </button>
-            <button id="new-agent" type="button" title="New agent session tab" aria-label="Create a new agent session tab">
-              <span class="toolbar-icon" aria-hidden="true">◉</span>
-              <span class="toolbar-label">New Agent</span>
-            </button>
-          </div>
-          <div id="tab-fixed">
-            <div id="tab-info">
-              <span id="status">Connected</span>
-              <span id="usage">0 B</span>
-            </div>
-            <button id="logout" type="button" title="Leave this session" aria-label="Leave this session">
-              <span class="toolbar-icon" aria-hidden="true">⏻</span>
-              <span class="toolbar-label">Leave</span>
-            </button>
-          </div>
-        </div>
         <div id="terminal-workspace">
           <div id="terminal-main">
+            <div id="term-tabs">
+              <button id="toggle-files" class="toolbar-button" type="button" title="Toggle files panel" aria-label="Toggle files panel">
+                <span class="toolbar-icon" aria-hidden="true">≡</span>
+                <span class="toolbar-label">Files</span>
+              </button>
+              <div id="tab-scroll">
+                <button id="new-tab" type="button" title="New terminal tab" aria-label="Create a new terminal tab">
+                  <span class="toolbar-icon" aria-hidden="true">+</span>
+                  <span class="toolbar-label">New Tab</span>
+                </button>
+                <button id="new-agent" type="button" title="New agent session tab" aria-label="Create a new agent session tab">
+                  <span class="toolbar-icon" aria-hidden="true">◉</span>
+                  <span class="toolbar-label">New Agent</span>
+                </button>
+              </div>
+              <div id="tab-fixed">
+                <div id="tab-info">
+                  <span id="status">Connected</span>
+                  <span id="usage">0 B</span>
+                </div>
+                <button id="logout" type="button" title="Leave this session" aria-label="Leave this session">
+                  <span class="toolbar-icon" aria-hidden="true">⏻</span>
+                  <span class="toolbar-label">Leave</span>
+                </button>
+              </div>
+            </div>
+            <div id="terminal-history" aria-live="polite">
+              <div id="terminal-history-status">Scrollback history</div>
+              <pre id="terminal-history-content"></pre>
+            </div>
+            <div id="terminal"></div>
+            <div id="preview-resize-handle" aria-hidden="true"></div>
             <div id="preview-dock">
               <div id="preview-tabs"></div>
               <div id="editor-actions">
@@ -2260,12 +2268,6 @@
               <pre id="preview">Select a file to preview</pre>
               <textarea id="editor" spellcheck="false"></textarea>
             </div>
-            <div id="preview-resize-handle" aria-hidden="true"></div>
-            <div id="terminal-history" aria-live="polite">
-              <div id="terminal-history-status">Scrollback history</div>
-              <pre id="terminal-history-content"></pre>
-            </div>
-            <div id="terminal"></div>
             <div id="agent-launcher">
               <div class="agent-launcher-card">
                 <div class="stack">
@@ -5404,16 +5406,17 @@
         .join('');
     }
 
-    async function replayRecentTerminalTail(terminalId, connectionId) {
+    async function replayRecentTerminalTail(terminalId, connectionId, options = {}) {
       const qs = new URLSearchParams({ limit: String(TERMINAL_REPLAY_HISTORY_CHUNKS) });
       const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`);
-      if (connectionId !== wsConnectionId || !res.ok) return;
+      if (connectionId !== wsConnectionId || !res.ok) return '';
       const body = await res.json();
       applyTerminalHistoryMetadata(terminalId, body);
       const text = decodeHistoryChunks(body.chunks);
-      if (text) {
+      if (text && options.write !== false) {
         term.write(text);
       }
+      return text;
     }
 
     function renderTerminalHistory(terminalId) {
@@ -5540,15 +5543,22 @@
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
         if (shouldReplayRecentTail) {
+          const shouldShowStartupBanner = Boolean(options.startupBanner || pendingStartupBanners.has(terminalId));
+          let replayText = '';
           try {
-            await replayRecentTerminalTail(terminalId, connectionId);
+            replayText = await replayRecentTerminalTail(terminalId, connectionId, {
+              write: !shouldShowStartupBanner
+            });
           } catch {
             // Live output should continue even if bounded replay metadata is unavailable.
           }
           replayReady = true;
-          if (options.startupBanner || pendingStartupBanners.has(terminalId)) {
+          if (shouldShowStartupBanner) {
             pendingStartupBanners.delete(terminalId);
             term.write(STARTUP_BANNER);
+            if (replayText) {
+              term.write(replayText);
+            }
           }
           while (queuedLiveBytes.length > 0) {
             writeLiveBytes(queuedLiveBytes.shift());
