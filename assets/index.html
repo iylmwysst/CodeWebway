@@ -2622,6 +2622,7 @@
       ''
     ].join('\r\n') + '\r\n';
     const pendingStartupBanners = new Set();
+    const STARTUP_BANNER_SEEN_PREFIX = 'cw:startup-banner-seen:';
     const agentSessions = new Map();
     const roundsByTerminal = new Map();
     const agentInputComposer = new Map();
@@ -2682,6 +2683,18 @@
     function setStatus(text, color) {
       statusEl.textContent = '● ' + text;
       statusEl.style.color = color || '#c8c8c8';
+    }
+
+    function shouldShowInitialStartupBanner(item) {
+      if (!item || !item.id) return false;
+      const key = `${STARTUP_BANNER_SEEN_PREFIX}${item.id}`;
+      try {
+        if (sessionStorage.getItem(key) === '1') return false;
+        sessionStorage.setItem(key, '1');
+      } catch {
+        // If sessionStorage is unavailable, showing once per loaded page is still safe.
+      }
+      return true;
     }
 
     function activateWithKeyboard(event, action) {
@@ -6015,7 +6028,10 @@
       }
       renderTerminalTabs();
       if (!activeTerminalId || !terminals.some((t) => t.id === activeTerminalId)) {
-        activateTerminalTab(terminals[0].id);
+        const initial = terminals.find((item) => item.title === 'main') || terminals[0];
+        activateTerminalTab(initial.id, {
+          startupBanner: shouldShowInitialStartupBanner(initial)
+        });
       }
     }
 
