@@ -1335,7 +1335,7 @@
       padding: 10px;
     }
     #terminal-history {
-      display: none;
+      display: none !important;
       flex: 0 0 min(32vh, 260px);
       min-height: 120px;
       border-bottom: 1px solid rgba(120, 146, 166, 0.12);
@@ -2609,6 +2609,7 @@
     const TERMINAL_REPLAY_HISTORY_CHUNKS = 2;
     const TERMINAL_HISTORY_MAX_CHUNKS = 24;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
+    const TERMINAL_RESET_SEQUENCE = '\x1bc';
     const STARTUP_BANNER = [
       '╔██████╗ ██████╗ ██████╗ ███████╗██╗    ██╗███████╗██████╗ ██╗    ██╗ █████╗ ██╗   ██╗',
       '██╔════╝██╔═══██╗██╔══██╗██╔════╝██║    ██║██╔════╝██╔══██╗██║    ██║██╔══██╗╚██╗ ██╔╝',
@@ -2619,7 +2620,7 @@
       '',
       'Secure terminal access from anywhere',
       ''
-    ].join('\r\n');
+    ].join('\r\n') + '\r\n';
     const pendingStartupBanners = new Set();
     const agentSessions = new Map();
     const roundsByTerminal = new Map();
@@ -5360,8 +5361,6 @@
       term.onScroll((ydisp) => {
         if (ydisp <= 2 && activeTerminalId) {
           loadOlderTerminalHistory(activeTerminalId);
-        } else if (ydisp > Math.max(8, term.rows || 0) && activeTerminalId) {
-          trimOlderTerminalHistory(activeTerminalId);
         }
       });
       syncMobileViewport();
@@ -5380,6 +5379,8 @@
         loading: false,
         hasMore: true,
         chunks: [],
+        tailText: '',
+        bannerText: '',
         trimmed: false,
         tailBeforeSeq: null
       });
@@ -5413,31 +5414,32 @@
       const body = await res.json();
       applyTerminalHistoryMetadata(terminalId, body);
       const text = decodeHistoryChunks(body.chunks);
+      const state = terminalHistoryState.get(terminalId);
+      if (state) {
+        state.tailText = text || '';
+      }
       if (text && options.write !== false) {
         term.write(text);
       }
       return text;
     }
 
-    function renderTerminalHistory(terminalId) {
+    function rebuildTerminalBuffer(terminalId) {
       const state = terminalHistoryState.get(terminalId);
-      if (!state || state.chunks.length === 0) {
-        terminalHistoryEl.classList.remove('open');
-        return;
-      }
-      terminalHistoryEl.classList.add('open');
+      if (!state) return;
+      const olderText = decodeHistoryChunks(state.chunks);
+      const liveText = readTerminalCache(terminalId);
+      term.write(TERMINAL_RESET_SEQUENCE);
+      term.write(`${state.bannerText || ''}${olderText}${state.tailText || ''}${liveText || ''}`);
       terminalHistoryStatusEl.textContent = state.hasMore
         ? 'Older scrollback loaded on demand'
         : (state.trimmed ? 'Oldest retained scrollback loaded; earlier output was trimmed' : 'Start of retained scrollback');
-      terminalHistoryContentEl.textContent = state.chunks
-        .map((chunk) => textDecoder.decode(b64ToBytes(chunk.data_b64)))
-        .join('');
     }
 
     async function loadOlderTerminalHistory(terminalId) {
       let state = terminalHistoryState.get(terminalId);
       if (!state) {
-        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], trimmed: false, tailBeforeSeq: null };
+        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], tailText: '', bannerText: '', trimmed: false, tailBeforeSeq: null };
         terminalHistoryState.set(terminalId, state);
       }
       if (state.loading || !state.hasMore) return;
@@ -5454,31 +5456,19 @@
         if (!body.chunks || body.chunks.length === 0) {
           state.hasMore = false;
           state.trimmed = Boolean(body.trimmed);
-          renderTerminalHistory(terminalId);
+          rebuildTerminalBuffer(terminalId);
           return;
         }
         state.beforeSeq = body.chunks[0].seq;
         state.hasMore = Boolean(body.has_more);
         state.trimmed = Boolean(body.trimmed);
         state.chunks = [...body.chunks, ...state.chunks].slice(0, TERMINAL_HISTORY_MAX_CHUNKS);
-        renderTerminalHistory(terminalId);
+        rebuildTerminalBuffer(terminalId);
       } catch {
         terminalHistoryStatusEl.textContent = 'Cannot load older scrollback';
       } finally {
         state.loading = false;
       }
-    }
-
-    function trimOlderTerminalHistory(terminalId) {
-      const state = terminalHistoryState.get(terminalId);
-      if (!state || state.chunks.length === 0) return;
-      state.chunks = [];
-      if (state.tailBeforeSeq !== null && state.tailBeforeSeq !== undefined) {
-        state.beforeSeq = state.tailBeforeSeq;
-      }
-      terminalHistoryEl.classList.remove('open');
-      terminalHistoryContentEl.textContent = '';
-      terminalHistoryStatusEl.textContent = state.hasMore ? 'Scroll up to load older scrollback' : 'Scrollback history';
     }
 
     function connectTerminal(terminalId, options = {}) {
@@ -5492,11 +5482,9 @@
       renderAgentSurface();
       if (!terminalHistoryState.has(terminalId)) {
         resetTerminalHistoryView(terminalId);
-      } else {
-        renderTerminalHistory(terminalId);
       }
       if (term && switchingTerminal) {
-        term.clear();
+        term.write(TERMINAL_RESET_SEQUENCE);
       }
 
       const shouldSkipScrollback = true;
@@ -5504,7 +5492,7 @@
       const agentSession = getAgentSession(terminalId);
       const preserveReplayPrefix = Boolean(agentSession && !options.freshAgentLaunch && shouldReplayRecentTail);
       if (term && shouldReplayRecentTail) {
-        term.clear();
+        term.write(TERMINAL_RESET_SEQUENCE);
         if (preserveReplayPrefix) {
           agentSession.replayPrefix = readTerminalCache(terminalId);
         } else {
@@ -5555,6 +5543,11 @@
           replayReady = true;
           if (shouldShowStartupBanner) {
             pendingStartupBanners.delete(terminalId);
+            const state = terminalHistoryState.get(terminalId);
+            if (state) {
+              state.bannerText = STARTUP_BANNER;
+            }
+            term.write(TERMINAL_RESET_SEQUENCE);
             term.write(STARTUP_BANNER);
             if (replayText) {
               term.write(replayText);
@@ -6018,7 +6011,7 @@
       terminals = await res.json();
       await restoreAgentSessions();
       if (terminals.length === 0) {
-        await createTerminal('.');
+        await createTerminal('.', { startupBanner: true });
       }
       renderTerminalTabs();
       if (!activeTerminalId || !terminals.some((t) => t.id === activeTerminalId)) {
@@ -6047,10 +6040,12 @@
       }
       const item = await res.json();
       terminals.push(item);
-      pendingStartupBanners.add(item.id);
+      if (options.startupBanner === true) {
+        pendingStartupBanners.add(item.id);
+      }
       renderTerminalTabs();
       if (options.autoConnect !== false) {
-        activateTerminalTab(item.id, { startupBanner: true });
+        activateTerminalTab(item.id, { startupBanner: options.startupBanner === true });
       }
       currentNavDir = cwd || '.';
       return item;
