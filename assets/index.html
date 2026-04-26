@@ -2537,8 +2537,9 @@
     const terminalCache = new Map();
     const terminalHistoryState = new Map();
     const TERMINAL_HISTORY_PAGE_LIMIT = 12;
+    const TERMINAL_REPLAY_HISTORY_CHUNKS = 2;
+    const TERMINAL_HISTORY_MAX_CHUNKS = 24;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
-    const TERMINAL_RECENT_HISTORY_CHUNKS = 4;
     const agentSessions = new Map();
     const roundsByTerminal = new Map();
     const agentInputComposer = new Map();
@@ -5273,6 +5274,8 @@
       term.onScroll((ydisp) => {
         if (ydisp <= 2 && activeTerminalId) {
           loadOlderTerminalHistory(activeTerminalId);
+        } else if (ydisp > Math.max(8, term.rows || 0) && activeTerminalId) {
+          trimOlderTerminalHistory(activeTerminalId);
         }
       });
       syncMobileViewport();
@@ -5291,24 +5294,41 @@
         loading: false,
         hasMore: true,
         chunks: [],
-        trimmed: false
+        trimmed: false,
+        tailBeforeSeq: null
       });
       terminalHistoryEl.classList.remove('open');
       terminalHistoryContentEl.textContent = '';
       terminalHistoryStatusEl.textContent = 'Scrollback history';
     }
 
-    async function seedTerminalHistoryCursor(terminalId) {
+    function applyTerminalHistoryMetadata(terminalId, body) {
       const state = terminalHistoryState.get(terminalId);
-      if (!state || state.beforeSeq !== null) return;
-      try {
-        const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/tail`);
-        if (!res.ok) return;
-        const body = await res.json();
-        state.beforeSeq = Math.max(0, Number(body.next_seq || 0) - TERMINAL_RECENT_HISTORY_CHUNKS);
-        state.trimmed = Boolean(body.trimmed);
-      } catch {
-        // Live terminal still works if history metadata is unavailable.
+      if (!state || !body) return;
+      const chunks = Array.isArray(body.chunks) ? body.chunks : [];
+      state.beforeSeq = chunks.length > 0
+        ? chunks[0].seq
+        : Number(body.next_seq || 0);
+      state.tailBeforeSeq = state.beforeSeq;
+      state.hasMore = Boolean(body.has_more);
+      state.trimmed = Boolean(body.trimmed);
+    }
+
+    function decodeHistoryChunks(chunks) {
+      return (chunks || [])
+        .map((chunk) => textDecoder.decode(b64ToBytes(chunk.data_b64)))
+        .join('');
+    }
+
+    async function replayRecentTerminalTail(terminalId, connectionId) {
+      const qs = new URLSearchParams({ limit: String(TERMINAL_REPLAY_HISTORY_CHUNKS) });
+      const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`);
+      if (connectionId !== wsConnectionId || !res.ok) return;
+      const body = await res.json();
+      applyTerminalHistoryMetadata(terminalId, body);
+      const text = decodeHistoryChunks(body.chunks);
+      if (text) {
+        term.write(text);
       }
     }
 
@@ -5330,7 +5350,7 @@
     async function loadOlderTerminalHistory(terminalId) {
       let state = terminalHistoryState.get(terminalId);
       if (!state) {
-        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], trimmed: false };
+        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], trimmed: false, tailBeforeSeq: null };
         terminalHistoryState.set(terminalId, state);
       }
       if (state.loading || !state.hasMore) return;
@@ -5353,13 +5373,25 @@
         state.beforeSeq = body.chunks[0].seq;
         state.hasMore = Boolean(body.has_more);
         state.trimmed = Boolean(body.trimmed);
-        state.chunks = [...body.chunks, ...state.chunks].slice(0, 128);
+        state.chunks = [...body.chunks, ...state.chunks].slice(0, TERMINAL_HISTORY_MAX_CHUNKS);
         renderTerminalHistory(terminalId);
       } catch {
         terminalHistoryStatusEl.textContent = 'Cannot load older scrollback';
       } finally {
         state.loading = false;
       }
+    }
+
+    function trimOlderTerminalHistory(terminalId) {
+      const state = terminalHistoryState.get(terminalId);
+      if (!state || state.chunks.length === 0) return;
+      state.chunks = [];
+      if (state.tailBeforeSeq !== null && state.tailBeforeSeq !== undefined) {
+        state.beforeSeq = state.tailBeforeSeq;
+      }
+      terminalHistoryEl.classList.remove('open');
+      terminalHistoryContentEl.textContent = '';
+      terminalHistoryStatusEl.textContent = state.hasMore ? 'Scroll up to load older scrollback' : 'Scrollback history';
     }
 
     function connectTerminal(terminalId, options = {}) {
@@ -5380,10 +5412,11 @@
         term.clear();
       }
 
-      const shouldSkipScrollback = options.skipScrollback === true;
+      const shouldSkipScrollback = true;
+      const shouldReplayRecentTail = options.replayRecentTail !== false && !options.preserveBuffer;
       const agentSession = getAgentSession(terminalId);
-      const preserveReplayPrefix = Boolean(agentSession && !options.freshAgentLaunch && !shouldSkipScrollback);
-      if (term && !shouldSkipScrollback) {
+      const preserveReplayPrefix = Boolean(agentSession && !options.freshAgentLaunch && shouldReplayRecentTail);
+      if (term && shouldReplayRecentTail) {
         term.clear();
         if (preserveReplayPrefix) {
           agentSession.replayPrefix = readTerminalCache(terminalId);
@@ -5401,12 +5434,38 @@
       ws = new WebSocket(wsUrl);
       const localWs = ws;
       ws.binaryType = 'arraybuffer';
+      let replayReady = !shouldReplayRecentTail;
+      const queuedLiveBytes = [];
 
-      ws.onopen = () => {
+      const writeLiveBytes = (bytes) => {
+        const chunkText = textDecoder.decode(bytes);
+        if (isAgentTerminal(terminalId)) {
+          const transcriptText = consumeReplayPrefix(terminalId, chunkText);
+          if (transcriptText) {
+            appendTerminalCache(terminalId, transcriptText);
+            captureAgentOutput(terminalId, transcriptText);
+          }
+        } else {
+          appendTerminalCache(terminalId, chunkText);
+        }
+        term.write(bytes);
+      };
+
+      ws.onopen = async () => {
         if (connectionId !== wsConnectionId) return;
         retries = 0;
         setStatus(`Connected: ${terminalId}`, '#4caf50');
-        seedTerminalHistoryCursor(terminalId);
+        if (shouldReplayRecentTail) {
+          try {
+            await replayRecentTerminalTail(terminalId, connectionId);
+          } catch {
+            // Live output should continue even if bounded replay metadata is unavailable.
+          }
+          replayReady = true;
+          while (queuedLiveBytes.length > 0) {
+            writeLiveBytes(queuedLiveBytes.shift());
+          }
+        }
         if (options.initialInput) {
           ws.send(textEncoder.encode(options.initialInput));
         }
@@ -5422,17 +5481,11 @@
           }
         } else {
           const bytes = new Uint8Array(e.data);
-          const chunkText = textDecoder.decode(bytes);
-          if (isAgentTerminal(terminalId)) {
-            const transcriptText = consumeReplayPrefix(terminalId, chunkText);
-            if (transcriptText) {
-              appendTerminalCache(terminalId, transcriptText);
-              captureAgentOutput(terminalId, transcriptText);
-            }
-          } else {
-            appendTerminalCache(terminalId, chunkText);
+          if (!replayReady) {
+            queuedLiveBytes.push(bytes);
+            return;
           }
-          term.write(bytes);
+          writeLiveBytes(bytes);
         }
       };
 
@@ -5461,7 +5514,10 @@
         retries++;
         const delay = Math.min(5000, 600 * retries);
         setStatus(`Reconnecting (${retries})...`, '#ff9800');
-        setTimeout(() => connectTerminal(terminalId, { skipScrollback: false }), delay);
+        setTimeout(() => connectTerminal(terminalId, {
+          replayRecentTail: false,
+          preserveBuffer: true
+        }), delay);
       };
 
       ws.onerror = () => {
