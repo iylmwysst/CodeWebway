@@ -5383,6 +5383,11 @@
           loadOlderTerminalHistory(activeTerminalId);
         }
       });
+      terminalEl.addEventListener('wheel', (event) => {
+        if (event.deltaY < 0) {
+          maybeLoadOlderTerminalHistoryFromTop();
+        }
+      }, { passive: true });
       syncMobileViewport();
     }
 
@@ -5474,13 +5479,30 @@
         .join('');
     }
 
+    function stripLeadingAnsiReplayFragment(text) {
+      if (!text) return '';
+      // History chunks can begin in the middle of a CSI sequence. Drop the visible
+      // tail, for example "36;24H", before replaying the bounded window.
+      return text.replace(/^(?:\?[\d;]{1,32}[hl]|[\d;]{1,48}[;][\d;]{0,48}[HfABCDGJKSTm])/, '');
+    }
+
+    function maybeLoadOlderTerminalHistoryFromTop() {
+      if (!activeTerminalId || !term) return;
+      const state = terminalHistoryState.get(activeTerminalId);
+      if (!state || state.loading || !state.hasMore) return;
+      const viewportY = Number(term.buffer?.active?.viewportY ?? state.lastYdisp ?? 0);
+      if (viewportY <= 2) {
+        loadOlderTerminalHistory(activeTerminalId);
+      }
+    }
+
     async function replayRecentTerminalTail(terminalId, connectionId, options = {}) {
       const qs = new URLSearchParams({ limit: String(TERMINAL_REPLAY_HISTORY_CHUNKS) });
       const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`);
       if (connectionId !== wsConnectionId || !res.ok) return '';
       const body = await res.json();
       applyTerminalHistoryMetadata(terminalId, body);
-      const text = decodeHistoryChunks(body.chunks);
+      const text = stripLeadingAnsiReplayFragment(decodeHistoryChunks(body.chunks));
       const state = terminalHistoryState.get(terminalId);
       if (state) {
         state.tailText = text || '';
@@ -5496,7 +5518,7 @@
       const state = terminalHistoryState.get(terminalId);
       if (!state) return;
       trimOlderTerminalHistoryWindow(state);
-      const olderText = decodeHistoryChunks(state.chunks);
+      const olderText = stripLeadingAnsiReplayFragment(decodeHistoryChunks(state.chunks));
       const liveText = readTerminalCache(terminalId);
       term.write(TERMINAL_RESET_SEQUENCE);
       term.write(`${state.bannerText || ''}${olderText}${state.tailText || ''}${liveText || ''}`);
