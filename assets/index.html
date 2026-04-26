@@ -2605,9 +2605,10 @@
     const AGENT_TOTAL_TEXT_LIMIT = 8 * 1024 * 1024;
     const terminalCache = new Map();
     const terminalHistoryState = new Map();
-    const TERMINAL_HISTORY_PAGE_LIMIT = 12;
-    const TERMINAL_REPLAY_HISTORY_CHUNKS = 2;
-    const TERMINAL_HISTORY_MAX_CHUNKS = 24;
+    const TERMINAL_HISTORY_PAGE_LIMIT = 4;
+    const TERMINAL_REPLAY_HISTORY_CHUNKS = 1;
+    const TERMINAL_HISTORY_MAX_LOADED_BYTES = 384 * 1024;
+    const TERMINAL_HISTORY_MAX_OLDER_BYTES = 256 * 1024;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
     const TERMINAL_RESET_SEQUENCE = '\x1bc';
     const STARTUP_BANNER = [
@@ -5402,6 +5403,51 @@
       terminalHistoryStatusEl.textContent = 'Scrollback history';
     }
 
+    function historyChunkByteLen(chunk) {
+      if (!chunk) return 0;
+      const explicitLen = Number(chunk.byte_len || 0);
+      if (Number.isFinite(explicitLen) && explicitLen > 0) return explicitLen;
+      if (typeof chunk.data_b64 === 'string') {
+        return Math.ceil(chunk.data_b64.length * 3 / 4);
+      }
+      return 0;
+    }
+
+    function historyChunksByteLen(chunks) {
+      return (chunks || []).reduce((total, chunk) => total + historyChunkByteLen(chunk), 0);
+    }
+
+    function resetTerminalHistoryWindowForReplay(terminalId) {
+      const state = terminalHistoryState.get(terminalId);
+      if (!state) return;
+      state.beforeSeq = null;
+      state.chunks = [];
+      state.tailText = '';
+      state.tailBeforeSeq = null;
+      state.hasMore = true;
+      state.trimmed = false;
+    }
+
+    function trimOlderTerminalHistoryWindow(state) {
+      if (!state || !Array.isArray(state.chunks)) return;
+      let olderBytes = historyChunksByteLen(state.chunks);
+      while (state.chunks.length > 0 && olderBytes > TERMINAL_HISTORY_MAX_OLDER_BYTES) {
+        const removed = state.chunks.shift();
+        olderBytes -= historyChunkByteLen(removed);
+      }
+      const tailBytes = textEncoder.encode(state.tailText || '').length;
+      while (
+        state.chunks.length > 0
+        && olderBytes + tailBytes > TERMINAL_HISTORY_MAX_LOADED_BYTES
+      ) {
+        const removed = state.chunks.shift();
+        olderBytes -= historyChunkByteLen(removed);
+      }
+      state.beforeSeq = state.chunks.length > 0
+        ? state.chunks[0].seq
+        : state.tailBeforeSeq;
+    }
+
     function applyTerminalHistoryMetadata(terminalId, body) {
       const state = terminalHistoryState.get(terminalId);
       if (!state || !body) return;
@@ -5430,6 +5476,7 @@
       const state = terminalHistoryState.get(terminalId);
       if (state) {
         state.tailText = text || '';
+        trimOlderTerminalHistoryWindow(state);
       }
       if (text && options.write !== false) {
         term.write(text);
@@ -5440,6 +5487,7 @@
     function rebuildTerminalBuffer(terminalId) {
       const state = terminalHistoryState.get(terminalId);
       if (!state) return;
+      trimOlderTerminalHistoryWindow(state);
       const olderText = decodeHistoryChunks(state.chunks);
       const liveText = readTerminalCache(terminalId);
       term.write(TERMINAL_RESET_SEQUENCE);
@@ -5475,7 +5523,8 @@
         state.beforeSeq = body.chunks[0].seq;
         state.hasMore = Boolean(body.has_more);
         state.trimmed = Boolean(body.trimmed);
-        state.chunks = [...body.chunks, ...state.chunks].slice(0, TERMINAL_HISTORY_MAX_CHUNKS);
+        state.chunks = [...body.chunks, ...state.chunks];
+        trimOlderTerminalHistoryWindow(state);
         rebuildTerminalBuffer(terminalId);
       } catch {
         terminalHistoryStatusEl.textContent = 'Cannot load older scrollback';
@@ -5506,6 +5555,7 @@
       const preserveReplayPrefix = Boolean(agentSession && !options.freshAgentLaunch && shouldReplayRecentTail);
       if (term && shouldReplayRecentTail) {
         term.write(TERMINAL_RESET_SEQUENCE);
+        resetTerminalHistoryWindowForReplay(terminalId);
         if (preserveReplayPrefix) {
           agentSession.replayPrefix = readTerminalCache(terminalId);
         } else {
