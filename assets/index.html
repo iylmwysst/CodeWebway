@@ -2593,7 +2593,7 @@
     const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
     const CACHE_PREFIX = 'rwtty:file:';
     const TERM_CACHE_PREFIX = 'cw:term:';
-    const TERM_CACHE_MAX_CHARS = 64000;
+    const TERM_CACHE_MAX_CHARS = 16000;
     const AGENT_DB_NAME = 'codewebway-agent-sessions';
     const AGENT_DB_VERSION = 1;
     const AGENT_KIND = 'agent';
@@ -2605,10 +2605,11 @@
     const AGENT_TOTAL_TEXT_LIMIT = 8 * 1024 * 1024;
     const terminalCache = new Map();
     const terminalHistoryState = new Map();
-    const TERMINAL_HISTORY_PAGE_LIMIT = 4;
+    const TERMINAL_HISTORY_PAGE_LIMIT = 1;
     const TERMINAL_REPLAY_HISTORY_CHUNKS = 1;
-    const TERMINAL_HISTORY_MAX_LOADED_BYTES = 384 * 1024;
-    const TERMINAL_HISTORY_MAX_OLDER_BYTES = 256 * 1024;
+    const TERMINAL_REPLAY_MAX_CHARS = 8 * 1024;
+    const TERMINAL_HISTORY_MAX_LOADED_BYTES = 48 * 1024;
+    const TERMINAL_HISTORY_MAX_OLDER_BYTES = 32 * 1024;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
     const TERMINAL_RESET_SEQUENCE = '\x1bc';
     const STARTUP_BANNER = [
@@ -5486,6 +5487,11 @@
       return text.replace(/^(?:\?[\d;]{1,32}[hl]|[\d;]{1,48}[;][\d;]{0,48}[HfABCDGJKSTm])/, '');
     }
 
+    function trimRecentReplayText(text) {
+      if (!text || text.length <= TERMINAL_REPLAY_MAX_CHARS) return text || '';
+      return stripLeadingAnsiReplayFragment(text.slice(text.length - TERMINAL_REPLAY_MAX_CHARS));
+    }
+
     function maybeLoadOlderTerminalHistoryFromTop() {
       if (!activeTerminalId || !term) return;
       const state = terminalHistoryState.get(activeTerminalId);
@@ -5502,7 +5508,7 @@
       if (connectionId !== wsConnectionId || !res.ok) return '';
       const body = await res.json();
       applyTerminalHistoryMetadata(terminalId, body);
-      const text = stripLeadingAnsiReplayFragment(decodeHistoryChunks(body.chunks));
+      const text = trimRecentReplayText(stripLeadingAnsiReplayFragment(decodeHistoryChunks(body.chunks)));
       const state = terminalHistoryState.get(terminalId);
       if (state) {
         state.tailText = text || '';
