@@ -3547,7 +3547,7 @@ async fn handle_socket(
     }
     if let Some(payload) = session_lifecycle_message(&lifecycle) {
         count_tx(&state, payload.len() as u64);
-        let _ = socket.send(Message::Text(payload.into())).await;
+        let _ = socket.send(Message::Text(payload)).await;
         let _ = socket.close().await;
         let mut current = state.ws_connections.lock().unwrap();
         *current = current.saturating_sub(1);
@@ -3593,7 +3593,7 @@ async fn handle_socket(
                     Ok(event) => {
                         let payload = session_event_message(&event);
                         count_tx(&state, payload.len() as u64);
-                        if socket.send(Message::Text(payload.into())).await.is_err() {
+                        if socket.send(Message::Text(payload)).await.is_err() {
                             break;
                         }
                         let _ = socket.close().await;
@@ -3614,7 +3614,7 @@ async fn handle_socket(
                         if session::write_input(&terminal, &data).is_err() {
                             if let Some(payload) = session_lifecycle_message(&session::lifecycle(&terminal)) {
                                 count_tx(&state, payload.len() as u64);
-                                let _ = socket.send(Message::Text(payload.into())).await;
+                                let _ = socket.send(Message::Text(payload)).await;
                                 let _ = socket.close().await;
                                 break;
                             }
@@ -3638,7 +3638,7 @@ async fn handle_socket(
                                 if session::resize_session(&terminal, rows, cols).is_err() {
                                     if let Some(payload) = session_lifecycle_message(&session::lifecycle(&terminal)) {
                                         count_tx(&state, payload.len() as u64);
-                                        let _ = socket.send(Message::Text(payload.into())).await;
+                                        let _ = socket.send(Message::Text(payload)).await;
                                         let _ = socket.close().await;
                                         break;
                                     }
