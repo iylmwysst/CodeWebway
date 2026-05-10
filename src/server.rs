@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -21,7 +20,6 @@ use base64::{
     Engine as _,
 };
 use hmac::{Hmac, Mac};
-use portable_pty::PtySize;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -32,6 +30,7 @@ use tower_http::compression::CompressionLayer;
 
 use crate::assets::Assets;
 use crate::session::{self, Session};
+use crate::terminal::TerminalManager;
 
 const MAX_FILE_PREVIEW_BYTES: usize = 256 * 1024;
 const MAX_FILE_EDIT_BYTES: usize = 512 * 1024;
@@ -246,6 +245,7 @@ pub struct FsQuery {
 #[derive(Deserialize)]
 pub struct TerminalHistoryQuery {
     before_seq: Option<u64>,
+    after_seq: Option<u64>,
     limit: Option<usize>,
 }
 
@@ -286,110 +286,6 @@ pub struct SaveFileDiffRequest {
     start: usize,
     delete_count: usize,
     insert_text: String,
-}
-
-#[derive(Serialize, Clone)]
-pub struct TerminalSummary {
-    id: String,
-    title: String,
-    cwd: String,
-    shell: String,
-}
-
-#[derive(Clone)]
-struct TerminalEntry {
-    summary: TerminalSummary,
-    session: Session,
-}
-
-pub struct TerminalManager {
-    entries: HashMap<String, TerminalEntry>,
-    max_tabs: usize,
-}
-
-impl TerminalManager {
-    pub fn new(max_tabs: usize) -> Self {
-        Self {
-            entries: HashMap::new(),
-            max_tabs,
-        }
-    }
-
-    fn make_terminal_id(&self) -> String {
-        loop {
-            let id: String = rand::thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(8)
-                .map(char::from)
-                .collect();
-            if !self.entries.contains_key(&id) {
-                return id;
-            }
-        }
-    }
-
-    pub fn create(
-        &mut self,
-        title: String,
-        cwd: PathBuf,
-        shell: String,
-        scrollback: usize,
-    ) -> anyhow::Result<TerminalSummary> {
-        if self.entries.len() >= self.max_tabs {
-            anyhow::bail!("Maximum number of terminal tabs reached");
-        }
-        let session = session::spawn_session(&shell, &cwd, scrollback)?;
-        let id = self.make_terminal_id();
-        let summary = TerminalSummary {
-            id: id.clone(),
-            title,
-            cwd: cwd.display().to_string(),
-            shell,
-        };
-        self.entries.insert(
-            id,
-            TerminalEntry {
-                summary: summary.clone(),
-                session,
-            },
-        );
-        Ok(summary)
-    }
-
-    pub fn list(&self) -> Vec<TerminalSummary> {
-        let mut out: Vec<TerminalSummary> = self
-            .entries
-            .values()
-            .map(|entry| entry.summary.clone())
-            .collect();
-        out.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
-        out
-    }
-
-    pub fn get_session(&self, id: &str) -> Option<Session> {
-        self.entries.get(id).map(|entry| Arc::clone(&entry.session))
-    }
-
-    pub fn remove(&mut self, id: &str) -> bool {
-        let Some(entry) = self.entries.remove(id) else {
-            return false;
-        };
-        let _ = session::close_session(&entry.session);
-        true
-    }
-
-    pub fn rename(&mut self, id: &str, title: String) -> Option<TerminalSummary> {
-        let entry = self.entries.get_mut(id)?;
-        entry.summary.title = title;
-        Some(entry.summary.clone())
-    }
-
-    pub fn remove_all(&mut self) {
-        let ids: Vec<String> = self.entries.keys().cloned().collect();
-        for id in ids {
-            let _ = self.remove(&id);
-        }
-    }
 }
 
 #[derive(Serialize)]
@@ -1119,6 +1015,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/terminals/:id",
             delete(delete_terminal).patch(rename_terminal),
         )
+        .route("/api/terminals/:id/restart", post(restart_terminal))
         .route("/api/terminals/:id/history", get(terminal_history))
         .route("/api/terminals/:id/tail", get(terminal_tail))
         .route("/api/usage", get(usage_stats))
@@ -2898,6 +2795,46 @@ async fn rename_terminal(
     }
 }
 
+async fn restart_terminal(
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if is_session_read_only(&state, &session_token) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Read-only sessions cannot restart terminals",
+        )
+            .into_response();
+    }
+    if let Some(bound_id) = session_bound_terminal_id(&state, &session_token) {
+        if bound_id != id {
+            return (
+                StatusCode::FORBIDDEN,
+                "This session is bound to another terminal",
+            )
+                .into_response();
+        }
+    }
+
+    let restarted = match state
+        .terminals
+        .lock()
+        .unwrap()
+        .restart(&id, state.scrollback)
+    {
+        Ok(summary) => summary,
+        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+    };
+    match restarted {
+        Some(summary) => Json(summary).into_response(),
+        None => (StatusCode::NOT_FOUND, "Terminal not found").into_response(),
+    }
+}
+
 async fn terminal_history(
     headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
@@ -2919,11 +2856,10 @@ async fn terminal_history(
     let Some(session) = state.terminals.lock().unwrap().get_session(&id) else {
         return (StatusCode::NOT_FOUND, "Terminal not found").into_response();
     };
-    let page = {
-        let mut session = session.lock().unwrap();
-        session
-            .history
-            .page_before(query.before_seq, query.limit.unwrap_or(12))
+    let page = if query.after_seq.is_some() {
+        session::history_page_after(&session, query.after_seq, query.limit.unwrap_or(32))
+    } else {
+        session::history_page(&session, query.before_seq, query.limit.unwrap_or(12))
     };
     let chunks: Vec<TerminalHistoryChunkResponse> = page
         .chunks
@@ -2967,10 +2903,7 @@ async fn terminal_tail(
     let Some(session) = state.terminals.lock().unwrap().get_session(&id) else {
         return (StatusCode::NOT_FOUND, "Terminal not found").into_response();
     };
-    let tail = {
-        let mut session = session.lock().unwrap();
-        session.history.live_tail()
-    };
+    let tail = session::history_tail(&session);
     let payload = TerminalTailResponse {
         terminal_id: id,
         data_b64: STANDARD.encode(&tail.bytes),
@@ -3607,13 +3540,18 @@ async fn handle_socket(
     skip_scrollback: bool,
     terminal_id: String,
 ) {
-    let (tail, mut rx) = {
-        let mut s = terminal.lock().unwrap();
-        (s.history.live_tail(), s.tx.subscribe())
-    };
+    let (tail, lifecycle, mut rx, mut event_rx) = session::tail_and_subscribe(&terminal);
     if !skip_scrollback && !tail.bytes.is_empty() {
         count_tx(&state, tail.bytes.len() as u64);
         let _ = socket.send(Message::Binary(tail.bytes)).await;
+    }
+    if let Some(payload) = session_lifecycle_message(&lifecycle) {
+        count_tx(&state, payload.len() as u64);
+        let _ = socket.send(Message::Text(payload.into())).await;
+        let _ = socket.close().await;
+        let mut current = state.ws_connections.lock().unwrap();
+        *current = current.saturating_sub(1);
+        return;
     }
 
     let mut session_tick = tokio::time::interval(Duration::from_secs(15));
@@ -3650,6 +3588,21 @@ async fn handle_socket(
                     Err(_) => break,
                 }
             }
+            result = event_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let payload = session_event_message(&event);
+                        count_tx(&state, payload.len() as u64);
+                        if socket.send(Message::Text(payload.into())).await.is_err() {
+                            break;
+                        }
+                        let _ = socket.close().await;
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
             result = socket.recv() => {
                 match result {
                     Some(Ok(Message::Binary(data))) => {
@@ -3658,8 +3611,14 @@ async fn handle_socket(
                         }
                         touch_session_token_if_valid(&state, &session_token);
                         count_rx(&state, data.len() as u64);
-                        let mut s = terminal.lock().unwrap();
-                        let _ = s.pty_writer.write_all(&data);
+                        if session::write_input(&terminal, &data).is_err() {
+                            if let Some(payload) = session_lifecycle_message(&session::lifecycle(&terminal)) {
+                                count_tx(&state, payload.len() as u64);
+                                let _ = socket.send(Message::Text(payload.into())).await;
+                                let _ = socket.close().await;
+                                break;
+                            }
+                        }
                     }
                     Some(Ok(Message::Text(text))) => {
                         if is_session_read_only(&state, &session_token) {
@@ -3676,13 +3635,14 @@ async fn handle_socket(
                                 }
                                 let cols = msg["cols"].as_u64().unwrap_or(80) as u16;
                                 let rows = msg["rows"].as_u64().unwrap_or(24) as u16;
-                                let s = terminal.lock().unwrap();
-                                let _ = s.pty_master.resize(PtySize {
-                                    rows,
-                                    cols,
-                                    pixel_width: 0,
-                                    pixel_height: 0,
-                                });
+                                if session::resize_session(&terminal, rows, cols).is_err() {
+                                    if let Some(payload) = session_lifecycle_message(&session::lifecycle(&terminal)) {
+                                        count_tx(&state, payload.len() as u64);
+                                        let _ = socket.send(Message::Text(payload.into())).await;
+                                        let _ = socket.close().await;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -3695,6 +3655,33 @@ async fn handle_socket(
 
     let mut current = state.ws_connections.lock().unwrap();
     *current = current.saturating_sub(1);
+}
+
+fn session_lifecycle_message(lifecycle: &session::SessionLifecycle) -> Option<String> {
+    match lifecycle.status {
+        session::SessionStatus::Running => None,
+        session::SessionStatus::Exited => Some(
+            serde_json::json!({
+                "type": "terminal_exited",
+                "exit_code": lifecycle.exit_code,
+                "success": lifecycle.exit_success,
+            })
+            .to_string(),
+        ),
+        session::SessionStatus::Closed => {
+            Some(serde_json::json!({ "type": "terminal_closed" }).to_string())
+        }
+    }
+}
+
+fn session_event_message(event: &session::SessionEvent) -> String {
+    match event {
+        session::SessionEvent::Exited(lifecycle) => session_lifecycle_message(lifecycle)
+            .unwrap_or_else(|| serde_json::json!({ "type": "terminal_exited" }).to_string()),
+        session::SessionEvent::Closed => {
+            serde_json::json!({ "type": "terminal_closed" }).to_string()
+        }
+    }
 }
 
 pub fn check_token(token: &str, password: &str) -> bool {

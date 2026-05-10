@@ -1328,6 +1328,57 @@
       overflow: hidden;
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
     }
+    #terminal-lifecycle-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(120, 146, 166, 0.12);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015)),
+        rgba(255,255,255,0.02);
+    }
+    #terminal-lifecycle-banner.active {
+      display: flex;
+    }
+    #terminal-lifecycle-banner[data-status="exited"] {
+      background:
+        linear-gradient(180deg, rgba(255, 193, 7, 0.12), rgba(255, 193, 7, 0.04)),
+        rgba(255,255,255,0.02);
+    }
+    #terminal-lifecycle-banner[data-status="closed"] {
+      background:
+        linear-gradient(180deg, rgba(144, 164, 174, 0.14), rgba(144, 164, 174, 0.05)),
+        rgba(255,255,255,0.02);
+    }
+    .terminal-lifecycle-copy {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    #terminal-lifecycle-title {
+      color: #eef6fa;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    #terminal-lifecycle-text {
+      color: #a9bfcd;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    #terminal-lifecycle-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    #terminal-restart {
+      min-width: 132px;
+      padding-inline: 14px;
+    }
     #terminal {
       flex: 1;
       min-height: 0;
@@ -1677,6 +1728,16 @@
       border: 1px solid rgba(133, 194, 226, 0.24);
       background: rgba(77, 118, 140, 0.16);
       color: #d9edf8;
+    }
+    .tab-badge[data-status="exited"] {
+      border-color: rgba(255, 193, 7, 0.22);
+      background: rgba(255, 193, 7, 0.14);
+      color: #ffe8a3;
+    }
+    .tab-badge[data-status="closed"] {
+      border-color: rgba(144, 164, 174, 0.22);
+      background: rgba(144, 164, 174, 0.14);
+      color: #d5dde2;
     }
     .tab-badge.icon-only {
       min-width: 22px;
@@ -2264,6 +2325,15 @@
                 </button>
               </div>
             </div>
+            <div id="terminal-lifecycle-banner" aria-live="polite">
+              <div class="terminal-lifecycle-copy">
+                <span id="terminal-lifecycle-title">Terminal status</span>
+                <span id="terminal-lifecycle-text"></span>
+              </div>
+              <div id="terminal-lifecycle-actions">
+                <button id="terminal-restart" class="ghost" type="button">Restart terminal</button>
+              </div>
+            </div>
             <div id="terminal-history" aria-live="polite">
               <div id="terminal-history-status">Scrollback history</div>
               <pre id="terminal-history-content"></pre>
@@ -2460,6 +2530,7 @@
   <script src="/assets/vendor/xterm.min.js"></script>
   <script src="/assets/vendor/xterm-addon-fit.min.js"></script>
   <script src="/assets/vendor/xterm-addon-unicode-graphemes.min.js"></script>
+  <script src="/assets/terminal-runtime.js"></script>
   <script>
     const app = document.getElementById('app');
     const login = document.getElementById('login');
@@ -2571,6 +2642,10 @@
     const termsEl = document.getElementById('terms');
     const terminalWorkspaceEl = document.getElementById('terminal-workspace');
     const terminalMainEl = document.getElementById('terminal-main');
+    const terminalLifecycleBannerEl = document.getElementById('terminal-lifecycle-banner');
+    const terminalLifecycleTitleEl = document.getElementById('terminal-lifecycle-title');
+    const terminalLifecycleTextEl = document.getElementById('terminal-lifecycle-text');
+    const terminalRestartBtn = document.getElementById('terminal-restart');
     const previewResizeHandleEl = document.getElementById('preview-resize-handle');
     const terminalEl = document.getElementById('terminal');
     const agentLauncherEl = document.getElementById('agent-launcher');
@@ -2595,6 +2670,7 @@
     let ws;
     let retries = 0;
     let wsConnectionId = 0;
+    let terminalRuntime = null;
     let term;
     let fitAddon;
     let unicodeGraphemesAddon = null;
@@ -2622,6 +2698,7 @@
     let terminalRecoveryTimers = [];
     let terminalResizeObserver = null;
     let publicStatusLoaded = false;
+    const restartingTerminals = new Set();
     const fileMeta = new Map();
     const selectedPaths = new Set();
     const stagedUploads = [];
@@ -2631,7 +2708,7 @@
     const CACHE_PREFIX = 'rwtty:file:';
     const TERM_CACHE_PREFIX = 'cw:term:';
     const AGENT_CHAT_PATH = '/assets/agent.html';
-    const TERM_CACHE_MAX_CHARS = 16000;
+    const TERM_CACHE_MAX_CHARS = 96000;
     const AGENT_DB_NAME = 'codewebway-agent-sessions';
     const AGENT_DB_VERSION = 1;
     const AGENT_KIND = 'agent_chat';
@@ -2644,7 +2721,7 @@
     const terminalCache = new Map();
     const terminalHistoryState = new Map();
     const TERMINAL_HISTORY_PAGE_LIMIT = 1;
-    const TERMINAL_REPLAY_HISTORY_CHUNKS = 1;
+    const TERMINAL_REPLAY_HISTORY_CHUNKS = 4;
     const TERMINAL_HISTORY_PAGE_ROWS = 300;
     const TERMINAL_HISTORY_MAX_LOADED_ROWS = 900;
     const TERMINAL_HISTORY_MAX_OLDER_ROWS = 600;
@@ -2723,6 +2800,64 @@
     function setStatus(text, color) {
       statusEl.textContent = '● ' + text;
       statusEl.style.color = color || '#c8c8c8';
+    }
+
+    function terminalStatusValue(item) {
+      return item?.status || 'running';
+    }
+
+    function isTerminalRunning(item) {
+      return terminalStatusValue(item) === 'running';
+    }
+
+    function formatTerminalStatusBadge(item) {
+      const status = terminalStatusValue(item);
+      if (status === 'exited') return 'Exited';
+      if (status === 'closed') return 'Closed';
+      return '';
+    }
+
+    function formatTerminalStatusLine(item) {
+      if (!item) return 'Terminal unavailable';
+      const status = terminalStatusValue(item);
+      if (status === 'exited') {
+        const code = Number.isInteger(item.exit_code) ? ` (exit ${item.exit_code})` : '';
+        return `Terminal exited${code}`;
+      }
+      if (status === 'closed') {
+        return 'Terminal was closed';
+      }
+      return `Connected: ${item.id}`;
+    }
+
+    function updateTerminalSummaryState(terminalId, patch = {}) {
+      const index = terminals.findIndex((item) => item.id === terminalId);
+      if (index < 0) return null;
+      terminals[index] = { ...terminals[index], ...patch };
+      return terminals[index];
+    }
+
+    function syncTerminalLifecycleBanner() {
+      const item = getTerminalSummaryById(activeTerminalId);
+      const session = getAgentSession(activeTerminalId);
+      const hide = !item || isChatAgentSession(session) || isTerminalRunning(item);
+      terminalLifecycleBannerEl.classList.toggle('active', !hide);
+      if (hide) {
+        terminalLifecycleBannerEl.dataset.status = '';
+        terminalLifecycleTextEl.textContent = '';
+        return;
+      }
+      const status = terminalStatusValue(item);
+      terminalLifecycleBannerEl.dataset.status = status;
+      terminalLifecycleTitleEl.textContent = status === 'exited' ? 'Terminal exited' : 'Terminal closed';
+      if (status === 'exited') {
+        const code = Number.isInteger(item.exit_code) ? ` with code ${item.exit_code}` : '';
+        terminalLifecycleTextEl.textContent = `${item.title} stopped${code}. You can review the last output below or restart this terminal.`;
+      } else {
+        terminalLifecycleTextEl.textContent = `${item.title} is no longer attached to a live PTY. Restart it to continue working in the same tab.`;
+      }
+      terminalRestartBtn.disabled = sessionAccess.readOnly === true || restartingTerminals.has(item.id);
+      terminalRestartBtn.textContent = restartingTerminals.has(item.id) ? 'Restarting…' : 'Restart terminal';
     }
 
     function shouldShowInitialStartupBanner(item) {
@@ -3536,6 +3671,7 @@
       if (bound && activeTerminalId && activeTerminalId !== bound) {
         connectTerminal(bound, { skipScrollback: false });
       }
+      syncTerminalLifecycleBanner();
       updateEditorActionState();
     }
 
@@ -4949,6 +5085,7 @@
 
     function activateTerminalTab(terminalId, options = {}) {
       const session = getAgentSession(terminalId);
+      const summary = getTerminalSummaryById(terminalId);
       if (session && !isChatAgentSession(session) && session.phase === 'launch') {
         openAgentLauncher(terminalId);
         return;
@@ -4966,6 +5103,19 @@
         if (term) {
           term.write(TERMINAL_RESET_SEQUENCE);
         }
+        syncTerminalLifecycleBanner();
+        return;
+      }
+      if (summary && !isTerminalRunning(summary)) {
+        closeSocket();
+        if (term) {
+          term.write(TERMINAL_RESET_SEQUENCE);
+          resetTerminalHistoryWindowForReplay(terminalId);
+          writeTerminalCache(terminalId, '');
+          void replayRecentTerminalTail(terminalId, null, { write: true });
+        }
+        setStatus(formatTerminalStatusLine(summary), summary.status === 'exited' ? '#ffb74d' : '#b0bec5');
+        syncTerminalLifecycleBanner();
         return;
       }
       connectTerminal(terminalId, { skipScrollback: false, ...options });
@@ -5512,431 +5662,31 @@
     }
 
     function closeSocket() {
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        ws.close();
-      }
-      ws = null;
+      return terminalRuntime.closeSocket();
     }
 
     function resetTerminalHistoryView(terminalId) {
-      terminalHistoryState.set(terminalId, {
-        beforeSeq: null,
-        loading: false,
-        hasMore: true,
-        chunks: [],
-        tailText: '',
-        bannerText: '',
-        trimmed: false,
-        tailBeforeSeq: null,
-        lastYdisp: 0
-      });
-      terminalHistoryEl.classList.remove('open');
-      terminalHistoryContentEl.textContent = '';
-      terminalHistoryStatusEl.textContent = 'Scrollback history';
+      return terminalRuntime.resetTerminalHistoryView(terminalId);
     }
 
     function resetTerminalHistoryWindowForReplay(terminalId) {
-      const state = terminalHistoryState.get(terminalId);
-      if (!state) return;
-      state.beforeSeq = null;
-      state.chunks = [];
-      state.tailText = '';
-      state.tailBeforeSeq = null;
-      state.hasMore = true;
-      state.trimmed = false;
-      state.lastYdisp = 0;
-    }
-
-    function countTerminalRows(text, cols = term?.cols || 80) {
-      if (!text) return 0;
-      let rows = 1;
-      let col = 0;
-      let escape = '';
-      const width = Math.max(1, Number(cols) || 80);
-      for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-        if (escape) {
-          escape += ch;
-          if (
-            (escape.startsWith('\x1b[') && /[\x40-\x7e]$/.test(escape))
-            || (escape.startsWith('\x1b]') && (ch === '\x07' || escape.endsWith('\x1b\\')))
-            || (!escape.startsWith('\x1b[') && !escape.startsWith('\x1b]') && escape.length >= 2)
-          ) {
-            escape = '';
-          }
-          continue;
-        }
-        if (ch === '\x1b') {
-          escape = ch;
-          continue;
-        }
-        if (ch === '\r') {
-          col = 0;
-          continue;
-        }
-        if (ch === '\n') {
-          rows++;
-          col = 0;
-          continue;
-        }
-        if (ch === '\b') {
-          col = Math.max(0, col - 1);
-          continue;
-        }
-        if (ch === '\t') {
-          col += 8 - (col % 8);
-        } else if (ch >= ' ') {
-          col++;
-        }
-        while (col >= width) {
-          rows++;
-          col -= width;
-        }
-      }
-      return rows;
-    }
-
-    function trimTerminalTextToRows(text, maxRows, side = 'tail') {
-      if (!text || !Number.isFinite(maxRows) || maxRows <= 0) return '';
-      const width = Math.max(1, Number(term?.cols) || 80);
-      const markers = [0];
-      let row = 0;
-      let col = 0;
-      let escape = '';
-      for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-        if (escape) {
-          escape += ch;
-          if (
-            (escape.startsWith('\x1b[') && /[\x40-\x7e]$/.test(escape))
-            || (escape.startsWith('\x1b]') && (ch === '\x07' || escape.endsWith('\x1b\\')))
-            || (!escape.startsWith('\x1b[') && !escape.startsWith('\x1b]') && escape.length >= 2)
-          ) {
-            escape = '';
-          }
-          continue;
-        }
-        if (ch === '\x1b') {
-          escape = ch;
-          continue;
-        }
-        if (ch === '\r') {
-          col = 0;
-          continue;
-        }
-        if (ch === '\n') {
-          row++;
-          col = 0;
-          markers[row] = i + 1;
-          continue;
-        }
-        if (ch === '\b') {
-          col = Math.max(0, col - 1);
-          continue;
-        }
-        if (ch === '\t') {
-          col += 8 - (col % 8);
-        } else if (ch >= ' ') {
-          col++;
-        }
-        while (col >= width) {
-          row++;
-          col -= width;
-          markers[row] = i + 1;
-        }
-      }
-      const totalRows = row + 1;
-      if (totalRows <= maxRows) return stripLeadingAnsiReplayFragment(text);
-      if (side === 'head') {
-        return stripLeadingAnsiReplayFragment(text.slice(0, markers[maxRows] ?? text.length));
-      }
-      const startRow = Math.max(0, totalRows - maxRows);
-      return stripLeadingAnsiReplayFragment(text.slice(markers[startRow] ?? 0));
-    }
-
-    function makeTrimmedHistoryChunk(chunk, side = 'tail') {
-      if (!chunk || typeof chunk.data_b64 !== 'string') return chunk;
-      const decoded = textDecoder.decode(b64ToBytes(chunk.data_b64));
-      const text = trimTerminalTextToRows(decoded, TERMINAL_HISTORY_PAGE_ROWS, side);
-      const bytes = textEncoder.encode(text);
-      return { ...chunk, data_b64: bytesToB64(bytes), byte_len: bytes.length };
-    }
-
-    function historyChunksRows(chunks) {
-      return (chunks || []).reduce((total, chunk) => {
-        if (!chunk || typeof chunk.data_b64 !== 'string') return total;
-        return total + countTerminalRows(textDecoder.decode(b64ToBytes(chunk.data_b64)));
-      }, 0);
-    }
-
-    function trimOlderTerminalHistoryWindow(state) {
-      if (!state || !Array.isArray(state.chunks)) return;
-      let olderRows = historyChunksRows(state.chunks);
-      while (state.chunks.length > 0 && olderRows > TERMINAL_HISTORY_MAX_OLDER_ROWS) {
-        const removed = state.chunks.shift();
-        olderRows -= historyChunksRows([removed]);
-      }
-      const tailRows = countTerminalRows(state.tailText || '');
-      while (
-        state.chunks.length > 0
-        && olderRows + tailRows > TERMINAL_HISTORY_MAX_LOADED_ROWS
-      ) {
-        const removed = state.chunks.shift();
-        olderRows -= historyChunksRows([removed]);
-      }
-      state.beforeSeq = state.chunks.length > 0
-        ? state.chunks[0].seq
-        : state.tailBeforeSeq;
-    }
-
-    function applyTerminalHistoryMetadata(terminalId, body) {
-      const state = terminalHistoryState.get(terminalId);
-      if (!state || !body) return;
-      const chunks = Array.isArray(body.chunks) ? body.chunks : [];
-      state.beforeSeq = chunks.length > 0
-        ? chunks[0].seq
-        : Number(body.next_seq || 0);
-      state.tailBeforeSeq = state.beforeSeq;
-      state.hasMore = Boolean(body.has_more);
-      state.trimmed = Boolean(body.trimmed);
-    }
-
-    function decodeHistoryChunks(chunks) {
-      return (chunks || [])
-        .map((chunk) => textDecoder.decode(b64ToBytes(chunk.data_b64)))
-        .join('');
-    }
-
-    function stripLeadingAnsiReplayFragment(text) {
-      if (!text) return '';
-      // History chunks can begin in the middle of a CSI sequence. Drop the visible
-      // tail, for example "36;24H", before replaying the bounded window.
-      return text.replace(/^(?:\[?\??[\d;]{1,96}[A-Za-z@`~]|\][^\x07]*(?:\x07|\x1b\\))/, '');
+      return terminalRuntime.resetTerminalHistoryWindowForReplay(terminalId);
     }
 
     function maybeLoadOlderTerminalHistoryFromTop() {
-      if (!activeTerminalId || !term) return;
-      const state = terminalHistoryState.get(activeTerminalId);
-      if (!state || state.loading || !state.hasMore) return;
-      const viewportY = Number(term.buffer?.active?.viewportY ?? state.lastYdisp ?? 0);
-      if (viewportY <= 2) {
-        loadOlderTerminalHistory(activeTerminalId);
-      }
+      return terminalRuntime.maybeLoadOlderTerminalHistoryFromTop();
     }
 
     async function replayRecentTerminalTail(terminalId, connectionId, options = {}) {
-      const qs = new URLSearchParams({ limit: String(TERMINAL_REPLAY_HISTORY_CHUNKS) });
-      const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`);
-      if (connectionId !== wsConnectionId || !res.ok) return '';
-      const body = await res.json();
-      applyTerminalHistoryMetadata(terminalId, body);
-      const text = trimTerminalTextToRows(decodeHistoryChunks(body.chunks), TERMINAL_HISTORY_PAGE_ROWS, 'tail');
-      const state = terminalHistoryState.get(terminalId);
-      if (state) {
-        state.tailText = text || '';
-        trimOlderTerminalHistoryWindow(state);
-      }
-      if (text && options.write !== false) {
-        term.write(text);
-      }
-      return text;
-    }
-
-    function rebuildTerminalBuffer(terminalId) {
-      const state = terminalHistoryState.get(terminalId);
-      if (!state) return;
-      trimOlderTerminalHistoryWindow(state);
-      const olderText = stripLeadingAnsiReplayFragment(decodeHistoryChunks(state.chunks));
-      const liveText = readTerminalCache(terminalId);
-      term.write(TERMINAL_RESET_SEQUENCE);
-      term.write(`${state.bannerText || ''}${olderText}${state.tailText || ''}${liveText || ''}`);
-      terminalHistoryStatusEl.textContent = state.hasMore
-        ? 'Older scrollback loaded on demand'
-        : (state.trimmed ? 'Oldest retained scrollback loaded; earlier output was trimmed' : 'Start of retained scrollback');
+      return terminalRuntime.replayRecentTerminalTail(terminalId, connectionId, options);
     }
 
     async function loadOlderTerminalHistory(terminalId) {
-      let state = terminalHistoryState.get(terminalId);
-      if (!state) {
-        state = { beforeSeq: null, loading: false, hasMore: true, chunks: [], tailText: '', bannerText: '', trimmed: false, tailBeforeSeq: null, lastYdisp: 0 };
-        terminalHistoryState.set(terminalId, state);
-      }
-      if (state.loading || !state.hasMore) return;
-      state.loading = true;
-      terminalHistoryStatusEl.textContent = 'Loading older scrollback...';
-      try {
-        const qs = new URLSearchParams({ limit: String(TERMINAL_HISTORY_PAGE_LIMIT) });
-        if (state.beforeSeq !== null && state.beforeSeq !== undefined) {
-          qs.set('before_seq', String(state.beforeSeq));
-        }
-        const res = await api(`/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`);
-        if (!res.ok) return;
-        const body = await res.json();
-        if (!body.chunks || body.chunks.length === 0) {
-          state.hasMore = false;
-          state.trimmed = Boolean(body.trimmed);
-          rebuildTerminalBuffer(terminalId);
-          return;
-        }
-        const normalizedChunks = body.chunks.map((chunk) => makeTrimmedHistoryChunk(chunk, 'tail'));
-        state.beforeSeq = body.chunks[0].seq;
-        state.hasMore = Boolean(body.has_more);
-        state.trimmed = Boolean(body.trimmed);
-        state.chunks = [...normalizedChunks, ...state.chunks];
-        trimOlderTerminalHistoryWindow(state);
-        rebuildTerminalBuffer(terminalId);
-      } catch {
-        terminalHistoryStatusEl.textContent = 'Cannot load older scrollback';
-      } finally {
-        state.loading = false;
-      }
+      return terminalRuntime.loadOlderTerminalHistory(terminalId);
     }
 
     function connectTerminal(terminalId, options = {}) {
-      if (sessionAccess.boundTerminalId && terminalId !== sessionAccess.boundTerminalId) {
-        alert('This session is bound to another terminal tab.');
-        return;
-      }
-      const switchingTerminal = terminalId !== activeTerminalId;
-      activeTerminalId = terminalId;
-      renderTerminalTabs();
-      renderAgentSurface();
-      if (!terminalHistoryState.has(terminalId)) {
-        resetTerminalHistoryView(terminalId);
-      }
-      if (term && switchingTerminal) {
-        term.write(TERMINAL_RESET_SEQUENCE);
-      }
-
-      const shouldSkipScrollback = true;
-      const shouldReplayRecentTail = options.replayRecentTail !== false && !options.preserveBuffer;
-      const agentSession = getAgentSession(terminalId);
-      const preserveReplayPrefix = Boolean(agentSession && !options.freshAgentLaunch && shouldReplayRecentTail);
-      if (term && shouldReplayRecentTail) {
-        term.write(TERMINAL_RESET_SEQUENCE);
-        resetTerminalHistoryWindowForReplay(terminalId);
-        if (preserveReplayPrefix) {
-          agentSession.replayPrefix = readTerminalCache(terminalId);
-        } else {
-          writeTerminalCache(terminalId, '');
-          if (agentSession) {
-            agentSession.replayPrefix = '';
-          }
-        }
-      }
-      closeSocket();
-
-      const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?terminal_id=${encodeURIComponent(terminalId)}&skip_scrollback=${shouldSkipScrollback ? 'true' : 'false'}`;
-      const connectionId = ++wsConnectionId;
-      ws = new WebSocket(wsUrl);
-      const localWs = ws;
-      ws.binaryType = 'arraybuffer';
-      let replayReady = !shouldReplayRecentTail;
-      const queuedLiveBytes = [];
-
-      const writeLiveBytes = (bytes) => {
-        const chunkText = textDecoder.decode(bytes);
-        if (isAgentTerminal(terminalId)) {
-          const transcriptText = consumeReplayPrefix(terminalId, chunkText);
-          if (transcriptText) {
-            appendTerminalCache(terminalId, transcriptText);
-            captureAgentOutput(terminalId, transcriptText);
-          }
-        } else {
-          appendTerminalCache(terminalId, chunkText);
-        }
-        term.write(bytes);
-      };
-
-      ws.onopen = async () => {
-        if (connectionId !== wsConnectionId) return;
-        retries = 0;
-        setStatus(`Connected: ${terminalId}`, '#4caf50');
-        if (shouldReplayRecentTail) {
-          const shouldShowStartupBanner = Boolean(options.startupBanner || pendingStartupBanners.has(terminalId));
-          let replayText = '';
-          try {
-            replayText = await replayRecentTerminalTail(terminalId, connectionId, {
-              write: !shouldShowStartupBanner
-            });
-          } catch {
-            // Live output should continue even if bounded replay metadata is unavailable.
-          }
-          replayReady = true;
-          if (shouldShowStartupBanner) {
-            pendingStartupBanners.delete(terminalId);
-            const state = terminalHistoryState.get(terminalId);
-            if (state) {
-              state.bannerText = STARTUP_BANNER;
-            }
-            term.write(TERMINAL_RESET_SEQUENCE);
-            term.write(STARTUP_BANNER);
-            if (replayText) {
-              term.write(replayText);
-            }
-          }
-          while (queuedLiveBytes.length > 0) {
-            writeLiveBytes(queuedLiveBytes.shift());
-          }
-        }
-        if (options.initialInput) {
-          ws.send(textEncoder.encode(options.initialInput));
-        }
-        scheduleTerminalRecovery([0, 120]);
-      };
-
-      ws.onmessage = (e) => {
-        if (connectionId !== wsConnectionId) return;
-        if (typeof e.data === 'string') {
-          const msg = JSON.parse(e.data);
-          if (msg.type === 'session_expired') {
-            showLogin('Session expired. Please login again.');
-          }
-        } else {
-          const bytes = new Uint8Array(e.data);
-          if (!replayReady) {
-            queuedLiveBytes.push(bytes);
-            return;
-          }
-          writeLiveBytes(bytes);
-        }
-      };
-
-      ws.onclose = async () => {
-        if (connectionId !== wsConnectionId) return;
-        if (ws !== localWs) {
-          return;
-        }
-        if (terminalId !== activeTerminalId) {
-          return;
-        }
-        if (loggingOut) {
-          const notice = logoutNotice || 'Signed out.';
-          loggingOut = false;
-          logoutNotice = '';
-          await showLogin(notice);
-          return;
-        }
-
-        const activeSession = await hasActiveSession();
-        if (activeSession === false) {
-          await showLogin('Session expired. Please login again.');
-          return;
-        }
-
-        retries++;
-        const delay = Math.min(5000, 600 * retries);
-        setStatus(`Reconnecting (${retries})...`, '#ff9800');
-        setTimeout(() => connectTerminal(terminalId, {
-          replayRecentTail: false,
-          preserveBuffer: true
-        }), delay);
-      };
-
-      ws.onerror = () => {
-        if (connectionId !== wsConnectionId) return;
-        ws.close();
-      };
+      return terminalRuntime.connectTerminal(terminalId, options);
     }
 
     async function authorize(password, pin) {
@@ -6422,6 +6172,49 @@
       renderAgentSurface();
     }
 
+    async function restartTerminal(id, options = {}) {
+      if (!id) return null;
+      if (sessionAccess.readOnly) {
+        alert('This session cannot restart terminals.');
+        return null;
+      }
+      restartingTerminals.add(id);
+      syncTerminalLifecycleBanner();
+      try {
+        const res = await api(`/api/terminals/${encodeURIComponent(id)}/restart`, { method: 'POST' });
+        if (!res.ok) {
+          const msg = await res.text();
+          alert(msg || 'Cannot restart terminal');
+          return null;
+        }
+        const item = await res.json();
+        const idx = terminals.findIndex((terminal) => terminal.id === id);
+        if (idx >= 0) {
+          terminals[idx] = item;
+        } else {
+          terminals.push(item);
+        }
+        try {
+          localStorage.removeItem(termCacheKey(id));
+        } catch {
+          // ignore local cache failures
+        }
+        resetTerminalHistoryView(id);
+        if (activeTerminalId === id && term) {
+          term.write(TERMINAL_RESET_SEQUENCE);
+        }
+        renderTerminalTabs();
+        syncTerminalLifecycleBanner();
+        if (activeTerminalId === id || options.activate === true) {
+          connectTerminal(id, { replayRecentTail: true, preserveBuffer: false });
+        }
+        return item;
+      } finally {
+        restartingTerminals.delete(id);
+        syncTerminalLifecycleBanner();
+      }
+    }
+
     function moveTerminalTab(index, delta) {
       const next = index + delta;
       if (index < 0 || next < 0 || index >= terminals.length || next >= terminals.length) return;
@@ -6516,6 +6309,13 @@
           badge.title = 'Agent session';
           badge.setAttribute('aria-hidden', 'true');
           tab.appendChild(badge);
+        } else if (!isTerminalRunning(item)) {
+          const badge = document.createElement('span');
+          badge.className = 'tab-badge';
+          badge.dataset.status = terminalStatusValue(item);
+          badge.textContent = formatTerminalStatusBadge(item);
+          badge.title = formatTerminalStatusLine(item);
+          tab.appendChild(badge);
         }
 
         const rightBtn = document.createElement('button');
@@ -6553,6 +6353,7 @@
         tab.appendChild(closeBtn);
         tabScroll.insertBefore(tab, newTabBtn);
       });
+      syncTerminalLifecycleBanner();
     }
 
     async function fetchTree(path) {
@@ -7061,6 +6862,58 @@
       syncTreeActiveState();
     }
 
+    terminalRuntime = new window.CodeWebwayTerminalRuntime({
+      api,
+      terminalHistoryState,
+      terminalHistoryEl,
+      terminalHistoryContentEl,
+      terminalHistoryStatusEl,
+      TERMINAL_REPLAY_HISTORY_CHUNKS,
+      TERMINAL_HISTORY_PAGE_ROWS,
+      TERMINAL_HISTORY_MAX_OLDER_ROWS,
+      TERMINAL_HISTORY_MAX_LOADED_ROWS,
+      TERMINAL_RESET_SEQUENCE,
+      STARTUP_BANNER,
+      pendingStartupBanners,
+      restartingTerminals,
+      textEncoder,
+      textDecoder,
+      b64ToBytes,
+      bytesToB64,
+      readTerminalCache,
+      writeTerminalCache,
+      appendTerminalCache,
+      consumeReplayPrefix,
+      captureAgentOutput,
+      renderTerminalTabs,
+      renderAgentSurface,
+      updateTerminalSummaryState,
+      setStatus,
+      formatTerminalStatusLine,
+      getTerminalSummaryById,
+      getAgentSession,
+      isAgentTerminal,
+      scheduleTerminalRecovery,
+      syncTerminalLifecycleBanner,
+      showLogin,
+      hasActiveSession,
+      getTerm: () => term,
+      getWs: () => ws,
+      setWs: (value) => { ws = value; },
+      getWsConnectionId: () => wsConnectionId,
+      nextWsConnectionId: () => (++wsConnectionId),
+      getActiveTerminalId: () => activeTerminalId,
+      setActiveTerminalId: (value) => { activeTerminalId = value; },
+      getSessionAccess: () => sessionAccess,
+      getLoggingState: () => ({ loggingOut, logoutNotice }),
+      clearLoggingState: () => {
+        loggingOut = false;
+        logoutNotice = '';
+      },
+      setRetries: (value) => { retries = value; },
+      bumpRetries: () => (++retries),
+    });
+
     async function bootstrapWorkspace() {
       initTerminal();
       let terminalOnly = false;
@@ -7239,6 +7092,10 @@
     bindPinKeypad(pinModalKeypad, pinModalInput);
 
     newTabBtn.addEventListener('click', () => createTerminal(currentNavDir || '.'));
+    terminalRestartBtn.addEventListener('click', async () => {
+      if (!activeTerminalId) return;
+      await restartTerminal(activeTerminalId, { activate: true });
+    });
     newAgentBtn.addEventListener('click', () => createAgentTerminal(currentNavDir || '.'));
 
     toggleFilesBtn.addEventListener('click', () => {

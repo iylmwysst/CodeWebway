@@ -4,6 +4,7 @@ mod fleet;
 mod public_exposure;
 mod server;
 mod session;
+mod terminal;
 
 use std::io::{self, BufRead as _, IsTerminal, Write as _};
 use std::path::PathBuf;
@@ -18,7 +19,7 @@ use rand::Rng;
 use server::AppState;
 use server::AuthAttemptTracker;
 use server::TempLinkScope;
-use server::TerminalManager;
+use terminal::TerminalManager;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
