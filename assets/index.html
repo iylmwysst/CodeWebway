@@ -1370,6 +1370,21 @@
     #terms.agent-mode #terminal-main {
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
+    #agent-chat-shell {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+      background: #ebe8df;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    #agent-chat-frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #ebe8df;
+    }
     #agent-launcher,
     #agent-inspect {
       display: none;
@@ -1394,6 +1409,18 @@
     }
     #terms.agent-launch #terminal,
     #terms.agent-inspect #terminal {
+      display: none;
+    }
+    #terms.agent-chat #agent-chat-shell {
+      display: flex;
+    }
+    #terms.agent-chat #terminal,
+    #terms.agent-chat #terminal-history,
+    #terms.agent-chat #preview-dock,
+    #terms.agent-chat #preview-resize-handle,
+    #terms.agent-chat #agent-launcher,
+    #terms.agent-chat #agent-inspect,
+    #terms.agent-chat #agent-rounds {
       display: none;
     }
     .agent-launcher-card,
@@ -2268,6 +2295,14 @@
               <pre id="preview">Select a file to preview</pre>
               <textarea id="editor" spellcheck="false"></textarea>
             </div>
+            <div id="agent-chat-shell">
+              <iframe
+                id="agent-chat-frame"
+                title="Codex agent chat"
+                loading="lazy"
+                referrerpolicy="same-origin"
+              ></iframe>
+            </div>
             <div id="agent-launcher">
               <div class="agent-launcher-card">
                 <div class="stack">
@@ -2485,6 +2520,8 @@
     const tabScroll = document.getElementById('tab-scroll');
     const treeEl = document.getElementById('tree');
     const previewDockEl = document.getElementById('preview-dock');
+    const agentChatShellEl = document.getElementById('agent-chat-shell');
+    const agentChatFrameEl = document.getElementById('agent-chat-frame');
     const previewTabsEl = document.getElementById('preview-tabs');
     const previewEl = document.getElementById('preview');
     const editorEl = document.getElementById('editor');
@@ -2593,10 +2630,11 @@
     const FILE_EDIT_LIMIT_BYTES = 512 * 1024;
     const CACHE_PREFIX = 'rwtty:file:';
     const TERM_CACHE_PREFIX = 'cw:term:';
+    const AGENT_CHAT_PATH = '/assets/agent.html';
     const TERM_CACHE_MAX_CHARS = 16000;
     const AGENT_DB_NAME = 'codewebway-agent-sessions';
     const AGENT_DB_VERSION = 1;
-    const AGENT_KIND = 'agent';
+    const AGENT_KIND = 'agent_chat';
     const AGENT_SESSION_STORE = 'agent_sessions';
     const AGENT_ROUND_STORE = 'agent_rounds';
     const AGENT_OUTPUT_LIMIT_CHARS = 160000;
@@ -3698,6 +3736,10 @@
       return terminals.find((item) => item.id === terminalId) || null;
     }
 
+    function isLocalAgentTab(item) {
+      return Boolean(item && item.shell === 'codex-agent');
+    }
+
     function isAgentTerminal(terminalId) {
       return agentSessions.has(terminalId);
     }
@@ -3706,13 +3748,43 @@
       return agentSessions.get(terminalId) || null;
     }
 
+    function isChatAgentSession(session) {
+      return Boolean(session && session.kind === AGENT_KIND);
+    }
+
+    function makeAgentTerminalId() {
+      return `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function buildAgentChatUrl(session) {
+      const params = new URLSearchParams({
+        baseUrl: location.origin,
+        apiKey: 'codewebway-session',
+        sessionId: session.terminalId,
+        cwd: session.cwd || '.',
+        stream: '0',
+      });
+      return `${AGENT_CHAT_PATH}?${params.toString()}`;
+    }
+
+    function syncAgentChatFrame(session) {
+      if (!agentChatFrameEl || !isChatAgentSession(session)) return;
+      const nextSrc = buildAgentChatUrl(session);
+      if (agentChatFrameEl.dataset.src !== nextSrc) {
+        agentChatFrameEl.dataset.src = nextSrc;
+        agentChatFrameEl.src = nextSrc;
+      }
+    }
+
     function createAgentSessionRecord(terminalId, overrides = {}) {
       const terminalItem = getTerminalSummaryById(terminalId);
       return {
         terminalId,
         kind: AGENT_KIND,
-        phase: 'launch',
+        phase: 'chat',
         cwd: terminalItem?.cwd || '.',
+        title: terminalItem?.title || folderLabelFromPath(terminalItem?.cwd || '.'),
+        shell: 'codex-agent',
         launchCommand: '',
         startedAt: null,
         endedAt: null,
@@ -3795,6 +3867,8 @@
         kind: session.kind,
         phase: session.phase,
         cwd: session.cwd,
+        title: session.title || folderLabelFromPath(session.cwd || '.'),
+        shell: session.shell || 'codex-agent',
         launchCommand: session.launchCommand,
         startedAt: session.startedAt,
         endedAt: session.endedAt,
@@ -4614,7 +4688,18 @@
       agentInputComposer.clear();
 
       for (const row of sessionRows) {
-        if (!ids.has(row.terminalId)) {
+        if (row.kind === AGENT_KIND) {
+          const restoredTab = {
+            id: row.terminalId,
+            title: row.title || folderLabelFromPath(row.cwd || '.'),
+            cwd: row.cwd || '.',
+            shell: row.shell || 'codex-agent'
+          };
+          terminals.push(restoredTab);
+          ids.add(row.terminalId);
+        }
+
+        if (row.kind !== AGENT_KIND && !ids.has(row.terminalId)) {
           staleIds.add(row.terminalId);
           continue;
         }
@@ -4626,6 +4711,10 @@
       }
 
       for (const row of roundRows) {
+        const session = agentSessions.get(row.terminalId);
+        if (session && session.kind === AGENT_KIND) {
+          continue;
+        }
         if (!ids.has(row.terminalId)) {
           staleIds.add(row.terminalId);
           continue;
@@ -4776,15 +4865,25 @@
 
     function renderAgentSurface() {
       const session = getAgentSession(activeTerminalId);
-      termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect');
+      termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect', 'agent-chat');
       keyStripEl.style.display = '';
 
       if (!session) {
         agentLaunchErrorEl.textContent = '';
+        if (agentChatFrameEl) {
+          agentChatFrameEl.removeAttribute('src');
+          delete agentChatFrameEl.dataset.src;
+        }
         return;
       }
 
       termsEl.classList.add('agent-mode');
+      if (isChatAgentSession(session)) {
+        termsEl.classList.add('agent-chat');
+        keyStripEl.style.display = 'none';
+        syncAgentChatFrame(session);
+        return;
+      }
       if (session.phase === 'launch') {
         termsEl.classList.add('agent-launch');
         keyStripEl.style.display = 'none';
@@ -4802,20 +4901,18 @@
 
     function openAgentLauncher(terminalId) {
       const session = ensureAgentSession(terminalId, {
-        phase: 'launch',
+        phase: 'chat',
         cwd: getTerminalSummaryById(terminalId)?.cwd || '.',
         selectedRoundId: null
       });
       activeTerminalId = terminalId;
       closeSocket();
-      if (term) term.clear();
+      if (term) {
+        term.write(TERMINAL_RESET_SEQUENCE);
+      }
       renderTerminalTabs();
       renderAgentSurface();
       setStatus(`Agent ready: ${terminalId}`, '#7fb3c9');
-      requestAnimationFrame(() => {
-        agentLaunchCommandEl.focus();
-        agentLaunchCommandEl.setSelectionRange(agentLaunchCommandEl.value.length, agentLaunchCommandEl.value.length);
-      });
       persistAgentSession(session.terminalId);
     }
 
@@ -4832,6 +4929,11 @@
     function returnAgentToLive(terminalId) {
       const session = getAgentSession(terminalId);
       if (!session) return;
+      if (isChatAgentSession(session)) {
+        renderAgentSurface();
+        persistAgentSession(terminalId);
+        return;
+      }
       session.phase = 'live';
       session.selectedRoundId = null;
       session.liveUnreadCount = 0;
@@ -4847,7 +4949,7 @@
 
     function activateTerminalTab(terminalId, options = {}) {
       const session = getAgentSession(terminalId);
-      if (session && session.phase === 'launch') {
+      if (session && !isChatAgentSession(session) && session.phase === 'launch') {
         openAgentLauncher(terminalId);
         return;
       }
@@ -4857,24 +4959,41 @@
       if (session) {
         renderAgentSurface();
       } else {
-        termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect');
+        termsEl.classList.remove('agent-mode', 'agent-launch', 'agent-inspect', 'agent-chat');
+      }
+      if (isChatAgentSession(session)) {
+        closeSocket();
+        if (term) {
+          term.write(TERMINAL_RESET_SEQUENCE);
+        }
+        return;
       }
       connectTerminal(terminalId, { skipScrollback: false, ...options });
     }
 
     async function createAgentTerminal(cwd) {
-      const created = await createTerminal(cwd, {
+      if (sessionAccess.readOnly || sessionAccess.boundTerminalId) {
+        alert('This session cannot create agent tabs.');
+        return null;
+      }
+      const id = makeAgentTerminalId();
+      const created = {
+        id,
         title: folderLabelFromPath(cwd || currentNavDir || '.'),
-        autoConnect: false
-      });
-      if (!created) return null;
+        cwd: cwd || currentNavDir || '.',
+        shell: 'codex-agent'
+      };
+      terminals.push(created);
       ensureAgentSession(created.id, {
-        phase: 'launch',
-        cwd: created.cwd || cwd || '.',
+        phase: 'chat',
+        cwd: created.cwd,
+        title: created.title,
+        shell: created.shell,
         launchCommand: '',
         pendingLaunchCommand: ''
       });
       openAgentLauncher(created.id);
+      currentNavDir = cwd || '.';
       return created;
     }
 
@@ -6262,6 +6381,23 @@
         alert('This session cannot close terminal tabs.');
         return;
       }
+      const localAgent = isChatAgentSession(getAgentSession(id));
+      if (localAgent) {
+        await deleteAgentSessionState(id);
+        terminalCache.delete(id);
+        terminals = terminals.filter((t) => t.id !== id);
+        if (activeTerminalId === id) {
+          const next = terminals.find((item) => !isLocalAgentTab(item)) || terminals[0];
+          if (next) {
+            activateTerminalTab(next.id);
+          } else {
+            await createTerminal(currentNavDir || '.', { startupBanner: true });
+          }
+        }
+        renderTerminalTabs();
+        renderAgentSurface();
+        return;
+      }
       const res = await api(`/api/terminals/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (res.status !== 204) {
         alert('Cannot close terminal');
@@ -6299,6 +6435,15 @@
       if (sessionAccess.readOnly || sessionAccess.boundTerminalId) {
         alert('This session cannot rename terminal tabs.');
         return null;
+      }
+      const localItem = getTerminalSummaryById(id);
+      const session = getAgentSession(id);
+      if (localItem && isChatAgentSession(session)) {
+        localItem.title = title;
+        session.title = title;
+        session.updatedAt = Date.now();
+        await persistAgentSession(id);
+        return localItem;
       }
       const res = await api(`/api/terminals/${encodeURIComponent(id)}`, {
         method: 'PATCH',

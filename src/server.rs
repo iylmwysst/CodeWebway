@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,6 +27,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
+use tokio::{fs, process::Command};
 use tower_http::compression::CompressionLayer;
 
 use crate::assets::Assets;
@@ -200,6 +202,35 @@ pub struct CreateTerminalRequest {
     cwd: Option<String>,
     shell: Option<String>,
     title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionRequest {
+    model: Option<String>,
+    messages: Vec<ChatCompletionInputMessage>,
+    stream: Option<bool>,
+    #[serde(rename = "session_id")]
+    _session_id: Option<String>,
+    cwd: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionInputMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct ModelListResponse {
+    object: &'static str,
+    data: Vec<ModelEntryResponse>,
+}
+
+#[derive(Serialize)]
+struct ModelEntryResponse {
+    id: String,
+    object: &'static str,
+    owned_by: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -1081,6 +1112,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/auth/public-status", get(auth_public_status))
         .route("/t/:token", get(redeem_temp_link))
+        .route("/v1/models", get(codex_models))
+        .route("/v1/chat/completions", post(codex_chat_completions))
         .route("/api/terminals", get(list_terminals).post(create_terminal))
         .route(
             "/api/terminals/:id",
@@ -1166,8 +1199,259 @@ fn embedded_asset_content_type(path: &str) -> &'static str {
         Some("html") => "text/html; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
         Some("txt") => "text/plain; charset=utf-8",
+        Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
     }
+}
+
+async fn codex_models(headers: HeaderMap, State(state): State<Arc<AppState>>) -> Response {
+    let Some(_) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+
+    Json(ModelListResponse {
+        object: "list",
+        data: vec![ModelEntryResponse {
+            id: "codex".to_string(),
+            object: "model",
+            owned_by: "codewebway",
+        }],
+    })
+    .into_response()
+}
+
+async fn codex_chat_completions(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ChatCompletionRequest>,
+) -> Response {
+    let Some(session_token) = has_valid_session_cookie(&headers, &state, true) else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    };
+    if is_session_read_only(&state, &session_token) {
+        return (
+            StatusCode::FORBIDDEN,
+            "Read-only sessions cannot start Codex agent chats",
+        )
+            .into_response();
+    }
+    if req.messages.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "messages is required",
+        );
+    }
+
+    let cwd = match resolve_user_path(&state.root_dir, req.cwd.as_deref()) {
+        Ok(path) => path,
+        Err(err) => return api_error(StatusCode::BAD_REQUEST, "bad_request", err),
+    };
+    if !cwd.is_dir() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "cwd must be an existing directory",
+        );
+    }
+
+    let model = req
+        .model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("codex");
+    let prompt = build_codex_chat_prompt(&req.messages);
+    let completion_id = format!("chatcmpl-{}", generate_random_token(24));
+    match run_codex_chat_completion(model, &cwd, &prompt).await {
+        Ok(content) => {
+            if req.stream.unwrap_or(false) {
+                let chunk = serde_json::json!({
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": unix_now(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "content": content },
+                        "finish_reason": serde_json::Value::Null
+                    }]
+                });
+                let done = serde_json::json!({
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": unix_now(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": serde_json::json!({}),
+                        "finish_reason": "stop"
+                    }]
+                });
+                let body = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk, done);
+                return (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, "text/event-stream; charset=utf-8"),
+                        (header::CACHE_CONTROL, "no-cache, no-transform"),
+                    ],
+                    body,
+                )
+                    .into_response();
+            }
+
+            Json(serde_json::json!({
+                "id": completion_id,
+                "object": "chat.completion",
+                "created": unix_now(),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                },
+                "bridge_tool_calls": []
+            }))
+            .into_response()
+        }
+        Err(message) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "codex_failed", &message),
+    }
+}
+
+fn build_codex_chat_prompt(messages: &[ChatCompletionInputMessage]) -> String {
+    let system_messages = messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| message.content.trim())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>();
+
+    let transcript = messages
+        .iter()
+        .filter(|message| message.role == "user" || message.role == "assistant")
+        .map(|message| {
+            let speaker = if message.role == "assistant" {
+                "Assistant"
+            } else {
+                "User"
+            };
+            format!("{speaker}: {}", message.content.trim())
+        })
+        .collect::<Vec<_>>();
+
+    [
+        "You are answering inside CodeWebway's Codex agent chat surface.".to_string(),
+        if system_messages.is_empty() {
+            "System instructions:\nRespond naturally to the user.".to_string()
+        } else {
+            format!("System instructions:\n{}", system_messages.join("\n\n"))
+        },
+        if transcript.is_empty() {
+            "Conversation transcript:\nUser: Hello".to_string()
+        } else {
+            format!("Conversation transcript:\n{}", transcript.join("\n\n"))
+        },
+        "Reply with the next assistant message only.".to_string(),
+        "Do not include labels such as User: or Assistant: in the answer.".to_string(),
+        "Do not describe your hidden reasoning or internal process.".to_string(),
+    ]
+    .join("\n\n")
+}
+
+async fn run_codex_chat_completion(
+    model: &str,
+    cwd: &Path,
+    prompt: &str,
+) -> Result<String, String> {
+    let output_path = std::env::temp_dir().join(format!(
+        "codewebway-codex-{}.txt",
+        generate_random_token(12)
+    ));
+    let codex_bin = std::env::var("CODEWEBWAY_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+
+    let mut child = Command::new(&codex_bin);
+    child
+        .arg("--ask-for-approval")
+        .arg("never")
+        .arg("--sandbox")
+        .arg("workspace-write");
+
+    if !model.trim().is_empty() && model != "codex" {
+        child.arg("-m").arg(model);
+    }
+
+    child
+        .arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("--color")
+        .arg("never")
+        .arg("-C")
+        .arg(cwd)
+        .arg("--output-last-message")
+        .arg(&output_path)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = child
+        .spawn()
+        .map_err(|err| format!("Failed to start Codex: {err}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|err| format!("Failed to write prompt to Codex: {err}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|err| format!("Codex failed before producing a response: {err}"))?;
+
+    let fallback_stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let message = fs::read_to_string(&output_path)
+        .await
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .or_else(|| (!fallback_stdout.is_empty()).then_some(fallback_stdout));
+    let _ = fs::remove_file(&output_path).await;
+
+    if output.status.success() {
+        return message.ok_or_else(|| {
+            if stderr.is_empty() {
+                "Codex returned no assistant message.".to_string()
+            } else {
+                stderr
+            }
+        });
+    }
+
+    Err(if stderr.is_empty() {
+        "Codex request failed.".to_string()
+    } else {
+        stderr
+    })
 }
 
 #[derive(Serialize)]

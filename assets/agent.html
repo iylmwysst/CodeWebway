@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CodeWebway Codex Agent</title>
+    <style>
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: #ebe8df;
+      }
+
+      body {
+        overflow: hidden;
+      }
+    </style>
+    <script>
+      try {
+        window.localStorage.setItem('clean-openclaude-widget-demo-notice-acknowledged', 'true');
+        window.localStorage.setItem('clean-openclaude-widget-stream-mode', 'standard');
+      } catch {}
+
+      window.addEventListener('DOMContentLoaded', () => {
+        const hideUnsupportedControls = () => {
+          document.querySelectorAll('[data-slot="select"]').forEach((node) => {
+            node.style.display = 'none';
+          });
+        };
+
+        hideUnsupportedControls();
+        const observer = new MutationObserver(() => hideUnsupportedControls());
+        const app = document.getElementById('app');
+        if (app) {
+          observer.observe(app, { childList: true, subtree: true });
+        }
+      });
+    </script>
+    <script type="module" crossorigin src="/assets/index-DSyQVP5L.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-C5D7u92P.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
