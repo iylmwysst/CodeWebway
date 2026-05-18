@@ -144,6 +144,7 @@ async fn emit_dashboard_activity(
     event_name: &str,
     status: &str,
     detail: Option<String>,
+    metadata: Option<serde_json::Value>,
 ) {
     let Some(cfg) = state.dashboard_auth.as_ref() else {
         return;
@@ -156,12 +157,22 @@ async fn emit_dashboard_activity(
     let _ = client
         .post(url)
         .bearer_auth(&cfg.machine_token)
-        .json(&serde_json::json!({
+        .json(&{
+            let mut payload = serde_json::json!({
             "event_type": event_type,
             "event_name": event_name,
             "status": status,
             "detail": detail,
-        }))
+            });
+            if let Some(metadata) = metadata.and_then(|value| value.as_object().cloned()) {
+                if let Some(object) = payload.as_object_mut() {
+                    for (key, value) in metadata {
+                        object.insert(key, value);
+                    }
+                }
+            }
+            payload
+        })
         .timeout(Duration::from_secs(8))
         .send()
         .await;
@@ -1765,6 +1776,7 @@ async fn auth_login(
                     "Too many PIN attempts. Wait a moment and try again.",
                 );
             }
+            drop(attempts);
             if !still_valid {
                 return api_error(
                     StatusCode::UNAUTHORIZED,
@@ -1804,6 +1816,7 @@ async fn auth_login(
             "Completed dashboard-approved runtime sign-in",
             "success",
             None,
+            Some(dashboard_activity_metadata_from_headers(&headers)),
         )
         .await;
         let set_cookie = session_cookie_header(&session_token, headers_use_secure_cookie(&headers));
@@ -1864,6 +1877,7 @@ async fn auth_login(
                 "Opened runtime through launch URL",
                 "success",
                 None,
+                Some(dashboard_activity_metadata_from_headers(&headers)),
             )
             .await;
         } else if dashboard_ok {
@@ -1873,6 +1887,7 @@ async fn auth_login(
                 "Completed dashboard-approved runtime sign-in",
                 "success",
                 None,
+                Some(dashboard_activity_metadata_from_headers(&headers)),
             )
             .await;
         } else if password_ok {
@@ -1882,6 +1897,7 @@ async fn auth_login(
                 "Opened runtime with recovery token",
                 "success",
                 None,
+                Some(dashboard_activity_metadata_from_headers(&headers)),
             )
             .await;
         }
@@ -1915,6 +1931,24 @@ async fn auth_login(
             "Incorrect access token or machine PIN.",
         )
     };
+    let (event_type, event_name) = if auth_factor_ok {
+        ("machine.auth.pin.invalid", "Rejected sign-in with wrong PIN")
+    } else {
+        (
+            "machine.auth.credentials.invalid",
+            "Rejected sign-in with invalid credentials",
+        )
+    };
+    let metadata = dashboard_activity_metadata_from_headers(&headers);
+    emit_dashboard_activity(
+        &state,
+        event_type,
+        event_name,
+        "failed",
+        Some(format!("code={code}")),
+        Some(metadata),
+    )
+    .await;
     api_error(StatusCode::UNAUTHORIZED, code, message)
 }
 
@@ -2028,6 +2062,15 @@ async fn auth_stop_terminal(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     if !verify_pin(req.pin.as_deref(), state.pin.as_deref()) {
+        emit_dashboard_activity(
+            &state,
+            "machine.auth.pin.invalid",
+            "Rejected stop terminal with wrong PIN",
+            "failed",
+            Some("action=stop_terminal".to_string()),
+            Some(dashboard_activity_metadata_from_headers(&headers)),
+        )
+        .await;
         return api_error(
             StatusCode::UNAUTHORIZED,
             "pin_invalid",
@@ -2044,6 +2087,15 @@ async fn auth_stop_terminal(
     state.temp_links.lock().unwrap().revoke_all(unix_now());
     state.terminals.lock().unwrap().remove_all();
     let _ = state.shutdown_tx.send(());
+    emit_dashboard_activity(
+        &state,
+        "machine.runtime.stop",
+        "Stopped runtime from authenticated session",
+        "success",
+        None,
+        Some(dashboard_activity_metadata_from_headers(&headers)),
+    )
+    .await;
 
     (
         StatusCode::OK,
@@ -2127,6 +2179,15 @@ async fn create_temp_link(
             );
         }
         if !verify_pin(pin, state.pin.as_deref()) {
+            emit_dashboard_activity(
+                &state,
+                "machine.auth.pin.invalid",
+                "Rejected share link creation with wrong PIN",
+                "failed",
+                Some(format!("scope={} ttl_minutes={} max_uses={}", scope.as_str(), ttl_minutes, max_uses)),
+                Some(dashboard_activity_metadata_from_headers(&headers)),
+            )
+            .await;
             return api_error(
                 StatusCode::UNAUTHORIZED,
                 "pin_invalid",
@@ -2194,6 +2255,7 @@ async fn create_temp_link(
             max_uses,
             requires_step_up
         )),
+        Some(dashboard_activity_metadata_from_headers(&headers)),
     )
     .await;
     count_tx_json(&state, &payload);
@@ -2333,6 +2395,7 @@ async fn redeem_temp_link(
         "Redeemed read-only share link",
         "success",
         None,
+        Some(dashboard_activity_metadata_from_headers(&headers)),
     )
     .await;
 
@@ -2516,6 +2579,7 @@ async fn auth_temp_link_interactive_challenge_status(
                         "Redeemed interactive share link after owner approval",
                         "success",
                         None,
+                        Some(dashboard_activity_metadata_from_headers(&headers)),
                     )
                     .await;
                     let set_cookie =
@@ -3918,6 +3982,32 @@ fn client_key_from_headers(headers: &HeaderMap) -> String {
     }
     let digest = hash_bytes_hex(fingerprint_parts.join("|").as_bytes());
     format!("fp:{}", &digest[..16])
+}
+
+fn dashboard_activity_metadata_from_headers(headers: &HeaderMap) -> serde_json::Value {
+    fn header(headers: &HeaderMap, name: &str) -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    let client_ip = header(headers, "cf-connecting-ip")
+        .or_else(|| {
+            header(headers, "x-forwarded-for")
+                .and_then(|value| value.split(',').next().map(str::trim).filter(|v| !v.is_empty()).map(ToOwned::to_owned))
+        })
+        .or_else(|| header(headers, "x-real-ip"));
+
+    serde_json::json!({
+        "client_ip": client_ip,
+        "client_country": header(headers, "cf-ipcountry"),
+        "client_region": header(headers, "cf-region"),
+        "client_city": header(headers, "cf-ipcity"),
+        "user_agent": header(headers, "user-agent"),
+    })
 }
 
 fn is_allowed_origin(headers: &HeaderMap) -> bool {
