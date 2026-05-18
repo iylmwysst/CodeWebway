@@ -30,6 +30,7 @@
         chunks: [],
         tailText: '',
         bannerText: '',
+        resumeMarkerText: '',
         trimmed: false,
         syncGapDetected: false,
         tailBeforeSeq: null,
@@ -46,6 +47,7 @@
       state.beforeSeq = null;
       state.chunks = [];
       state.tailText = '';
+      state.resumeMarkerText = '';
       state.nextSeq = null;
       state.syncing = false;
       state.syncGapDetected = false;
@@ -236,6 +238,10 @@
         .join('');
     }
 
+    terminalHistorySkippedMarker() {
+      return '\r\nPrevious output skipped; scroll up to load older history\r\n';
+    }
+
     maybeLoadOlderTerminalHistoryFromTop() {
       const activeTerminalId = this.ctx.getActiveTerminalId();
       if (!activeTerminalId || !this.term) return;
@@ -268,53 +274,58 @@
       const state = this.stateMap.get(terminalId);
       if (state) {
         state.tailText = text || '';
+        state.resumeMarkerText = body.has_more ? this.terminalHistorySkippedMarker() : '';
         this.trimOlderTerminalHistoryWindow(state);
       }
-      if (text && options.write !== false) {
-        this.term.write(text);
+      const replayText = `${state?.resumeMarkerText || ''}${text || ''}`;
+      if (replayText && options.write !== false) {
+        this.term.write(replayText);
       }
-      return text;
+      return replayText;
     }
 
     async syncMissedTerminalOutput(terminalId, connectionId, options = {}) {
       const state = this.stateMap.get(terminalId);
       if (!state || state.nextSeq === null || state.nextSeq === undefined) return '';
-      let afterSeq = Number(state.nextSeq || 0);
-      let combined = '';
+      const previousNextSeq = Number(state.nextSeq || 0);
       let gapDetected = false;
       this.setTerminalSyncState(terminalId, true);
       try {
-        while (true) {
-          const qs = new URLSearchParams({ after_seq: String(afterSeq), limit: '32' });
-          const res = await this.ctx.api(
-            `/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`
-          );
-          if (
-            (connectionId !== null &&
-              connectionId !== undefined &&
-              connectionId !== this.ctx.getWsConnectionId()) ||
-            !res.ok
-          ) {
-            return combined;
-          }
-          const body = await res.json();
-          const firstSeq = body.first_seq;
-          if (typeof firstSeq === 'number' && firstSeq > afterSeq) {
-            gapDetected = true;
-          }
-          this.applyTerminalHistoryMetadata(terminalId, body);
-          const chunkText = this.decodeHistoryChunks(body.chunks);
-          if (chunkText) {
-            combined += chunkText;
-            this.ctx.appendTerminalCache(terminalId, chunkText);
-            if (options.write !== false) {
-              this.term.write(chunkText);
-            }
-          }
-          afterSeq = Number(body.next_seq || afterSeq);
-          if (!body.has_more) break;
+        const qs = new URLSearchParams({ limit: String(this.ctx.TERMINAL_REPLAY_HISTORY_CHUNKS) });
+        const res = await this.ctx.api(
+          `/api/terminals/${encodeURIComponent(terminalId)}/history?${qs.toString()}`
+        );
+        if (
+          (connectionId !== null &&
+            connectionId !== undefined &&
+            connectionId !== this.ctx.getWsConnectionId()) ||
+          !res.ok
+        ) {
+          return '';
         }
-        return combined;
+        const body = await res.json();
+        const chunks = Array.isArray(body.chunks) ? body.chunks : [];
+        const firstChunkSeq = chunks.length > 0 ? Number(chunks[0].seq) : Number(body.next_seq || 0);
+        gapDetected = firstChunkSeq > previousNextSeq;
+        this.applyTerminalHistoryMetadata(terminalId, body);
+        const text = this.trimTerminalTextToRows(
+          this.decodeHistoryChunks(chunks),
+          this.ctx.TERMINAL_HISTORY_PAGE_ROWS,
+          'tail'
+        );
+        state.chunks = [];
+        state.tailText = text || '';
+        state.resumeMarkerText =
+          gapDetected || Boolean(body.has_more) ? this.terminalHistorySkippedMarker() : '';
+        if (chunks.length > 0) {
+          state.beforeSeq = firstChunkSeq;
+          state.tailBeforeSeq = firstChunkSeq;
+        }
+        this.trimOlderTerminalHistoryWindow(state);
+        if (options.write !== false) {
+          this.rebuildTerminalBuffer(terminalId);
+        }
+        return `${state.resumeMarkerText || ''}${state.tailText || ''}`;
       } finally {
         this.setTerminalSyncState(terminalId, false, { gapDetected });
       }
@@ -326,8 +337,9 @@
       this.trimOlderTerminalHistoryWindow(state);
       const olderText = this.stripLeadingAnsiReplayFragment(this.decodeHistoryChunks(state.chunks));
       const liveText = this.ctx.readTerminalCache(terminalId);
+      const markerText = state.hasMore || state.syncGapDetected ? state.resumeMarkerText || '' : '';
       this.term.write(this.ctx.TERMINAL_RESET_SEQUENCE);
-      this.term.write(`${state.bannerText || ''}${olderText}${state.tailText || ''}${liveText || ''}`);
+      this.term.write(`${state.bannerText || ''}${olderText}${markerText}${state.tailText || ''}${liveText || ''}`);
       this.ctx.terminalHistoryStatusEl.textContent = state.hasMore
         ? 'Older scrollback loaded on demand'
         : state.trimmed
@@ -347,6 +359,7 @@
           chunks: [],
           tailText: '',
           bannerText: '',
+          resumeMarkerText: '',
           trimmed: false,
           syncGapDetected: false,
           tailBeforeSeq: null,
@@ -444,6 +457,22 @@
       let replayReady = !shouldReplayRecentTail;
       const queuedLiveBytes = [];
       let terminalEnded = false;
+      let pendingAckBytes = 0;
+
+      const ackWrittenBytes = (byteLength) => {
+        pendingAckBytes += byteLength;
+        if (
+          pendingAckBytes >= this.ctx.TERMINAL_WS_ACK_BYTES &&
+          ws.readyState === WebSocket.OPEN
+        ) {
+          ws.send(JSON.stringify({ type: 'terminal_ack', bytes: pendingAckBytes }));
+          pendingAckBytes = 0;
+        }
+      };
+
+      const writeTerminalBytes = (bytes) => {
+        this.term.write(bytes, () => ackWrittenBytes(bytes.byteLength || bytes.length || 0));
+      };
 
       const writeLiveBytes = (bytes) => {
         const chunkText = this.ctx.textDecoder.decode(bytes);
@@ -456,7 +485,7 @@
         } else {
           this.ctx.appendTerminalCache(terminalId, chunkText);
         }
-        this.term.write(bytes);
+        writeTerminalBytes(bytes);
       };
 
       ws.onopen = async () => {

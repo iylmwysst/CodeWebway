@@ -2726,6 +2726,7 @@
     const TERMINAL_HISTORY_MAX_LOADED_ROWS = 900;
     const TERMINAL_HISTORY_MAX_OLDER_ROWS = 600;
     const TERMINAL_LIVE_SCROLLBACK_LINES = 5000;
+    const TERMINAL_WS_ACK_BYTES = 128 * 1024;
     const TERMINAL_RESET_SEQUENCE = '\x1bc';
     const STARTUP_BANNER = [
       '╔██████╗ ██████╗ ██████╗ ███████╗██╗    ██╗███████╗██████╗ ██╗    ██╗ █████╗ ██╗   ██╗',
@@ -6872,6 +6873,7 @@
       TERMINAL_HISTORY_PAGE_ROWS,
       TERMINAL_HISTORY_MAX_OLDER_ROWS,
       TERMINAL_HISTORY_MAX_LOADED_ROWS,
+      TERMINAL_WS_ACK_BYTES,
       TERMINAL_RESET_SEQUENCE,
       STARTUP_BANNER,
       pendingStartupBanners,

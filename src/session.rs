@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use tokio::sync::broadcast;
 
 const HISTORY_CHUNK_TARGET: usize = 32 * 1024;
@@ -264,6 +264,7 @@ pub struct SharedSession {
     pub history: TerminalHistory,
     tx: broadcast::Sender<Bytes>,
     event_tx: broadcast::Sender<SessionEvent>,
+    flow_control: Arc<OutputFlowControl>,
     pty_writer: Box<dyn Write + Send>,
     pty_master: Box<dyn portable_pty::MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send>,
@@ -311,6 +312,40 @@ fn apply_utf8_locale(cmd: &mut CommandBuilder) {
     }
 }
 
+#[derive(Debug)]
+struct OutputFlowControl {
+    blocked_readers: Mutex<HashSet<String>>,
+    changed: Condvar,
+}
+
+impl OutputFlowControl {
+    fn new() -> Self {
+        Self {
+            blocked_readers: Mutex::new(HashSet::new()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn wait_until_unblocked(&self) {
+        let mut blocked = self.blocked_readers.lock().unwrap();
+        while !blocked.is_empty() {
+            blocked = self.changed.wait(blocked).unwrap();
+        }
+    }
+
+    fn set_blocked(&self, key: &str, blocked: bool) {
+        let mut blocked_readers = self.blocked_readers.lock().unwrap();
+        let changed = if blocked {
+            blocked_readers.insert(key.to_string())
+        } else {
+            blocked_readers.remove(key)
+        };
+        if changed && blocked_readers.is_empty() {
+            self.changed.notify_all();
+        }
+    }
+}
+
 pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow::Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -332,11 +367,13 @@ pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow:
     // Take reader and writer BEFORE moving master into SharedSession
     let pty_writer = pair.master.take_writer()?;
     let mut reader = pair.master.try_clone_reader()?;
+    let flow_control = Arc::new(OutputFlowControl::new());
 
     let session = Arc::new(Mutex::new(SharedSession {
         history: TerminalHistory::new(scrollback_size),
         tx: tx.clone(),
         event_tx,
+        flow_control: Arc::clone(&flow_control),
         pty_writer,
         pty_master: pair.master,
         child,
@@ -348,6 +385,7 @@ pub fn spawn_session(shell: &str, cwd: &Path, scrollback_size: usize) -> anyhow:
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
+            flow_control.wait_until_unblocked();
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
@@ -431,6 +469,7 @@ pub fn write_input(session: &Session, data: &[u8]) -> anyhow::Result<()> {
         anyhow::bail!("terminal session is not running");
     }
     shared.pty_writer.write_all(data)?;
+    shared.pty_writer.flush()?;
     Ok(())
 }
 
@@ -457,6 +496,14 @@ pub fn close_session(session: &Session) -> anyhow::Result<()> {
     }
     let _ = shared.child.kill();
     Ok(())
+}
+
+pub fn set_output_backpressure(session: &Session, key: &str, blocked: bool) {
+    let flow_control = {
+        let shared = session.lock().unwrap();
+        Arc::clone(&shared.flow_control)
+    };
+    flow_control.set_blocked(key, blocked);
 }
 
 #[cfg(test)]

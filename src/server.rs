@@ -41,6 +41,8 @@ const MAX_ACTIVE_TEMP_LINKS: usize = 2;
 const DEFAULT_TEMP_LINK_TTL_MINUTES: u64 = 15;
 const TEMP_LINK_GRACE_SECS: u64 = 120;
 const WS_HEARTBEAT_PAYLOAD: &str = "{\"type\":\"heartbeat\"}";
+const WS_OUTPUT_ACK_HIGH_WATERMARK: usize = 512 * 1024;
+const WS_OUTPUT_ACK_LOW_WATERMARK: usize = 128 * 1024;
 pub const DASHBOARD_PENDING_LOGIN_TTL_SECS: u64 = 15 * 60;
 pub const DASHBOARD_PENDING_LOGIN_MAX_PIN_ATTEMPTS: usize = 5;
 const CREDENTIAL_ATTEMPT_MAX: usize = 5;
@@ -3541,8 +3543,24 @@ async fn handle_socket(
     terminal_id: String,
 ) {
     let (tail, lifecycle, mut rx, mut event_rx) = session::tail_and_subscribe(&terminal);
+    let flow_key = format!(
+        "{}:{}",
+        terminal_id,
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(12)
+            .map(char::from)
+            .collect::<String>()
+    );
+    let mut pending_output_bytes = 0usize;
+    let mut output_blocked = false;
     if !skip_scrollback && !tail.bytes.is_empty() {
         count_tx(&state, tail.bytes.len() as u64);
+        pending_output_bytes = pending_output_bytes.saturating_add(tail.bytes.len());
+        if pending_output_bytes >= WS_OUTPUT_ACK_HIGH_WATERMARK && !output_blocked {
+            session::set_output_backpressure(&terminal, &flow_key, true);
+            output_blocked = true;
+        }
         let _ = socket.send(Message::Binary(tail.bytes)).await;
     }
     if let Some(payload) = session_lifecycle_message(&lifecycle) {
@@ -3576,10 +3594,15 @@ async fn handle_socket(
                     break;
                 }
             }
-            result = rx.recv() => {
+            result = rx.recv(), if pending_output_bytes < WS_OUTPUT_ACK_HIGH_WATERMARK => {
                 match result {
                     Ok(data) => {
                         count_tx(&state, data.len() as u64);
+                        pending_output_bytes = pending_output_bytes.saturating_add(data.len());
+                        if pending_output_bytes >= WS_OUTPUT_ACK_HIGH_WATERMARK && !output_blocked {
+                            session::set_output_backpressure(&terminal, &flow_key, true);
+                            output_blocked = true;
+                        }
                         if socket.send(Message::Binary(data.to_vec())).await.is_err() {
                             break;
                         }
@@ -3621,12 +3644,24 @@ async fn handle_socket(
                         }
                     }
                     Some(Ok(Message::Text(text))) => {
-                        if is_session_read_only(&state, &session_token) {
-                            continue;
-                        }
                         touch_session_token_if_valid(&state, &session_token);
                         count_rx(&state, text.len() as u64);
                         if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if msg["type"] == "terminal_ack" {
+                                let acked = msg["bytes"].as_u64().unwrap_or(0) as usize;
+                                pending_output_bytes =
+                                    pending_output_bytes.saturating_sub(acked);
+                                if output_blocked
+                                    && pending_output_bytes <= WS_OUTPUT_ACK_LOW_WATERMARK
+                                {
+                                    session::set_output_backpressure(&terminal, &flow_key, false);
+                                    output_blocked = false;
+                                }
+                                continue;
+                            }
+                            if is_session_read_only(&state, &session_token) {
+                                continue;
+                            }
                             if msg["type"] == "resize" {
                                 if let Some(bound) = session_bound_terminal_id(&state, &session_token) {
                                     if bound != terminal_id {
@@ -3651,6 +3686,10 @@ async fn handle_socket(
                 }
             }
         }
+    }
+
+    if output_blocked {
+        session::set_output_backpressure(&terminal, &flow_key, false);
     }
 
     let mut current = state.ws_connections.lock().unwrap();
